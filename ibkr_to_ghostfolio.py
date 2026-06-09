@@ -422,6 +422,7 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         # WHT is reported as a negative value by IBKR (outflow); clamp same as trade commission.
         wht = max(0.0, -float(fee))
     except ValueError:
+        log.warning("Invalid dividend fee '%s' for %s, defaulting withholding tax to 0", fee, ibkr_symbol)
         wht = 0.0
 
     iso_date = parse_ibkr_datetime(date_str)
