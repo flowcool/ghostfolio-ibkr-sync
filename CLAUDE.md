@@ -61,12 +61,12 @@ Ne pas spawner d'agent pour des lookups ponctuels — utiliser grep/Read directe
 
 ## 5. Findings d'audit ouverts (à traiter par priorité)
 
-| ID | Sujet | Priorité |
-|---|---|---|
-| D | SSRF : `base_url` step-2 IBKR pris tel quel depuis XML | Haute |
-| A | Corporate actions importées comme trades normaux | Moyenne |
-| C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse |
-| B | `abs(commission)` swallows rebates positifs | Basse |
+| ID | Sujet | Priorité | Statut |
+|---|---|---|---|
+| D | SSRF : `base_url` step-2 IBKR pris tel quel depuis XML | Haute | PR #6 |
+| A | Corporate actions importées comme trades normaux | Moyenne | Ouvert — pas de PR |
+| C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | PR #8 |
+| B | `abs(commission)` swallows rebates positifs | Basse | PR #7 |
 
 ## 6. Tester le script
 
@@ -96,13 +96,38 @@ push main → GitHub Actions build linux/amd64 + linux/arm64
            → Portainer poll repo infra → redéploie le container
 ```
 
-Pour switcher vers l'image du fork (à faire après merge des 5 PRs) :
+Pour switcher vers l'image du fork (à faire après merge des PRs) :
 - Changer `image:` dans `infra/repo/stacks/ugreen/ghostfolio/docker-compose.yml`
 - Supprimer le volume workaround `ibkr_to_ghostfolio.py`
 
-## 8. Références
+## 8. Ordre de merge des 12 PRs ouvertes
+
+### Phase 1 — fixes critiques (ordre strict, dépendances en chaîne)
+
+| PR | Branche | Sujet | Note |
+|---|---|---|---|
+| #1 | `fix/api-endpoint` | Corriger l'endpoint `/api/v1/activities` | Base — tout dépend de ça |
+| #2 | `fix/silent-import-failure` | Raise sur échec import au lieu de retour silencieux | Dépend de #1 |
+| #3 | `fix/dedup-empty-tradeid` | Skip trades sans tradeID | Dépend de #2 |
+| #5 | `fix/dividend-dedup-isin` | Dédup dividendes par ISIN | **Avant #4** — toutes deux touchent `ghost_import_activities` |
+| #4 | `fix/uncaught-import-exception` | Catch exceptions réseau dans import | Après #5 pour éviter conflit |
+
+### Phase 2 — améliorations indépendantes (ordre libre)
+
+| PR | Branche | Sujet | Priorité |
+|---|---|---|---|
+| #6 | `fix/ssrf-base-url` | SSRF : valider l'URL step-2 IBKR (finding D) | Haute |
+| #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | Basse |
+| #8 | `refactor/sys-exit-to-raise` | Remplacer `sys.exit` par `raise` (finding C) | Basse |
+| #9 | `chore/log-unmapped-summary` | `print()` → `log.warning` pour ISINs non mappés | Cosmétique |
+| #10 | `chore/docker-nonroot` | Container non-root | Info |
+| #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | Info |
+| #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | Info |
+
+> **Règle clé :** merger #5 avant #4. Les autres PRs phase 2 sont indépendantes entre elles.
+
+## 9. Références
 
 - Fork : https://github.com/flowcool/ghostfolio-ibkr-sync
 - Upstream : https://github.com/obol89/ghostfolio-ibkr-sync
 - Ghostfolio API : `GET /api/v1/activities`, `POST /api/v1/import`, `GET /api/v1/account/{id}`
-- 5 PRs ouvertes (merger dans l'ordre #1→#2→#3→#4→#5) — voir infra `claude/projects/IBKR_SYNC_FORK.md`
