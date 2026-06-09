@@ -660,7 +660,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
         activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
         if activity:
-            if activity["comment"] in existing_dividend_comments:
+            date_part = activity["comment"].rsplit("#", 1)[-1]
+            old_comment = f"dividend#{activity['symbol']}#{date_part}"
+            if activity["comment"] in existing_dividend_comments or old_comment in existing_dividend_comments:
                 div_skipped_dup += 1
             else:
                 div_activities.append(activity)
