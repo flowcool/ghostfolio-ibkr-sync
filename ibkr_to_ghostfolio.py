@@ -239,7 +239,7 @@ def ghost_get_existing_orders(config):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
     - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"
     """
-    url = f"{config['ghost_host']}/api/v1/order"
+    url = f"{config['ghost_host']}/api/v1/activities"
     resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=60)
     resp.raise_for_status()
     data = resp.json()
