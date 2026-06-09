@@ -707,16 +707,13 @@ def main():
         unmapped = process_account(config, ibkr_id, qid, gf_name, mapping)
         all_unmapped.update(unmapped)
 
-    # Print unmapped ISINs summary
+    # Log unmapped ISINs summary
     if all_unmapped:
-        print("\n" + "=" * 60)
-        print("Unmapped ISINs found. Add to your mapping file under symbol_mapping:")
-        print()
+        log.warning("Unmapped ISINs found — add to mapping file under symbol_mapping:")
         for isin, info in sorted(all_unmapped.items()):
             symbol = info.get("symbol", "")
             desc = info.get("description", "")
-            print(f"  {isin}: ???  # IBKR symbol: {symbol}, description: {desc}")
-        print("=" * 60 + "\n")
+            log.warning("  %s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
 
