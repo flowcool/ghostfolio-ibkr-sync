@@ -86,10 +86,10 @@ Report: correctness bugs only, skip style. Be concise."""
 
 | ID | Sujet | Priorité | Statut |
 |---|---|---|---|
-| D | SSRF : `base_url` step-2 IBKR pris tel quel depuis XML | Haute | PR #6 |
+| D | SSRF : `base_url` step-2 IBKR pris tel quel depuis XML | Haute | PR #6 — reviewée ✅ |
 | A | Corporate actions importées comme trades normaux | Moyenne | Ouvert — pas de PR |
-| C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | PR #8 |
-| B | `abs(commission)` swallows rebates positifs | Basse | PR #7 |
+| C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | PR #8 — reviewée ✅ |
+| B | `abs(commission)` swallows rebates positifs | Basse | PR #7 — reviewée ✅ |
 
 ## 6. Tester le script
 
@@ -127,25 +127,25 @@ Pour switcher vers l'image du fork (à faire après merge des PRs) :
 
 ### Phase 1 — fixes critiques (ordre strict, dépendances en chaîne)
 
-| PR | Branche | Sujet | Note |
-|---|---|---|---|
-| #1 | `fix/api-endpoint` | Corriger l'endpoint `/api/v1/activities` | Base — tout dépend de ça |
-| #2 | `fix/silent-import-failure` | Raise sur échec import au lieu de retour silencieux | Dépend de #1 |
-| #3 | `fix/dedup-empty-tradeid` | Skip trades sans tradeID | Dépend de #2 |
-| #5 | `fix/dividend-dedup-isin` | Dédup dividendes par ISIN | **Avant #4** — toutes deux touchent `ghost_import_activities` |
-| #4 | `fix/uncaught-import-exception` | Catch exceptions réseau dans import | Après #5 pour éviter conflit |
+| PR | Branche | Sujet | Review | Note |
+|---|---|---|---|---|
+| #1 | `fix/api-endpoint` | Corriger l'endpoint `/api/v1/activities` | ✅ sub-agent | Base — tout dépend de ça |
+| #2 | `fix/silent-import-failure` | Raise sur échec import au lieu de retour silencieux | ✅ sub-agent + 2 bugs fixés | Dépend de #1 |
+| #3 | `fix/dedup-empty-tradeid` | Skip trades sans tradeID | ✅ sub-agent + guard dupliqué supprimé | Dépend de #2 |
+| #5 | `fix/dividend-dedup-isin` | Dédup dividendes par ISIN | ✅ sub-agent | **Avant #4** |
+| #4 | `fix/uncaught-import-exception` | Catch exceptions réseau dans import | ✅ sub-agent (faux positif en contexte) | Après #5 |
 
 ### Phase 2 — améliorations indépendantes (ordre libre)
 
-| PR | Branche | Sujet | Priorité |
-|---|---|---|---|
-| #6 | `fix/ssrf-base-url` | SSRF : valider l'URL step-2 IBKR (finding D) | Haute |
-| #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | Basse |
-| #8 | `refactor/sys-exit-to-raise` | Remplacer `sys.exit` par `raise` (finding C) | Basse |
-| #9 | `chore/log-unmapped-summary` | `print()` → `log.warning` pour ISINs non mappés | Cosmétique |
-| #10 | `chore/docker-nonroot` | Container non-root | Info |
-| #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | Info |
-| #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | Info |
+| PR | Branche | Sujet | Review | Priorité |
+|---|---|---|---|---|
+| #6 | `fix/ssrf-base-url` | SSRF : valider l'URL step-2 IBKR (finding D) | ✅ CodeRabbit + commentaire fixé | Haute |
+| #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | ✅ sub-agent | Basse |
+| #8 | `refactor/sys-exit-to-raise` | Remplacer `sys.exit` par `raise` (finding C) | ✅ sub-agent | Basse |
+| #9 | `chore/log-unmapped-summary` | `print()` → `log.warning` pour ISINs non mappés | ✅ sub-agent + placeholder fixé | Cosmétique |
+| #10 | `chore/docker-nonroot` | Container non-root | ✅ sub-agent + VOLUME dupliqué supprimé | Info |
+| #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | ✅ sub-agent | Info |
+| #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | ✅ sub-agent | Info |
 
 > **Règle clé :** merger #5 avant #4. Les autres PRs phase 2 sont indépendantes entre elles.
 
