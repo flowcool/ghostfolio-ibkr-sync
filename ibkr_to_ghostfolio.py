@@ -41,7 +41,7 @@ def load_config():
                 "GHOST_TOKEN", "GHOST_HOST"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
-        log.error("Missing required environment variables: %s", ", ".join(missing))
+        log.critical("Missing required environment variables: %s", ", ".join(missing))
         sys.exit(1)
 
     account_ids = os.environ["IBKR_ACCOUNT_IDS"].split(",")
