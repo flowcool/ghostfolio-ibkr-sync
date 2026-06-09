@@ -1,0 +1,16 @@
+# ISIN-to-Yahoo-Finance ticker mapping.
+# Copy to mapping.yaml and mount in the container: -v /path/to/mapping.yaml:/app/mapping.yaml
+# If no mapping entry exists, the script falls back to the IBKR symbol directly.
+
+symbol_mapping:
+  # European stocks (ISIN → Yahoo ticker, usually TICKER.EXCHANGE)
+  IE00B4L5Y983: "IWDA.AS"     # iShares Core MSCI World ETF — Euronext Amsterdam
+  IE00B3RBWM25: "VWRL.AS"     # Vanguard FTSE All-World ETF — Euronext Amsterdam
+  LU0290358497: "C6O.DE"      # Xtrackers MSCI World Swap — XETRA
+
+  # US stocks (ISIN → plain ticker, no suffix needed)
+  US0378331005: "AAPL"
+  US5949181045: "MSFT"
+
+  # Add entries for any ISIN that appears in unmapped ISIN warnings in the logs.
+  # Log format: "ISIN: <symbol>  # IBKR: <ibkr_symbol> — <description>"
