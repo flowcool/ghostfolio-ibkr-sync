@@ -268,7 +268,7 @@ def ghost_import_activities(config, activities):
     if resp.status_code >= 400:
         log.error("Import failed (%d): %s", resp.status_code, resp.text)
         log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
-        return
+        raise RuntimeError(f"Ghostfolio import rejected with HTTP {resp.status_code}")
     log.info("Successfully imported %d activities", len(activities))
 
 
@@ -667,11 +667,15 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     activities.extend(div_activities)
 
-    # Import all activities
+    # Import all activities — raise on failure so the run exits non-zero
+    import_error = None
     if activities:
-        ghost_import_activities(config, activities)
+        try:
+            ghost_import_activities(config, activities)
+        except RuntimeError as exc:
+            import_error = exc
 
-    # Update cash balance
+    # Update cash balance (independent of import success)
     try:
         cash_balance = parse_cash_report(xml_text)
         if cash_balance is not None:
@@ -680,6 +684,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
             log.info("No BASE_SUMMARY cash balance found in report")
     except Exception as exc:
         log.error("Failed to update cash balance: %s", exc)
+
+    if import_error:
+        raise import_error
 
     return unmapped
 
