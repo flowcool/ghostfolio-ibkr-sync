@@ -116,6 +116,8 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
 
     ref_code = root.findtext("ReferenceCode")
     base_url = root.findtext("Url")
+    if not base_url or not base_url.startswith("https://ndcdyn.interactivebrokers.com/"):
+        raise RuntimeError(f"Unexpected IBKR statement URL: {base_url!r}")
     log.info("Got reference code %s, fetching statement...", ref_code)
 
     # Step 2 - poll for statement
