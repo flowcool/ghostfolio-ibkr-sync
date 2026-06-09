@@ -22,4 +22,8 @@ VOLUME ["/app/mapping.yaml"]
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
+RUN adduser --disabled-password --no-create-home --gecos "" appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 ENTRYPOINT ["/app/entrypoint.sh"]
