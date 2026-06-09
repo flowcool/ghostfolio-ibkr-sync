@@ -709,11 +709,12 @@ def main():
 
     # Log unmapped ISINs summary
     if all_unmapped:
-        log.warning("Unmapped ISINs found — add to mapping file under symbol_mapping:")
+        log.warning("Unmapped ISINs (%d) — trades for these were skipped. Add to mapping file under symbol_mapping:",
+                    len(all_unmapped))
         for isin, info in sorted(all_unmapped.items()):
-            symbol = info.get("symbol", "")
-            desc = info.get("description", "")
-            log.warning("%s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
+            symbol = info.get("symbol") or ""
+            desc = info.get("description") or ""
+            log.warning("%s: <symbol>  # IBKR: %s — %s", isin, symbol, desc)
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
 
