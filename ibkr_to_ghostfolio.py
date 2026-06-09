@@ -583,7 +583,7 @@ def filter_net_negative_positions(trades):
 
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping):
     """Process a single IBKR account: fetch, parse, and sync to Ghostfolio."""
-    log.debug("Processing IBKR account %s (Ghostfolio: %s)", ibkr_account_id, ghost_account_name)
+    log.info("Processing IBKR account %s (Ghostfolio: %s)", ibkr_account_id, ghost_account_name)
 
     # Fetch the Flex Query report
     try:
