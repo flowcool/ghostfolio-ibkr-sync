@@ -232,8 +232,8 @@ def ghost_find_account_id(config, account_name):
     sys.exit(1)
 
 
-def ghost_get_existing_orders(config):
-    """Fetch all existing orders from Ghostfolio.
+def ghost_get_existing_activities(config):
+    """Fetch all existing activities from Ghostfolio.
 
     Returns a tuple of (trade_ids, dividend_comments):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
@@ -617,7 +617,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     skip_isins = orphaned_isins | negative_isins
 
     # Get existing orders to avoid duplicates
-    existing_trade_ids, existing_dividend_comments = ghost_get_existing_orders(config)
+    existing_trade_ids, existing_dividend_comments = ghost_get_existing_activities(config)
     log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
              len(existing_trade_ids), len(existing_dividend_comments))
 
