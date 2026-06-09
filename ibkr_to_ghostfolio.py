@@ -713,7 +713,7 @@ def main():
         for isin, info in sorted(all_unmapped.items()):
             symbol = info.get("symbol", "")
             desc = info.get("description", "")
-            log.warning("  %s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
+            log.warning("%s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
 
