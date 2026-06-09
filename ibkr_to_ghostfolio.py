@@ -323,11 +323,6 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
     commission = trade.get("ibCommission", "0")
     date_time = trade.get("dateTime", "")
 
-    if not trade_id:
-        log.warning("Skipping trade for %s (%s) — missing tradeID, cannot deduplicate safely",
-                    ibkr_symbol or isin or "unknown", date_time)
-        return None
-
     symbol = resolve_symbol(isin, ibkr_symbol, mapping)
     if isin and isin in mapping:
         log.debug("Trade %s: ISIN %s resolved via mapping -> %s", trade_id, isin, symbol)
