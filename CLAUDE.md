@@ -61,6 +61,13 @@ Report: correctness bugs only, skip style. Be concise."""
 - `except` scope : vérifier que le type d'exception capturé couvre bien ce que la fonction peut lever (`RuntimeError` ne couvre pas `requests.RequestException`)
 - Deferred raise : si on diffère une exception pour laisser du code s'exécuter, vérifier que les valeurs de retour ne sont pas perdues
 
+**Après la review sub-agent — documenter dans la PR :**
+```bash
+gh pr comment <N> --repo flowcool/ghostfolio-ibkr-sync --body "## Review sub-agent (YYYY-MM-DD)
+<findings et corrections>"
+```
+C'est la source de vérité durable : attachée au code, visible dans l'historique GitHub, indépendante de CLAUDE.md.
+
 ## 4. Principes de travail
 
 **Python**
