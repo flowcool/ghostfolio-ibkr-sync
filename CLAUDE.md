@@ -68,6 +68,11 @@ gh pr comment <N> --repo flowcool/ghostfolio-ibkr-sync --body "## Review sub-age
 ```
 C'est la source de vérité durable : attachée au code, visible dans l'historique GitHub, indépendante de CLAUDE.md.
 
+**CodeRabbit — second avis optionnel, 1 PR à la fois :**
+- Nouvelles PRs : auto-reviewées à la création (`.coderabbit.yaml`)
+- PRs existantes : trigger `@coderabbitai review` **1 seule PR à la fois**, juste avant de merger
+- ⚠️ Ne jamais bulk-trigger — rate limit horaire atteint immédiatement au-delà de ~5 PRs
+
 ## 4. Principes de travail
 
 **Python**
