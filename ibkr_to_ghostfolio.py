@@ -342,12 +342,14 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
     try:
         raw_commission = float(commission)
         if raw_commission > 0:
-            log.warning("Trade %s: positive ibCommission %.4f (rebate) — clamped to 0, not recorded",
+            log.warning("Trade %s: positive ibCommission %.4g (rebate) — clamped to 0, not recorded",
                         trade_id, raw_commission)
         # Negative ibCommission = cost (normal). Positive = rebate; clamp to 0
-        # since Ghostfolio fee cannot be negative.
+        # since Ghostfolio fee cannot be negative. IBKR sign convention: outflows
+        # are negative, inflows (rebates) are positive.
         fee = max(0.0, -raw_commission)
     except ValueError:
+        log.warning("Invalid ibCommission '%s' for trade %s, defaulting fee to 0", commission, trade_id)
         fee = 0.0
 
     try:
@@ -417,7 +419,8 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         return None
 
     try:
-        wht = abs(float(fee))
+        # WHT is reported as a negative value by IBKR (outflow); clamp same as trade commission.
+        wht = max(0.0, -float(fee))
     except ValueError:
         wht = 0.0
 
