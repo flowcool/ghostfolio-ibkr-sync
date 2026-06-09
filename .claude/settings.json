@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python ibkr_to_ghostfolio.py*)",
+      "Bash(python -c *)",
+      "Bash(python -m py_compile *)",
+      "Bash(pip install *)",
+      "Bash(pip list*)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git add *)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git checkout*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git merge*)",
+      "Bash(git show*)",
+      "Bash(grep*)",
+      "Bash(find . *)",
+      "Bash(gh pr*)",
+      "Bash(gh api*)",
+      "Bash(docker logs ghostfolio*)",
+      "Bash(docker inspect ghostfolio*)",
+      "Bash(docker exec ghostfolio-ibkr-sync-individual python*)"
+    ]
+  }
+}
