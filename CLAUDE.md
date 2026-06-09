@@ -135,7 +135,7 @@ Pour switcher vers l'image du fork (à faire après merge des PRs) :
 - Changer `image:` dans `infra/repo/stacks/ugreen/ghostfolio/docker-compose.yml`
 - Supprimer le volume workaround `ibkr_to_ghostfolio.py`
 
-## 8. Ordre de merge des 12 PRs ouvertes
+## 8. Ordre de merge des 14 PRs ouvertes
 
 ### Phase 1 — fixes critiques (ordre strict, dépendances en chaîne)
 
@@ -152,12 +152,14 @@ Pour switcher vers l'image du fork (à faire après merge des PRs) :
 | PR | Branche | Sujet | Review | Priorité |
 |---|---|---|---|---|
 | #6 | `fix/ssrf-base-url` | SSRF : valider l'URL step-2 IBKR (finding D) | ✅ CodeRabbit + commentaire fixé | Haute |
-| #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | ✅ sub-agent | Basse |
+| #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | ✅ sub-agent + CodeRabbit fixé | Basse |
 | #8 | `refactor/sys-exit-to-raise` | Remplacer `sys.exit` par `raise` (finding C) | ✅ sub-agent | Basse |
 | #9 | `chore/log-unmapped-summary` | `print()` → `log.warning` pour ISINs non mappés | ✅ sub-agent + placeholder fixé | Cosmétique |
 | #10 | `chore/docker-nonroot` | Container non-root | ✅ sub-agent + VOLUME dupliqué supprimé | Info |
 | #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | ✅ sub-agent | Info |
 | #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | ✅ sub-agent | Info |
+| #13 | `fix/silent-qty-parse-in-negative-filter` | Log warning quantité malformée dans filtre position nette | ✅ sub-agent | Info |
+| #14 | `chore/rename-get-existing-orders` | Renommer `ghost_get_existing_orders` → `ghost_get_existing_activities` | ✅ sub-agent | Cosmétique |
 
 > **Règle clé :** merger #5 avant #4. Les autres PRs phase 2 sont indépendantes entre elles.
 
