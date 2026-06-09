@@ -31,7 +31,8 @@ IBKR_STMT_URL = (
 SKIP_ASSET_CATEGORIES = {"CASH", "OPT"}
 
 # Both are legitimate IBKR Flex Web Service statement endpoints.
-# ndcdyn = US/Americas, gdcdyn = EU/global (confirmed in IBKR Flex Web Service docs).
+# ndcdyn = current unified endpoint (Flex Web Service V3).
+# gdcdyn = legacy endpoint (V2) still seen in some account responses.
 # Trailing slash is critical to prevent subdomain-spoof bypass.
 IBKR_ALLOWED_STMT_PREFIXES = (
     "https://ndcdyn.interactivebrokers.com/",
