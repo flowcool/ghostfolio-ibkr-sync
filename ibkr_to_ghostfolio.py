@@ -545,6 +545,8 @@ def filter_net_negative_positions(trades):
         try:
             qty = float(trade.get("quantity", "0"))
         except ValueError:
+            log.warning("Invalid quantity '%s' for trade %s (%s), treating as 0 in net-position filter",
+                        trade.get("quantity", ""), trade.get("tradeID", "?"), symbol)
             qty = 0.0
         group_info[key]["net_qty"] += qty
         group_info[key]["symbols"].add(symbol)
