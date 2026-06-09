@@ -591,8 +591,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # Find the Ghostfolio account
     try:
         ghost_account_id = ghost_find_account_id(config, ghost_account_name)
-    except RuntimeError as exc:
+    except (RuntimeError, requests.exceptions.RequestException) as exc:
         log.error("Account lookup failed for %s: %s", ibkr_account_id, exc)
+        log.warning("Skipping account %s — no activities imported", ibkr_account_id)
         return {}
 
     # Parse trades and dividends
