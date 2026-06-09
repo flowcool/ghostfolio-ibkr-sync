@@ -672,7 +672,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     if activities:
         try:
             ghost_import_activities(config, activities)
-        except RuntimeError as exc:
+        except (RuntimeError, requests.RequestException) as exc:
             import_error = exc
 
     # Update cash balance (independent of import success)
@@ -709,10 +709,15 @@ def main():
         log.warning("No GHOST_ACCOUNT_NAMES provided, using IBKR account IDs as Ghostfolio account names")
 
     all_unmapped = {}
+    failed_accounts = []
 
     for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
-        unmapped = process_account(config, ibkr_id, qid, gf_name, mapping)
-        all_unmapped.update(unmapped)
+        try:
+            unmapped = process_account(config, ibkr_id, qid, gf_name, mapping)
+            all_unmapped.update(unmapped)
+        except (RuntimeError, requests.RequestException) as exc:
+            log.error("Account %s failed: %s — skipping remaining steps for this account", ibkr_id, exc)
+            failed_accounts.append(ibkr_id)
 
     # Print unmapped ISINs summary
     if all_unmapped:
@@ -726,6 +731,10 @@ def main():
         print("=" * 60 + "\n")
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
+
+    if failed_accounts:
+        log.error("Sync completed with errors on accounts: %s", ", ".join(failed_accounts))
+        sys.exit(1)
 
     log.info("Sync complete")
 
