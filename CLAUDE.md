@@ -38,6 +38,29 @@ Agent(sécurité) → review indépendante avant tout nouvel appel HTTP externe 
 
 Ne pas spawner d'agent pour des lookups ponctuels — utiliser grep/Read directement.
 
+### Review externe obligatoire avant merge (anti-biais auteur)
+
+**Règle** : toute PR doit passer par un `code-reviewer` sub-agent *avant* d'être considérée prête. L'agent démarre sans contexte de la conversation → pas de biais auteur.
+
+Lancer en parallèle pour un lot de PRs :
+
+```python
+Agent(
+    subagent_type="everything-claude-code:code-reviewer",
+    run_in_background=True,
+    prompt="""Review this Python diff cold (no prior context).
+Context: single-file sync script, requests+yaml, raise RuntimeError on failure.
+Diff: <coller git diff main...origin/branch>
+Report: correctness bugs only, skip style. Be concise."""
+)
+```
+
+**Checklist spécifique à ce repo** (points historiquement manqués) :
+- Dockerfile : pas de `VOLUME` dupliqué, `chown` avant `VOLUME`
+- Python guards : si guard ajouté à l'appel, vérifier que le callee n'a pas le même (dead code)
+- `except` scope : vérifier que le type d'exception capturé couvre bien ce que la fonction peut lever (`RuntimeError` ne couvre pas `requests.RequestException`)
+- Deferred raise : si on diffère une exception pour laisser du code s'exécuter, vérifier que les valeurs de retour ne sont pas perdues
+
 ## 4. Principes de travail
 
 **Python**
