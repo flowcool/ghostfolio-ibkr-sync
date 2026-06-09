@@ -419,8 +419,11 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         return None
 
     try:
+        raw_fee = float(fee)
+        if raw_fee > 0:
+            log.warning("Dividend %s: positive fee %.4g (unexpected) — clamped to 0", ibkr_symbol, raw_fee)
         # WHT is reported as a negative value by IBKR (outflow); clamp same as trade commission.
-        wht = max(0.0, -float(fee))
+        wht = max(0.0, -raw_fee)
     except ValueError:
         log.warning("Invalid dividend fee '%s' for %s, defaulting withholding tax to 0", fee, ibkr_symbol)
         wht = 0.0
