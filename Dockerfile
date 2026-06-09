@@ -16,9 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ibkr_to_ghostfolio.py .
 
-# Default mount point for the mapping file
-VOLUME ["/app/mapping.yaml"]
-
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
@@ -29,8 +26,6 @@ RUN chmod +x entrypoint.sh
 RUN adduser --system --no-create-home --gecos "" appuser \
     && chown -R appuser:appuser /app
 
-# VOLUME is declared after chown so the ownership intent is visible in
-# layer order. The mount point itself is still /app/mapping.yaml.
 VOLUME ["/app/mapping.yaml"]
 
 USER appuser
