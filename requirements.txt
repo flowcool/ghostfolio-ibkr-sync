@@ -1,2 +1,5 @@
-requests>=2.28.0
-pyyaml>=6.0
+# Pinned for reproducible Docker builds. Transitive deps (urllib3, certifi,
+# charset-normalizer, idna) still float; use pip freeze for full lockfile.
+# Last audited: 2026-06-09
+requests==2.32.3
+PyYAML==6.0.2
