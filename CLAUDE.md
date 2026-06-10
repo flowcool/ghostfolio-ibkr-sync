@@ -83,7 +83,7 @@ C'est la source de vérité durable : attachée au code, visible dans l'historiq
 - Logging : `log.warning` pour les skips opérationnels, `log.error` pour les failures, ne jamais logger un token
 
 **Sécurité (mindset permanent)**
-- SSRF connu (finding D) : `base_url` step-2 IBKR vient du XML IBKR — assertion de préfixe à ajouter
+- SSRF (finding D) : assertion de préfixe sur `base_url` step-2 IBKR — **fixé (PR #6)**
 - XML : `ET.fromstring` ok (pas d'XXE avec ElementTree), mais valider les champs extraits
 - Credentials (`IBKR_TOKEN`, `GHOST_TOKEN`) : uniquement depuis `os.environ`, jamais hardcodés ni loggés
 - Tout nouvel appel HTTP externe → déclencher `security-review`
@@ -94,14 +94,14 @@ C'est la source de vérité durable : attachée au code, visible dans l'historiq
 - PRs : isolées par concern, une PR = un fix
 - CI build l'image sur push `main` → pas de tag manuel nécessaire pour `latest`
 
-## 5. Findings d'audit ouverts (à traiter par priorité)
+## 5. Findings d'audit
 
 | ID | Sujet | Priorité | Statut |
 |---|---|---|---|
-| D | SSRF : `base_url` step-2 IBKR pris tel quel depuis XML | Haute | PR #6 — reviewée ✅ |
+| D | SSRF : `base_url` step-2 IBKR pris tel quel depuis XML | Haute | ✅ mergé PR #6 |
+| B | `abs(commission)` swallows rebates positifs | Basse | ✅ mergé PR #7 |
+| C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | ✅ mergé PR #8 |
 | A | Corporate actions importées comme trades normaux | Moyenne | Ouvert — pas de PR |
-| C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | PR #8 — reviewée ✅ |
-| B | `abs(commission)` swallows rebates positifs | Basse | PR #7 — reviewée ✅ |
 
 ## 6. Tester le script
 
@@ -131,39 +131,11 @@ push main → GitHub Actions build linux/amd64 + linux/arm64
            → Portainer poll repo infra → redéploie le container
 ```
 
-Pour switcher vers l'image du fork (à faire après merge des PRs) :
+Pour switcher vers l'image du fork (PRs toutes mergées — à faire) :
 - Changer `image:` dans `infra/repo/stacks/ugreen/ghostfolio/docker-compose.yml`
 - Supprimer le volume workaround `ibkr_to_ghostfolio.py`
 
-## 8. Ordre de merge des 14 PRs ouvertes
-
-### Phase 1 — fixes critiques (ordre strict, dépendances en chaîne)
-
-| PR | Branche | Sujet | Review | Note |
-|---|---|---|---|---|
-| #1 | `fix/api-endpoint` | Corriger l'endpoint `/api/v1/activities` | ✅ sub-agent | Base — tout dépend de ça |
-| #2 | `fix/silent-import-failure` | Raise sur échec import au lieu de retour silencieux | ✅ sub-agent + 2 bugs fixés | Dépend de #1 |
-| #3 | `fix/dedup-empty-tradeid` | Skip trades sans tradeID | ✅ sub-agent + guard dupliqué supprimé | Dépend de #2 |
-| #5 | `fix/dividend-dedup-isin` | Dédup dividendes par ISIN | ✅ sub-agent | **Avant #4** |
-| #4 | `fix/uncaught-import-exception` | Catch exceptions réseau dans import | ✅ sub-agent (faux positif en contexte) | Après #5 |
-
-### Phase 2 — améliorations indépendantes (ordre libre)
-
-| PR | Branche | Sujet | Review | Priorité |
-|---|---|---|---|---|
-| #6 | `fix/ssrf-base-url` | SSRF : valider l'URL step-2 IBKR (finding D) | ✅ CodeRabbit + commentaire fixé | Haute |
-| #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | ✅ sub-agent + CodeRabbit fixé | Basse |
-| #8 | `refactor/sys-exit-to-raise` | Remplacer `sys.exit` par `raise` (finding C) | ✅ sub-agent | Basse |
-| #9 | `chore/log-unmapped-summary` | `print()` → `log.warning` pour ISINs non mappés | ✅ sub-agent + placeholder fixé | Cosmétique |
-| #10 | `chore/docker-nonroot` | Container non-root | ✅ sub-agent + VOLUME dupliqué supprimé | Info |
-| #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | ✅ sub-agent | Info |
-| #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | ✅ sub-agent | Info |
-| #13 | `fix/silent-qty-parse-in-negative-filter` | Log warning quantité malformée dans filtre position nette | ✅ sub-agent | Info |
-| #14 | `chore/rename-get-existing-orders` | Renommer `ghost_get_existing_orders` → `ghost_get_existing_activities` | ✅ sub-agent | Cosmétique |
-
-> **Règle clé :** merger #5 avant #4. Les autres PRs phase 2 sont indépendantes entre elles.
-
-## 9. Références
+## 8. Références
 
 - Fork : https://github.com/flowcool/ghostfolio-ibkr-sync
 - Upstream : https://github.com/obol89/ghostfolio-ibkr-sync
