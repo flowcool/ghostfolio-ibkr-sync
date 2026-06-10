@@ -764,16 +764,14 @@ def main():
             log.error("Account %s failed: %s — skipping remaining steps for this account", ibkr_id, exc)
             failed_accounts.append(ibkr_id)
 
-    # Print unmapped ISINs summary
+    # Log unmapped ISINs summary
     if all_unmapped:
-        print("\n" + "=" * 60)
-        print("Unmapped ISINs found. Add to your mapping file under symbol_mapping:")
-        print()
+        log.warning("Unmapped ISINs (%d) — trades for these were skipped. Add to mapping file under symbol_mapping:",
+                    len(all_unmapped))
         for isin, info in sorted(all_unmapped.items()):
-            symbol = info.get("symbol", "")
-            desc = info.get("description", "")
-            print(f"  {isin}: ???  # IBKR symbol: {symbol}, description: {desc}")
-        print("=" * 60 + "\n")
+            symbol = info.get("symbol") or ""
+            desc = info.get("description") or ""
+            log.warning("%s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
 
