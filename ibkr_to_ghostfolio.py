@@ -265,8 +265,11 @@ def ghost_import_activities(config, activities):
         return
     url = f"{config['ghost_host']}/api/v1/import"
     payload = {"activities": activities}
-    resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
-                         json=payload, timeout=60)
+    try:
+        resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
+                             json=payload, timeout=60)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Network error posting to Ghostfolio import endpoint: {exc}") from exc
     if resp.status_code >= 400:
         log.error("Import failed (%d): %s", resp.status_code, resp.text)
         log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
