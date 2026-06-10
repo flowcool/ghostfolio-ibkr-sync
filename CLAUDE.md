@@ -92,6 +92,7 @@ C'est la source de vérité durable : attachée au code, visible dans l'historiq
 - Branches : `fix/<sujet>`, `feat/<sujet>`, `refactor/<sujet>`
 - Commits : `fix:`, `feat:`, `refactor:`, `chore:` — message court, impératif
 - PRs : isolées par concern, une PR = un fix
+- Merge strategy : merge commit uniquement (squash et rebase désactivés sur GitHub) — évite la divergence staging/main
 - CI build l'image sur push `main` → pas de tag manuel nécessaire pour `latest`
 
 ## 5. Findings d'audit ouverts (à traiter par priorité)
