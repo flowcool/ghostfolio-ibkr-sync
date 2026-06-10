@@ -250,7 +250,9 @@ def ghost_get_existing_activities(config):
         comment = order.get("comment", "")
         if comment:
             if comment.startswith("IBKR#"):
-                trade_ids.add(comment.split("#", 1)[1])
+                tid = comment.split("#", 1)[1]
+                if tid:
+                    trade_ids.add(tid)
             elif comment.startswith("dividend#"):
                 dividend_comments.add(comment)
     return trade_ids, dividend_comments
@@ -629,6 +631,12 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     for trade in trades:
         trade_id = trade.get("tradeID", "")
+        if not trade_id:
+            log.warning("Skipping trade for %s (%s) — missing tradeID, cannot deduplicate safely",
+                        trade.get("symbol") or trade.get("isin") or "unknown",
+                        trade.get("dateTime", ""))
+            skipped_other += 1
+            continue
         if trade_id in existing_trade_ids:
             skipped_dup += 1
             continue
