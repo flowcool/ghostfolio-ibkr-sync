@@ -50,19 +50,16 @@ def load_config():
                 "GHOST_TOKEN", "GHOST_HOST"]
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
-        log.error("Missing required environment variables: %s", ", ".join(missing))
-        sys.exit(1)
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
     account_ids = os.environ["IBKR_ACCOUNT_IDS"].split(",")
     query_ids = os.environ["IBKR_QUERY_IDS"].split(",")
     account_names = os.environ.get("GHOST_ACCOUNT_NAMES", "").split(",")
 
     if len(account_ids) != len(query_ids):
-        log.error("IBKR_ACCOUNT_IDS and IBKR_QUERY_IDS must have the same number of entries")
-        sys.exit(1)
+        raise RuntimeError("IBKR_ACCOUNT_IDS and IBKR_QUERY_IDS must have the same number of entries")
     if account_names != [""] and len(account_names) != len(account_ids):
-        log.error("GHOST_ACCOUNT_NAMES must match the number of IBKR_ACCOUNT_IDS")
-        sys.exit(1)
+        raise RuntimeError("GHOST_ACCOUNT_NAMES must match the number of IBKR_ACCOUNT_IDS")
 
     return {
         "ibkr_token": os.environ["IBKR_TOKEN"],
@@ -238,9 +235,8 @@ def ghost_find_account_id(config, account_name):
     for acc in accounts:
         if acc.get("name") == account_name:
             return acc["id"]
-    log.error("Ghostfolio account '%s' not found. Available: %s",
-              account_name, [a["name"] for a in accounts])
-    sys.exit(1)
+    available = [a["name"] for a in accounts]
+    raise RuntimeError(f"Ghostfolio account '{account_name}' not found. Available: {available}")
 
 
 def ghost_get_existing_activities(config):
@@ -625,7 +621,12 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
         return {}
 
     # Find the Ghostfolio account
-    ghost_account_id = ghost_find_account_id(config, ghost_account_name)
+    try:
+        ghost_account_id = ghost_find_account_id(config, ghost_account_name)
+    except (RuntimeError, requests.exceptions.RequestException) as exc:
+        log.error("Account lookup failed for %s: %s", ibkr_account_id, exc)
+        log.warning("Skipping account %s — no activities imported", ibkr_account_id)
+        return {}
 
     # Parse trades and dividends
     trades = parse_trades(xml_text)
@@ -735,7 +736,11 @@ def main():
     """Main entry point."""
     log.info("Starting IBKR to Ghostfolio sync")
 
-    config = load_config()
+    try:
+        config = load_config()
+    except RuntimeError as exc:
+        log.error("Configuration error: %s", exc)
+        sys.exit(1)
     mapping = load_mapping(config["mapping_file"])
     log.info("Loaded %d symbol mappings", len(mapping))
 
