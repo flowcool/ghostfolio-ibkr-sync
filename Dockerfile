@@ -16,10 +16,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ibkr_to_ghostfolio.py .
 
-# Default mount point for the mapping file
-VOLUME ["/app/mapping.yaml"]
-
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
+
+# Create a non-root service account and hand ownership of /app to it.
+# entrypoint.sh writes /app/crontab at runtime — appuser must own /app.
+# Note: bind-mounted files (e.g. mapping.yaml) must be world-readable
+# (o+r) on the host, or the container will fail to read them.
+RUN adduser --system --no-create-home --gecos "" appuser \
+    && chown -R appuser:appuser /app
+
+VOLUME ["/app/mapping.yaml"]
+
+USER appuser
 
 ENTRYPOINT ["/app/entrypoint.sh"]
