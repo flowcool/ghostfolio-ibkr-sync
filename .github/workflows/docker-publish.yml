@@ -7,6 +7,12 @@ on:
       - staging
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to build"
+        required: false
+        default: "staging"
 
 jobs:
   build-and-push:
