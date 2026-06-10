@@ -30,6 +30,15 @@ IBKR_STMT_URL = (
 
 SKIP_ASSET_CATEGORIES = {"CASH", "OPT"}
 
+# Both are legitimate IBKR Flex Web Service statement endpoints.
+# ndcdyn = current unified endpoint (Flex Web Service V3).
+# gdcdyn = legacy endpoint (V2) still seen in some account responses.
+# Trailing slash is critical to prevent subdomain-spoof bypass.
+IBKR_ALLOWED_STMT_PREFIXES = (
+    "https://ndcdyn.interactivebrokers.com/",
+    "https://gdcdyn.interactivebrokers.com/",
+)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -116,6 +125,8 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
 
     ref_code = root.findtext("ReferenceCode")
     base_url = root.findtext("Url")
+    if not base_url or not base_url.startswith(IBKR_ALLOWED_STMT_PREFIXES):
+        raise RuntimeError(f"Unexpected IBKR statement URL: {base_url!r}")
     log.info("Got reference code %s, fetching statement...", ref_code)
 
     # Step 2 - poll for statement
