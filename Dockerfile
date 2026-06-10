@@ -23,7 +23,8 @@ RUN chmod +x entrypoint.sh
 # entrypoint.sh writes /app/crontab at runtime — appuser must own /app.
 # Note: bind-mounted files (e.g. mapping.yaml) must be world-readable
 # (o+r) on the host, or the container will fail to read them.
-RUN adduser --system --no-create-home --gecos "" appuser \
+RUN addgroup --system appuser \
+    && adduser --system --no-create-home --gecos "" --ingroup appuser appuser \
     && chown -R appuser:appuser /app
 
 VOLUME ["/app/mapping.yaml"]

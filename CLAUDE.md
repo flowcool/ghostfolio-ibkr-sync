@@ -126,10 +126,23 @@ Tester avec les vraies APIs en mode lecture d'abord (`GET /api/v1/activities`), 
 ## 7. CI / déploiement
 
 ```
-push main → GitHub Actions build linux/amd64 + linux/arm64
-           → push ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-           → Portainer poll repo infra → redéploie le container
+push main    → GitHub Actions build linux/amd64 + linux/arm64
+             → push ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+             → Portainer poll repo infra → redéploie le container
+
+push staging → GitHub Actions build linux/amd64 + linux/arm64
+             → push ghcr.io/flowcool/ghostfolio-ibkr-sync:staging
+             → tester manuellement sur le NAS avant merge sur main
 ```
+
+**Workflow staging** (`rebuild-staging.sh`) : reconstruit staging depuis `main` + branches listées dans le script, force-push, CI build l'image `:staging`.
+
+**Déclencher un build manuel** (workflow_dispatch activé) :
+```bash
+gh workflow run docker-publish.yml --repo flowcool/ghostfolio-ibkr-sync --ref staging
+```
+
+**Note infra :** GitHub Actions était désactivé — activé le 2026-06-10. Le package GHCR doit être public pour que Portainer puisse pull sans credentials (`github.com/flowcool/ghostfolio-ibkr-sync/pkgs/container/ghostfolio-ibkr-sync` → Change visibility → Public).
 
 Pour switcher vers l'image du fork (à faire après merge des PRs) :
 - Changer `image:` dans `infra/repo/stacks/ugreen/ghostfolio/docker-compose.yml`
@@ -155,11 +168,12 @@ Pour switcher vers l'image du fork (à faire après merge des PRs) :
 | #7 | `fix/commission-rebates` | Commission rebates clamped à 0 (finding B) | ✅ sub-agent + CodeRabbit fixé | Basse |
 | #8 | `refactor/sys-exit-to-raise` | Remplacer `sys.exit` par `raise` (finding C) | ✅ sub-agent | Basse |
 | #9 | `chore/log-unmapped-summary` | `print()` → `log.warning` pour ISINs non mappés | ✅ sub-agent + placeholder fixé | Cosmétique |
-| #10 | `chore/docker-nonroot` | Container non-root | ✅ sub-agent + VOLUME dupliqué supprimé | Info |
-| #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | ✅ sub-agent | Info |
-| #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | ✅ sub-agent | Info |
+| #10 | `chore/docker-nonroot` | Container non-root | ✅ sub-agent + VOLUME dupliqué supprimé | Info — **en test sur staging** |
+| #11 | `chore/pin-requirements` | Dépendances pinned en exact (`==`) | ✅ sub-agent | Info — **en test sur staging** |
+| #12 | `chore/dependabot` | Dependabot pip + github-actions mensuel | ✅ sub-agent | Info — **en test sur staging** |
 | #13 | `fix/silent-qty-parse-in-negative-filter` | Log warning quantité malformée dans filtre position nette | ✅ sub-agent | Info |
 | #14 | `chore/rename-get-existing-orders` | Renommer `ghost_get_existing_orders` → `ghost_get_existing_activities` | ✅ sub-agent | Cosmétique |
+| #15 | `chore/logging-levels` | Fix niveaux de log + env var `LOG_LEVEL` | ✅ code-review local | Cosmétique |
 
 > **Règle clé :** merger #5 avant #4. Les autres PRs phase 2 sont indépendantes entre elles.
 
