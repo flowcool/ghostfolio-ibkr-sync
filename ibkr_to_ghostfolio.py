@@ -232,14 +232,14 @@ def ghost_find_account_id(config, account_name):
     sys.exit(1)
 
 
-def ghost_get_existing_orders(config):
-    """Fetch all existing orders from Ghostfolio.
+def ghost_get_existing_activities(config):
+    """Fetch all existing activities from Ghostfolio.
 
     Returns a tuple of (trade_ids, dividend_comments):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
     - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"
     """
-    url = f"{config['ghost_host']}/api/v1/order"
+    url = f"{config['ghost_host']}/api/v1/activities"
     resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=60)
     resp.raise_for_status()
     data = resp.json()
@@ -250,7 +250,9 @@ def ghost_get_existing_orders(config):
         comment = order.get("comment", "")
         if comment:
             if comment.startswith("IBKR#"):
-                trade_ids.add(comment.split("#", 1)[1])
+                tid = comment.split("#", 1)[1]
+                if tid:
+                    trade_ids.add(tid)
             elif comment.startswith("dividend#"):
                 dividend_comments.add(comment)
     return trade_ids, dividend_comments
@@ -263,12 +265,15 @@ def ghost_import_activities(config, activities):
         return
     url = f"{config['ghost_host']}/api/v1/import"
     payload = {"activities": activities}
-    resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
-                         json=payload, timeout=60)
+    try:
+        resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
+                             json=payload, timeout=60)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Network error posting to Ghostfolio import endpoint: {exc}") from exc
     if resp.status_code >= 400:
         log.error("Import failed (%d): %s", resp.status_code, resp.text)
         log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
-        return
+        raise RuntimeError(f"Ghostfolio import rejected with HTTP {resp.status_code}")
     log.info("Successfully imported %d activities", len(activities))
 
 
@@ -420,9 +425,12 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         log.warning("Could not parse date '%s' for dividend %s", date_str, ibkr_symbol)
         return None
 
-    # Use date portion only for the comment key (YYYY-MM-DD)
+    # Use date portion only for the comment key (YYYY-MM-DD).
+    # Key uses ISIN (stable) rather than the resolved Yahoo symbol (changes with mapping updates).
+    # Fallback to the raw IBKR symbol only when ISIN is absent.
     date_key = iso_date[:10]
-    comment = f"dividend#{symbol}#{date_key}"
+    dedup_id = isin if isin else ibkr_symbol
+    comment = f"dividend#{dedup_id}#{date_key}"
 
     return {
         "accountId": ghost_account_id,
@@ -617,7 +625,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     skip_isins = orphaned_isins | negative_isins
 
     # Get existing orders to avoid duplicates
-    existing_trade_ids, existing_dividend_comments = ghost_get_existing_orders(config)
+    existing_trade_ids, existing_dividend_comments = ghost_get_existing_activities(config)
     log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
              len(existing_trade_ids), len(existing_dividend_comments))
 
@@ -629,6 +637,12 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     for trade in trades:
         trade_id = trade.get("tradeID", "")
+        if not trade_id:
+            log.warning("Skipping trade for %s (%s) — missing tradeID, cannot deduplicate safely",
+                        trade.get("symbol") or trade.get("isin") or "unknown",
+                        trade.get("dateTime", ""))
+            skipped_other += 1
+            continue
         if trade_id in existing_trade_ids:
             skipped_dup += 1
             continue
@@ -657,7 +671,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
         activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
         if activity:
-            if activity["comment"] in existing_dividend_comments:
+            date_part = activity["comment"].rsplit("#", 1)[-1]
+            old_comment = f"dividend#{activity['symbol']}#{date_part}"
+            if activity["comment"] in existing_dividend_comments or old_comment in existing_dividend_comments:
                 div_skipped_dup += 1
             else:
                 div_activities.append(activity)
@@ -667,11 +683,15 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     activities.extend(div_activities)
 
-    # Import all activities
+    # Import all activities — raise on failure so the run exits non-zero
+    import_error = None
     if activities:
-        ghost_import_activities(config, activities)
+        try:
+            ghost_import_activities(config, activities)
+        except (RuntimeError, requests.RequestException) as exc:
+            import_error = exc
 
-    # Update cash balance
+    # Update cash balance (independent of import success)
     try:
         cash_balance = parse_cash_report(xml_text)
         if cash_balance is not None:
@@ -680,6 +700,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
             log.info("No BASE_SUMMARY cash balance found in report")
     except Exception as exc:
         log.error("Failed to update cash balance: %s", exc)
+
+    if import_error:
+        raise import_error
 
     return unmapped
 
@@ -702,10 +725,15 @@ def main():
         log.warning("No GHOST_ACCOUNT_NAMES provided, using IBKR account IDs as Ghostfolio account names")
 
     all_unmapped = {}
+    failed_accounts = []
 
     for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
-        unmapped = process_account(config, ibkr_id, qid, gf_name, mapping)
-        all_unmapped.update(unmapped)
+        try:
+            unmapped = process_account(config, ibkr_id, qid, gf_name, mapping)
+            all_unmapped.update(unmapped)
+        except (RuntimeError, requests.RequestException) as exc:
+            log.error("Account %s failed: %s — skipping remaining steps for this account", ibkr_id, exc)
+            failed_accounts.append(ibkr_id)
 
     # Print unmapped ISINs summary
     if all_unmapped:
@@ -719,6 +747,10 @@ def main():
         print("=" * 60 + "\n")
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
+
+    if failed_accounts:
+        log.error("Sync completed with errors on accounts: %s", ", ".join(failed_accounts))
+        sys.exit(1)
 
     log.info("Sync complete")
 
