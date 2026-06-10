@@ -422,9 +422,12 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         log.warning("Could not parse date '%s' for dividend %s", date_str, ibkr_symbol)
         return None
 
-    # Use date portion only for the comment key (YYYY-MM-DD)
+    # Use date portion only for the comment key (YYYY-MM-DD).
+    # Key uses ISIN (stable) rather than the resolved Yahoo symbol (changes with mapping updates).
+    # Fallback to the raw IBKR symbol only when ISIN is absent.
     date_key = iso_date[:10]
-    comment = f"dividend#{symbol}#{date_key}"
+    dedup_id = isin if isin else ibkr_symbol
+    comment = f"dividend#{dedup_id}#{date_key}"
 
     return {
         "accountId": ghost_account_id,
@@ -665,7 +668,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
         activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
         if activity:
-            if activity["comment"] in existing_dividend_comments:
+            date_part = activity["comment"].rsplit("#", 1)[-1]
+            old_comment = f"dividend#{activity['symbol']}#{date_part}"
+            if activity["comment"] in existing_dividend_comments or old_comment in existing_dividend_comments:
                 div_skipped_dup += 1
             else:
                 div_activities.append(activity)
