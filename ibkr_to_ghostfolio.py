@@ -165,6 +165,14 @@ def parse_trades(xml_text):
     return trades
 
 
+def _parse_float(value):
+    """Return float(value), or None if value cannot be parsed."""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_cash_report(xml_text):
     """Return the ending cash balance in base currency from a Flex Query XML.
 
@@ -333,22 +341,19 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
         return None
 
     # Parse quantity and fee
-    try:
-        qty = abs(float(quantity))
-    except ValueError:
+    qty = _parse_float(quantity)
+    if qty is None:
         log.warning("Invalid quantity '%s' for trade %s", quantity, trade_id)
         return None
+    qty = abs(qty)
 
-    try:
-        fee = abs(float(commission))
-    except ValueError:
-        fee = 0.0
+    fee = abs(_parse_float(commission) or 0.0)
 
-    try:
-        unit_price = abs(float(trade_price))
-    except ValueError:
+    unit_price = _parse_float(trade_price)
+    if unit_price is None:
         log.warning("Invalid price '%s' for trade %s", trade_price, trade_id)
         return None
+    unit_price = abs(unit_price)
 
     # Determine activity type
     activity_type = "BUY" if buy_sell == "BUY" else "SELL"
@@ -398,22 +403,19 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         log.warning("No symbol resolved for dividend (ISIN: %s), skipping", isin)
         return None
 
-    try:
-        qty = abs(float(quantity))
-    except ValueError:
+    qty = _parse_float(quantity)
+    if qty is None:
         log.warning("Invalid quantity '%s' for dividend %s", quantity, ibkr_symbol)
         return None
+    qty = abs(qty)
 
-    try:
-        unit_price = abs(float(gross_rate))
-    except ValueError:
+    unit_price = _parse_float(gross_rate)
+    if unit_price is None:
         log.warning("Invalid grossRate '%s' for dividend %s", gross_rate, ibkr_symbol)
         return None
+    unit_price = abs(unit_price)
 
-    try:
-        wht = abs(float(fee))
-    except ValueError:
-        wht = 0.0
+    wht = abs(_parse_float(fee) or 0.0)
 
     iso_date = parse_ibkr_datetime(date_str)
     if not iso_date:
@@ -542,11 +544,13 @@ def filter_net_negative_positions(trades):
         key = isin if isin else symbol
         if not key:
             continue
-        try:
-            qty = float(trade.get("quantity", "0"))
-        except ValueError:
-            log.warning("Invalid quantity '%s' for trade %s (%s), skipping in net-position filter",
-                        trade.get("quantity", ""), trade.get("tradeID", "?"), symbol)
+        qty = _parse_float(trade.get("quantity", "0"))
+        if qty is None:
+            log.warning(
+                "Invalid quantity '%s' for trade %s (%s) — excluded from net accumulation"
+                " (conversion will also reject it)",
+                trade.get("quantity", ""), trade.get("tradeID", "?"), symbol,
+            )
             continue
         group_info[key]["net_qty"] += qty
         group_info[key]["symbols"].add(symbol)
