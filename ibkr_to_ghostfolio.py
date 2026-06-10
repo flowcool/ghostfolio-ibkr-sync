@@ -13,7 +13,7 @@ import requests
 import yaml
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -107,7 +107,7 @@ def resolve_symbol(isin, ibkr_symbol, mapping):
 
 def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
     """Fetch a Flex Query report from IBKR (two-step process)."""
-    log.info("Requesting Flex Query %s from IBKR...", query_id)
+    log.debug("Requesting Flex Query %s from IBKR...", query_id)
 
     # Step 1 - send request
     resp = requests.get(IBKR_SEND_URL, params={"t": token, "q": query_id, "v": "3"},
@@ -138,14 +138,14 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
 
         # ErrorCode 1019 means statement generation is still in progress
         if status == "Warn" or error_code == "1019":
-            log.info("Statement not ready yet (attempt %d/%d), waiting %ds...",
-                     attempt, max_retries, retry_delay)
+            log.debug("Statement not ready yet (attempt %d/%d), waiting %ds...",
+                      attempt, max_retries, retry_delay)
             time.sleep(retry_delay)
             continue
 
         # Report is ready when Status is absent or FlexStatements are present
         if status is None or root.find("FlexStatements") is not None:
-            log.info("Flex Query statement received")
+            log.debug("Flex Query statement received")
             return resp.text
 
         error_msg = root.findtext("ErrorMessage", "unknown error")
@@ -643,19 +643,19 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # Parse trades and dividends
     trades = parse_trades(xml_text)
     dividends = parse_dividends(xml_text)
-    log.info("Found %d trades and %d dividend entries in Flex Query report",
-             len(trades), len(dividends))
+    log.debug("Found %d trades and %d dividend entries in Flex Query report",
+              len(trades), len(dividends))
 
     # Drop orphaned closing trades (buy predates the 365-day query window)
     trades, orphaned_symbols, orphaned_isins, dropped_orphans = filter_orphaned_closing_trades(trades)
     if dropped_orphans:
-        log.info("Dropped %d orphaned closing trade(s) with no matching open in window",
-                 dropped_orphans)
+        log.debug("Dropped %d orphaned closing trade(s) with no matching open in window",
+                  dropped_orphans)
 
     # Drop trades where net quantity across the window is negative
     trades, negative_symbols, negative_isins, dropped_negative = filter_net_negative_positions(trades)
     if dropped_negative:
-        log.info("Dropped %d trade(s) with net negative position in window", dropped_negative)
+        log.debug("Dropped %d trade(s) with net negative position in window", dropped_negative)
 
     # Combined skip sets for dividend filtering
     skip_symbols = orphaned_symbols | negative_symbols
@@ -734,7 +734,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
         if cash_balance is not None:
             ghost_update_cash_balance(config, ghost_account_id, cash_balance)
         else:
-            log.info("No BASE_SUMMARY cash balance found in report")
+            log.warning("No BASE_SUMMARY cash balance found in report")
     except Exception as exc:
         log.error("Failed to update cash balance: %s", exc)
 
