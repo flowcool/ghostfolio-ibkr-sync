@@ -62,10 +62,24 @@ Multi-arch image (linux/amd64 and linux/arm64). New images are published automat
    >   trades you had previously entered manually or synced under a different period.
    >
    > **Recovery if you already used a shorter period:**
-   > The script ships with `cleanup_duplicates.py`. Run it in dry-run mode first
-   > (`python cleanup_duplicates.py`), then with `--apply` once you have verified the
-   > output. It patches existing manual entries with their IBKR trade ID so future syncs
-   > recognise them, and removes the duplicate IBKR-synced copies.
+   >
+   > Two cleanup scripts are included:
+   >
+   > - **`cleanup_duplicates.py`** — removes duplicate *trade* activities (BUY/SELL).
+   >   Matches by symbol + type + quantity + unitPrice + date (±2 days to cover the
+   >   UTC vs local-time offset). Patches the manual entry with the IBKR trade ID so
+   >   future syncs recognise it, then deletes the IBKR-synced copy.
+   >
+   > - **`cleanup_dividends.py`** — removes duplicate *dividend* activities.
+   >   Matches by symbol + quantity + unitPrice + date (±35 days). The wider window
+   >   is intentional: IBKR records the ex-dividend date while a manual entry may use
+   >   the pay date — a gap of days to weeks depending on the stock. False positives
+   >   are not a concern because the same company cannot pay two identical dividends
+   >   within a 35-day window (quarterly cadence is ≥ 90 days).
+   >
+   > Both scripts are safe by default: dry-run mode is the default, `--apply` is
+   > required to make changes, and a full safety log (`cleanup_*.json`) is written
+   > before each deletion so you can reinject any activity if needed.
 
 4. Select the following sections and fields:
 
