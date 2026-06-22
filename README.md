@@ -48,6 +48,25 @@ Multi-arch image (linux/amd64 and linux/arm64). New images are published automat
 1. On the same Flex Queries page, click **Create** under **Activity Flex Query**
 2. Give it a name like `Ghostfolio Sync - Individual`
 3. Set the period to **Last 365 Calendar Days**
+
+   > **⚠️ Critical — do not use a shorter period (e.g. Last Month, Last Quarter)**
+   >
+   > The sync script relies on the 365-day window to match opening and closing trades.
+   > A shorter period causes two classes of silent failures:
+   >
+   > - **Missing sells**: a sell trade within the period whose matching buy is outside the
+   >   window will be skipped without error (the script sees only a closing trade with no
+   >   corresponding open and drops it to avoid creating phantom short positions).
+   > - **Silent re-imports on period change**: if you later switch to 365 days, all trades
+   >   from the gap period will look new to the dedup system — creating duplicates for any
+   >   trades you had previously entered manually or synced under a different period.
+   >
+   > **Recovery if you already used a shorter period:**
+   > The script ships with `cleanup_duplicates.py`. Run it in dry-run mode first
+   > (`python cleanup_duplicates.py`), then with `--apply` once you have verified the
+   > output. It patches existing manual entries with their IBKR trade ID so future syncs
+   > recognise them, and removes the duplicate IBKR-synced copies.
+
 4. Select the following sections and fields:
 
 **Account Information:**
