@@ -92,6 +92,7 @@ C'est la source de vérité durable : attachée au code, visible dans l'historiq
 - Branches : `fix/<sujet>`, `feat/<sujet>`, `refactor/<sujet>`
 - Commits : `fix:`, `feat:`, `refactor:`, `chore:` — message court, impératif
 - PRs : isolées par concern, une PR = un fix
+- Merge strategy : merge commit uniquement (squash et rebase désactivés sur GitHub) — évite la divergence staging/main
 - CI build l'image sur push `main` → pas de tag manuel nécessaire pour `latest`
 
 ## 5. Findings d'audit
@@ -126,9 +127,13 @@ Tester avec les vraies APIs en mode lecture d'abord (`GET /api/v1/activities`), 
 ## 7. CI / déploiement
 
 ```
-push main → GitHub Actions build linux/amd64 + linux/arm64
-           → push ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-           → Portainer poll repo infra → redéploie le container
+push main    → GitHub Actions build linux/amd64 + linux/arm64
+             → push ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+             → Portainer poll repo infra → redéploie le container
+
+push staging → GitHub Actions build linux/amd64 + linux/arm64
+             → push ghcr.io/flowcool/ghostfolio-ibkr-sync:staging
+             → tester manuellement sur le NAS avant merge sur main
 ```
 
 Pour switcher vers l'image du fork (PRs toutes mergées — à faire) :
