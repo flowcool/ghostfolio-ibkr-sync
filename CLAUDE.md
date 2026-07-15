@@ -103,6 +103,13 @@ C'est la source de vérité durable : attachée au code, visible dans l'historiq
 | B | `abs(commission)` swallows rebates positifs | Basse | ✅ mergé PR #7 |
 | C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | ✅ mergé PR #8 |
 | A | Corporate actions importées comme trades normaux | Moyenne | Ouvert — pas de PR |
+| E | LSE/GBX : prix GBP importé tel quel → mismatch ×100 avec Yahoo GBp (qty/perf fantômes) | Haute | ✅ mergé #17 (`gbx_pence_conversion`) |
+| F | Pas de mode `--dry-run` (preview des activités avant écriture) | Moyenne | Ouvert #20 |
+| G | Activité créée **sans comment `IBKR#<tradeID>`** quand le symbole est **canonicalisé par Yahoo** (ex. `TAL.V`→`TAL.TO`) → re-duplication au sync suivant. (Les symboles non normalisés gardent bien le comment.) | Moyenne | Ouvert — à investiguer |
+
+**Gotchas ops (hors code) :**
+- `mapping.yaml` est monté en **bind-mount fichier** → l'éditer sur l'hôte ne se reflète pas (inode figé au `create`) : `docker restart` du container pour relire.
+- Collision de ticker : mapper par **ISIN** (ex. IBKR `TAL`=PetroTal `CA71677J1012`≠TAL Education). Yahoo canonicalise `.V`→`.TO` pour PetroTal.
 
 ## 6. Tester le script
 
