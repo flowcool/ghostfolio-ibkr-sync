@@ -322,9 +322,17 @@ def ghost_update_cash_balance(config, account_id, balance):
 # Exchanges where IBKR reports the major currency unit but the YAHOO data
 # source quotes the minor (sub-cent) unit. Keyed by Yahoo symbol suffix:
 #   suffix -> (ibkr_currency, yahoo_minor_currency, factor)
-# London (.L) is the canonical case; JSE (.JO, ZAR->ZAc) and TASE (.TA,
-# ILS->ILA) share the exact same 100x mismatch. Without scaling, amounts land
-# 100x too small against the minor-unit SymbolProfile.
+# Without scaling, amounts land 100x too small against the minor-unit
+# SymbolProfile.
+#
+#   .L  (London)   GBP -> GBp  : PRODUCTION-VERIFIED against real trades (PR #18).
+#   .JO (JSE)      ZAR -> ZAc  : INFERRED, not yet verified against real IBKR
+#   .TA (TASE)     ILS -> ILA  : data. Yahoo quotes these in cents/agorot, but
+#                                whether IBKR reports the MAJOR unit (as it does
+#                                for LSE) is unconfirmed. If IBKR already reports
+#                                cents/agorot for a market, remove its row here
+#                                to avoid a reversed 100x error. Confirm against
+#                                a real .JO/.TA trade before trusting the amounts.
 MINOR_UNIT_MARKETS = {
     ".L": ("GBP", "GBp", 100),
     ".JO": ("ZAR", "ZAc", 100),
