@@ -319,6 +319,19 @@ def ghost_update_cash_balance(config, account_id, balance):
 # Trade conversion
 # ---------------------------------------------------------------------------
 
+def to_gbx_pence(symbol, currency, unit_price):
+    """Convert IBKR GBP (pounds) to GBp (pence) for London-listed tickers.
+
+    IBKR reports LSE prices in GBP (pounds), but the YAHOO data source quotes
+    ".L" symbols in GBp (pence). Without this, unitPrice lands 100x too small
+    against a GBp SymbolProfile. Only the per-share price/currency is adjusted;
+    fees (ibCommissionCurrency) stay in GBP.
+    """
+    if symbol.endswith(".L") and currency == "GBP":
+        return "GBp", unit_price * 100
+    return currency, unit_price
+
+
 def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
     """Convert an IBKR trade dict to a Ghostfolio activity dict.
 
@@ -377,6 +390,8 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
         log.warning("Invalid price '%s' for trade %s", trade_price, trade_id)
         return None
     unit_price = abs(unit_price)
+
+    currency, unit_price = to_gbx_pence(symbol, currency, unit_price)
 
     # Determine activity type
     activity_type = "BUY" if buy_sell == "BUY" else "SELL"
@@ -437,6 +452,8 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         log.warning("Invalid grossRate '%s' for dividend %s", gross_rate, ibkr_symbol)
         return None
     unit_price = abs(unit_price)
+
+    currency, unit_price = to_gbx_pence(symbol, currency, unit_price)
 
     try:
         raw_fee = float(fee)
