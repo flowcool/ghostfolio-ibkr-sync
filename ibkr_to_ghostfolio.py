@@ -319,17 +319,18 @@ def ghost_update_cash_balance(config, account_id, balance):
 # Trade conversion
 # ---------------------------------------------------------------------------
 
-def to_gbx_pence(symbol, currency, unit_price):
-    """Convert IBKR GBP (pounds) to GBp (pence) for London-listed tickers.
+def gbx_pence_conversion(symbol, currency):
+    """Return (currency, factor) to convert IBKR GBP to GBp for London tickers.
 
     IBKR reports LSE prices in GBP (pounds), but the YAHOO data source quotes
-    ".L" symbols in GBp (pence). Without this, unitPrice lands 100x too small
-    against a GBp SymbolProfile. Only the per-share price/currency is adjusted;
-    fees (ibCommissionCurrency) stay in GBP.
+    ".L" symbols in GBp (pence). Without this, amounts land 100x too small
+    against a GBp SymbolProfile. A Ghostfolio activity carries a single currency
+    shared by unitPrice AND fee, so the caller must scale EVERY monetary field
+    (price and fee/withholding tax) by the returned factor.
     """
     if symbol.endswith(".L") and currency == "GBP":
-        return "GBp", unit_price * 100
-    return currency, unit_price
+        return "GBp", 100
+    return currency, 1
 
 
 def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
@@ -391,7 +392,13 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
         return None
     unit_price = abs(unit_price)
 
-    currency, unit_price = to_gbx_pence(symbol, currency, unit_price)
+    # LSE .L: IBKR reports GBP, YAHOO quotes GBp. Scale price AND fee (single
+    # shared activity currency) so the fee is not silently read as pence.
+    currency, gbx_factor = gbx_pence_conversion(symbol, currency)
+    if gbx_factor != 1:
+        log.debug("Trade %s: %s GBP->GBp, price+fee x%d", trade_id, symbol, gbx_factor)
+    unit_price *= gbx_factor
+    fee *= gbx_factor
 
     # Determine activity type
     activity_type = "BUY" if buy_sell == "BUY" else "SELL"
@@ -453,8 +460,6 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         return None
     unit_price = abs(unit_price)
 
-    currency, unit_price = to_gbx_pence(symbol, currency, unit_price)
-
     try:
         raw_fee = float(fee)
         if raw_fee > 0:
@@ -464,6 +469,14 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     except ValueError:
         log.warning("Invalid dividend fee '%s' for %s, defaulting withholding tax to 0", fee, ibkr_symbol)
         wht = 0.0
+
+    # LSE .L: IBKR reports GBP, YAHOO quotes GBp. Scale grossRate AND withholding
+    # tax (single shared activity currency) so the WHT is not read as pence.
+    currency, gbx_factor = gbx_pence_conversion(symbol, currency)
+    if gbx_factor != 1:
+        log.debug("Dividend %s: %s GBP->GBp, rate+wht x%d", ibkr_symbol, symbol, gbx_factor)
+    unit_price *= gbx_factor
+    wht *= gbx_factor
 
     iso_date = parse_ibkr_datetime(date_str)
     if not iso_date:
