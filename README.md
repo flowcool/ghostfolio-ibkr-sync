@@ -220,6 +220,7 @@ All configuration is done via environment variables:
 | `CRON` | No | Cron schedule for recurring runs (Docker only) | `0 6 * * *` |
 | `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
+| `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without POSTing/PUTting to Ghostfolio | `1` |
 
 ## Mapping File
 
