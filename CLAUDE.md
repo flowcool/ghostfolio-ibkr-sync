@@ -103,8 +103,8 @@ C'est la source de vérité durable : attachée au code, visible dans l'historiq
 | B | `abs(commission)` swallows rebates positifs | Basse | ✅ mergé PR #7 |
 | C | `sys.exit(1)` dans `ghost_find_account_id()` — non testable | Basse | ✅ mergé PR #8 |
 | A | Corporate actions importées comme trades normaux | Moyenne | Ouvert — pas de PR |
-| E | LSE/GBX : prix GBP importé tel quel → mismatch ×100 avec Yahoo GBp (qty/perf fantômes) | Haute | ✅ mergé #17 (`gbx_pence_conversion`) |
-| F | Pas de mode `--dry-run` (preview des activités avant écriture) | Moyenne | Ouvert #20 |
+| E | LSE/GBX : prix GBP importé tel quel → mismatch ×100 avec Yahoo GBp (qty/perf fantômes) | Haute | ✅ mergé #17, généralisé #21 (`minor_unit_conversion` + table `MINOR_UNIT_MARKETS` : `.L` vérifié, `.JO`/`.TA` inférés non vérifiés) |
+| F | Pas de mode `DRY_RUN` (preview des activités avant écriture) | Moyenne | ✅ mergé #22 (env `DRY_RUN=1`, guards dans `ghost_import_activities` + `ghost_update_cash_balance`) |
 | G | Activité créée **sans comment `IBKR#<tradeID>`** quand le symbole est **canonicalisé par Yahoo** (ex. `TAL.V`→`TAL.TO`) → re-duplication au sync suivant. (Les symboles non normalisés gardent bien le comment.) | Moyenne | Ouvert — à investiguer |
 
 **Gotchas ops (hors code) :**
