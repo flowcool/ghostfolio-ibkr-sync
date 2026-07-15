@@ -19,7 +19,7 @@ This script parses the IBKR XML directly, avoids fragile third-party libraries, 
 ## Docker image
 
 ```
-ghcr.io/obol89/ghostfolio-ibkr-sync:latest
+ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
 Multi-arch image (linux/amd64 and linux/arm64). New images are published automatically on every push to main.
@@ -291,7 +291,7 @@ docker run --rm \
   -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
   -v ./mapping.yaml:/app/mapping.yaml \
-  ghcr.io/obol89/ghostfolio-ibkr-sync:latest
+  ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
 ### Without Docker
@@ -314,7 +314,7 @@ For scheduled runs with multiple sub-accounts, run a separate container per acco
 ```yaml
 services:
   ibkr-sync-individual:
-    image: ghcr.io/obol89/ghostfolio-ibkr-sync:latest
+    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
     container_name: ghostfolio-ibkr-sync-individual
     restart: unless-stopped
     depends_on:
@@ -335,7 +335,7 @@ services:
       - ghostfolio
 
   ibkr-sync-joint:
-    image: ghcr.io/obol89/ghostfolio-ibkr-sync:latest
+    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
     container_name: ghostfolio-ibkr-sync-joint
     restart: unless-stopped
     depends_on:
