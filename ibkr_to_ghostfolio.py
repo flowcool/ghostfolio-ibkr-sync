@@ -319,17 +319,38 @@ def ghost_update_cash_balance(config, account_id, balance):
 # Trade conversion
 # ---------------------------------------------------------------------------
 
-def gbx_pence_conversion(symbol, currency):
-    """Return (currency, factor) to convert IBKR GBP to GBp for London tickers.
+# Exchanges where IBKR reports the major currency unit but the YAHOO data
+# source quotes the minor (sub-cent) unit. Keyed by Yahoo symbol suffix:
+#   suffix -> (ibkr_currency, yahoo_minor_currency, factor)
+# Without scaling, amounts land 100x too small against the minor-unit
+# SymbolProfile.
+#
+#   .L  (London)   GBP -> GBp  : PRODUCTION-VERIFIED against real trades (PR #18).
+#   .JO (JSE)      ZAR -> ZAc  : INFERRED, not yet verified against real IBKR
+#   .TA (TASE)     ILS -> ILA  : data. Yahoo quotes these in cents/agorot, but
+#                                whether IBKR reports the MAJOR unit (as it does
+#                                for LSE) is unconfirmed. If IBKR already reports
+#                                cents/agorot for a market, remove its row here
+#                                to avoid a reversed 100x error. Confirm against
+#                                a real .JO/.TA trade before trusting the amounts.
+MINOR_UNIT_MARKETS = {
+    ".L": ("GBP", "GBp", 100),
+    ".JO": ("ZAR", "ZAc", 100),
+    ".TA": ("ILS", "ILA", 100),
+}
 
-    IBKR reports LSE prices in GBP (pounds), but the YAHOO data source quotes
-    ".L" symbols in GBp (pence). Without this, amounts land 100x too small
-    against a GBp SymbolProfile. A Ghostfolio activity carries a single currency
-    shared by unitPrice AND fee, so the caller must scale EVERY monetary field
-    (price and fee/withholding tax) by the returned factor.
+
+def minor_unit_conversion(symbol, currency):
+    """Return (currency, factor) to convert an IBKR major-unit price to the
+    minor unit quoted by YAHOO for markets that quote in sub-cents.
+
+    A Ghostfolio activity carries a single currency shared by unitPrice AND
+    fee, so the caller must scale EVERY monetary field (price and
+    fee/withholding tax) by the returned factor.
     """
-    if symbol.endswith(".L") and currency == "GBP":
-        return "GBp", 100
+    for suffix, (ibkr_currency, minor_currency, factor) in MINOR_UNIT_MARKETS.items():
+        if symbol.endswith(suffix) and currency == ibkr_currency:
+            return minor_currency, factor
     return currency, 1
 
 
@@ -392,13 +413,15 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
         return None
     unit_price = abs(unit_price)
 
-    # LSE .L: IBKR reports GBP, YAHOO quotes GBp. Scale price AND fee (single
-    # shared activity currency) so the fee is not silently read as pence.
-    currency, gbx_factor = gbx_pence_conversion(symbol, currency)
-    if gbx_factor != 1:
-        log.debug("Trade %s: %s GBP->GBp, price+fee x%d", trade_id, symbol, gbx_factor)
-    unit_price *= gbx_factor
-    fee *= gbx_factor
+    # Minor-unit markets (.L GBp, .JO ZAc, .TA ILA): IBKR reports the major
+    # unit, YAHOO quotes the sub-cent unit. Scale price AND fee (single shared
+    # activity currency) so the fee is not silently read as sub-cents.
+    minor_currency, minor_factor = minor_unit_conversion(symbol, currency)
+    if minor_factor != 1:
+        log.debug("Trade %s: %s %s->%s, price+fee x%d", trade_id, symbol, currency, minor_currency, minor_factor)
+    currency = minor_currency
+    unit_price *= minor_factor
+    fee *= minor_factor
 
     # Determine activity type
     activity_type = "BUY" if buy_sell == "BUY" else "SELL"
@@ -470,13 +493,15 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         log.warning("Invalid dividend fee '%s' for %s, defaulting withholding tax to 0", fee, ibkr_symbol)
         wht = 0.0
 
-    # LSE .L: IBKR reports GBP, YAHOO quotes GBp. Scale grossRate AND withholding
-    # tax (single shared activity currency) so the WHT is not read as pence.
-    currency, gbx_factor = gbx_pence_conversion(symbol, currency)
-    if gbx_factor != 1:
-        log.debug("Dividend %s: %s GBP->GBp, rate+wht x%d", ibkr_symbol, symbol, gbx_factor)
-    unit_price *= gbx_factor
-    wht *= gbx_factor
+    # Minor-unit markets (.L GBp, .JO ZAc, .TA ILA): IBKR reports the major
+    # unit, YAHOO quotes the sub-cent unit. Scale grossRate AND withholding tax
+    # (single shared activity currency) so the WHT is not read as sub-cents.
+    minor_currency, minor_factor = minor_unit_conversion(symbol, currency)
+    if minor_factor != 1:
+        log.debug("Dividend %s: %s %s->%s, rate+wht x%d", ibkr_symbol, symbol, currency, minor_currency, minor_factor)
+    currency = minor_currency
+    unit_price *= minor_factor
+    wht *= minor_factor
 
     iso_date = parse_ibkr_datetime(date_str)
     if not iso_date:
