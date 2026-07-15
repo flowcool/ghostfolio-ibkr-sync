@@ -71,6 +71,7 @@ def load_config():
         "ghost_currency": os.environ.get("GHOST_CURRENCY", "USD"),
         "ghost_platform_id": os.environ.get("GHOST_PLATFORM_ID", ""),
         "mapping_file": os.environ.get("MAPPING_FILE", "mapping.yaml"),
+        "dry_run": os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on"),
     }
 
 
@@ -278,6 +279,14 @@ def ghost_import_activities(config, activities):
     if not activities:
         log.info("No new activities to import")
         return
+    if config.get("dry_run"):
+        log.info("[DRY RUN] would import %d activities (no POST sent):", len(activities))
+        for a in activities:
+            log.info("[DRY RUN]   %-8s %-14s qty=%s price=%s %s fee=%s  %s",
+                     a.get("type"), a.get("symbol"), a.get("quantity"),
+                     a.get("unitPrice"), a.get("currency"), a.get("fee"),
+                     a.get("comment"))
+        return
     url = f"{config['ghost_host']}/api/v1/import"
     payload = {"activities": activities}
     try:
@@ -294,6 +303,10 @@ def ghost_import_activities(config, activities):
 
 def ghost_update_cash_balance(config, account_id, balance):
     """Update the cash balance on a Ghostfolio account."""
+    if config.get("dry_run"):
+        log.info("[DRY RUN] would set cash balance for account %s to %.2f (no PUT sent)",
+                 account_id, balance)
+        return
     url = f"{config['ghost_host']}/api/v1/account/{account_id}"
     resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=30)
     resp.raise_for_status()
@@ -808,6 +821,8 @@ def main():
     except RuntimeError as exc:
         log.error("Configuration error: %s", exc)
         sys.exit(1)
+    if config["dry_run"]:
+        log.info("DRY RUN enabled (DRY_RUN) — no writes will be sent to Ghostfolio")
     mapping = load_mapping(config["mapping_file"])
     log.info("Loaded %d symbol mappings", len(mapping))
 
