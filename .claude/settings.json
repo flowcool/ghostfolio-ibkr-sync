@@ -6,24 +6,26 @@
       "Bash(python -m py_compile *)",
       "Bash(pip install *)",
       "Bash(pip list*)",
-      "Bash(git status)",
-      "Bash(git diff*)",
-      "Bash(git log*)",
-      "Bash(git add *)",
-      "Bash(git commit*)",
-      "Bash(git push*)",
-      "Bash(git checkout*)",
-      "Bash(git branch*)",
-      "Bash(git fetch*)",
-      "Bash(git merge*)",
-      "Bash(git show*)",
+      "Bash(git *)",
       "Bash(grep*)",
       "Bash(find . *)",
-      "Bash(gh pr*)",
-      "Bash(gh api*)",
+      "Bash(gh *)",
       "Bash(docker logs ghostfolio*)",
       "Bash(docker inspect ghostfolio*)",
       "Bash(docker exec ghostfolio-ibkr-sync-individual python*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE '^git commit'; then bash .claude/hooks/pre-commit-compile.sh; fi"
+          }
+        ]
+      }
     ]
   }
 }
