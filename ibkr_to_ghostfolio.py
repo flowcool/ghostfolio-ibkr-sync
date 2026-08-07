@@ -30,6 +30,9 @@ IBKR_STMT_URL = (
 
 SKIP_ASSET_CATEGORIES = {"CASH", "OPT"}
 
+# Page size for the paginated GET /api/v1/activities sweep
+GHOST_PAGE_SIZE = 1000
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -221,7 +224,11 @@ def ghost_get_accounts(config):
 
 
 def ghost_find_account_id(config, account_name):
-    """Find a Ghostfolio account ID by name."""
+    """Find a Ghostfolio account ID by name.
+
+    Returns None if no account matches, so the caller can skip this account and
+    still process the remaining ones.
+    """
     data = ghost_get_accounts(config)
     accounts = data.get("accounts", data) if isinstance(data, dict) else data
     for acc in accounts:
@@ -229,51 +236,94 @@ def ghost_find_account_id(config, account_name):
             return acc["id"]
     log.error("Ghostfolio account '%s' not found. Available: %s",
               account_name, [a["name"] for a in accounts])
-    sys.exit(1)
+    return None
 
 
 def ghost_get_existing_orders(config):
-    """Fetch all existing orders from Ghostfolio.
+    """Fetch all existing activities from Ghostfolio.
+
+    Uses GET /api/v1/activities with skip/take pagination.  The /api/v1/order
+    endpoints were deprecated in Ghostfolio 2.248.0 and removed in 3.5.0.
 
     Returns a tuple of (trade_ids, dividend_comments):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
     - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"
     """
-    url = f"{config['ghost_host']}/api/v1/order"
-    resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
+    url = f"{config['ghost_host']}/api/v1/activities"
+    headers = ghost_headers(config["ghost_token"])
     trade_ids = set()
     dividend_comments = set()
-    activities = data.get("activities", data) if isinstance(data, dict) else data
-    for order in activities:
-        comment = order.get("comment", "")
-        if comment:
+
+    skip = 0
+    total = None
+    while True:
+        resp = requests.get(url, headers=headers,
+                            params={"skip": skip, "take": GHOST_PAGE_SIZE},
+                            timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        activities = data.get("activities", [])
+        if total is None:
+            total = data.get("count")
+
+        for order in activities:
+            # comment is nullable in Ghostfolio, so JSON null arrives as None
+            comment = order.get("comment") or ""
             if comment.startswith("IBKR#"):
                 trade_ids.add(comment.split("#", 1)[1])
             elif comment.startswith("dividend#"):
                 dividend_comments.add(comment)
+
+        skip += len(activities)
+        if len(activities) < GHOST_PAGE_SIZE:
+            break
+        if total is not None and skip >= total:
+            break
+
+    log.info("Scanned %d existing Ghostfolio activities", skip)
     return trade_ids, dividend_comments
 
 
 def ghost_import_activities(config, activities):
-    """Import activities into Ghostfolio."""
+    """Import activities into Ghostfolio.  Returns True on success.
+
+    Ghostfolio reports its own duplicate detection per activity in a 200
+    response and silently skips those, so a short accepted count is not a
+    failure.
+    """
     if not activities:
         log.info("No new activities to import")
-        return
+        return True
     url = f"{config['ghost_host']}/api/v1/import"
     payload = {"activities": activities}
-    resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
-                         json=payload, timeout=60)
+    try:
+        resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
+                             json=payload, timeout=60)
+    except requests.RequestException as exc:
+        log.error("Import request failed: %s", exc)
+        return False
     if resp.status_code >= 400:
         log.error("Import failed (%d): %s", resp.status_code, resp.text)
         log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
-        return
-    log.info("Successfully imported %d activities", len(activities))
+        return False
+
+    accepted = None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("activities"), list):
+        accepted = len(body["activities"])
+    if accepted is not None and accepted < len(activities):
+        log.info("Ghostfolio accepted %d of %d activities (the rest were detected as duplicates)",
+                 accepted, len(activities))
+    else:
+        log.info("Successfully imported %d activities", len(activities))
+    return True
 
 
 def ghost_update_cash_balance(config, account_id, balance):
-    """Update the cash balance on a Ghostfolio account."""
+    """Update the cash balance on a Ghostfolio account.  Returns True on success."""
     url = f"{config['ghost_host']}/api/v1/account/{account_id}"
     resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=30)
     resp.raise_for_status()
@@ -291,8 +341,9 @@ def ghost_update_cash_balance(config, account_id, balance):
                         json=payload, timeout=30)
     if resp.status_code >= 400:
         log.error("Failed to update cash balance (%d): %s", resp.status_code, resp.text)
-    else:
-        log.info("Updated cash balance for account %s to %.2f", account_id, balance)
+        return False
+    log.info("Updated cash balance for account %s to %.2f", account_id, balance)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -581,19 +632,33 @@ def filter_net_negative_positions(trades):
 # Main sync logic
 # ---------------------------------------------------------------------------
 
-def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping):
-    """Process a single IBKR account: fetch, parse, and sync to Ghostfolio."""
+def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
+                    existing_trade_ids, existing_dividend_comments):
+    """Process a single IBKR account: fetch, parse, and sync to Ghostfolio.
+
+    The two existing_* sets are shared across accounts and updated in place with
+    whatever this account imports, so a later account will not re-import them.
+
+    Returns a tuple of (unmapped, ok) where ok is False if any step failed.
+    """
     log.info("Processing IBKR account %s (Ghostfolio: %s)", ibkr_account_id, ghost_account_name)
+    ok = True
 
     # Fetch the Flex Query report
     try:
         xml_text = fetch_flex_report(config["ibkr_token"], query_id)
     except Exception as exc:
         log.error("Failed to fetch Flex Query for account %s: %s", ibkr_account_id, exc)
-        return {}
+        return {}, False
 
     # Find the Ghostfolio account
-    ghost_account_id = ghost_find_account_id(config, ghost_account_name)
+    try:
+        ghost_account_id = ghost_find_account_id(config, ghost_account_name)
+    except requests.RequestException as exc:
+        log.error("Failed to look up Ghostfolio account '%s': %s", ghost_account_name, exc)
+        return {}, False
+    if ghost_account_id is None:
+        return {}, False
 
     # Parse trades and dividends
     trades = parse_trades(xml_text)
@@ -615,11 +680,6 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # Combined skip sets for dividend filtering
     skip_symbols = orphaned_symbols | negative_symbols
     skip_isins = orphaned_isins | negative_isins
-
-    # Get existing orders to avoid duplicates
-    existing_trade_ids, existing_dividend_comments = ghost_get_existing_orders(config)
-    log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
-             len(existing_trade_ids), len(existing_dividend_comments))
 
     # Convert and filter trades
     unmapped = {}
@@ -669,23 +729,34 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     # Import all activities
     if activities:
-        ghost_import_activities(config, activities)
+        if ghost_import_activities(config, activities):
+            # Keep the shared dedupe sets current for the accounts still to come
+            for activity in activities:
+                comment = activity["comment"]
+                if comment.startswith("IBKR#"):
+                    existing_trade_ids.add(comment.split("#", 1)[1])
+                elif comment.startswith("dividend#"):
+                    existing_dividend_comments.add(comment)
+        else:
+            ok = False
 
     # Update cash balance
     try:
         cash_balance = parse_cash_report(xml_text)
         if cash_balance is not None:
-            ghost_update_cash_balance(config, ghost_account_id, cash_balance)
+            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance):
+                ok = False
         else:
             log.info("No BASE_SUMMARY cash balance found in report")
     except Exception as exc:
         log.error("Failed to update cash balance: %s", exc)
+        ok = False
 
-    return unmapped
+    return unmapped, ok
 
 
 def main():
-    """Main entry point."""
+    """Main entry point.  Returns a process exit code (0 = clean, 1 = failure)."""
     log.info("Starting IBKR to Ghostfolio sync")
 
     config = load_config()
@@ -701,11 +772,25 @@ def main():
         account_names = account_ids
         log.warning("No GHOST_ACCOUNT_NAMES provided, using IBKR account IDs as Ghostfolio account names")
 
+    # Fetch existing activities once for the whole run; process_account keeps the
+    # sets current as it imports
+    try:
+        existing_trade_ids, existing_dividend_comments = ghost_get_existing_orders(config)
+    except requests.RequestException as exc:
+        log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
+        return 1
+    log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
+             len(existing_trade_ids), len(existing_dividend_comments))
+
     all_unmapped = {}
+    failed_accounts = []
 
     for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
-        unmapped = process_account(config, ibkr_id, qid, gf_name, mapping)
+        unmapped, ok = process_account(config, ibkr_id, qid, gf_name, mapping,
+                                       existing_trade_ids, existing_dividend_comments)
         all_unmapped.update(unmapped)
+        if not ok:
+            failed_accounts.append(ibkr_id)
 
     # Print unmapped ISINs summary
     if all_unmapped:
@@ -720,8 +805,18 @@ def main():
     else:
         log.info("All ISINs resolved via mapping or symbol fallback")
 
+    if failed_accounts:
+        log.error("Sync completed with errors for %d of %d account(s): %s",
+                  len(failed_accounts), len(account_ids), ", ".join(failed_accounts))
+        return 1
+
     log.info("Sync complete")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except Exception:
+        log.exception("Sync failed with an unhandled error")
+        sys.exit(1)

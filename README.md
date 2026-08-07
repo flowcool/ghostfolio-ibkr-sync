@@ -26,9 +26,11 @@ Multi-arch image (linux/amd64 and linux/arm64). New images are published automat
 
 ## Prerequisites
 
-- A running self-hosted Ghostfolio instance
+- A running self-hosted Ghostfolio instance, version **2.248.0 or newer**
 - An Interactive Brokers account with Flex Web Service enabled
 - Docker (for containerised runs) or Python 3.10+ with `requests` and `pyyaml`
+
+The tool reads existing activities via `GET /api/v1/activities`, which landed in Ghostfolio 2.248.0. The `/api/v1/order` endpoints it replaced were deprecated in that same release and removed in 3.5.0, so on Ghostfolio 3.x this is the only endpoint that works.
 
 ## IBKR Setup
 
@@ -350,7 +352,18 @@ An imported symbol is not recognised by Yahoo Finance. Check the unmapped ISINs 
 
 ### Import fails but activities were expected
 
-The tool logs the error and continues to update the cash balance rather than crashing. Fix the failing symbol in your mapping file and re-run - duplicate detection will skip already-imported activities.
+The tool logs the error and continues - it still updates the cash balance and still processes the remaining accounts rather than crashing - but the run **exits 1** so your scheduler flags it. Fix the failing symbol in your mapping file and re-run; duplicate detection will skip already-imported activities.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Every account synced cleanly |
+| 1 | Missing or inconsistent configuration, the initial activities fetch failed, at least one account failed, or an unhandled error occurred |
+
+A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, and a failed cash balance update.
+
+Unmapped ISINs are **not** a failure - they are reported at the end of the run as a prompt to update your mapping file, and the run still exits 0. Activities that Ghostfolio itself detects as duplicates are not a failure either; it skips them and returns 200, and the tool logs the accepted count when it is lower than the number sent.
 
 ### Portfolio values are wrong after sync
 
