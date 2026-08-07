@@ -323,7 +323,20 @@ def ghost_import_activities(config, activities):
 
 
 def ghost_update_cash_balance(config, account_id, balance):
-    """Update the cash balance on a Ghostfolio account.  Returns True on success."""
+    """Update the cash balance on a Ghostfolio account.  Returns True on success.
+
+    The GET response carries far more than the update DTO accepts (aggregations,
+    relations, timestamps).  Ghostfolio 3.x validates bodies with
+    forbidNonWhitelisted, so echoing it back is a hard 400.  The payload is
+    therefore built explicitly from the five fields UpdateAccountDto requires:
+    balance, currency, id, name and platformId (nullable).
+
+    comment, tags and isExcluded are optional in the DTO and deliberately left
+    out - Prisma does not touch a column that is absent from the update, so
+    omitting them preserves the stored values.  For isExcluded that also keeps
+    the payload portable: it was a deprecated DTO field up to Ghostfolio 3.38.0
+    and removed in 3.39.0, so sending it fails outright on newer instances.
+    """
     url = f"{config['ghost_host']}/api/v1/account/{account_id}"
     resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=30)
     resp.raise_for_status()
@@ -333,7 +346,6 @@ def ghost_update_cash_balance(config, account_id, balance):
         "balance": balance,
         "currency": account_data["currency"],
         "id": account_id,
-        "isExcluded": account_data.get("isExcluded", False),
         "name": account_data["name"],
         "platformId": account_data.get("platformId") or config.get("ghost_platform_id") or None,
     }
