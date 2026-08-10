@@ -40,6 +40,8 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 | A | Corporate actions importées comme trades normaux | Ouvert |
 | G | Comment `IBKR#` absent quand Yahoo canonicalise le symbole → re-duplication | Ouvert |
 | B,C,D,E,F | Commission abs, sys.exit, SSRF, GBX, DRY_RUN | ✅ mergés (#6–#22) |
+| — | Permissions mapping.yaml + error logging | ✅ mergé (#23) |
+| — | Upstream merge Ghostfolio 3.x (pagination, isExcluded, exit codes) | ✅ mergé (#24) |
 
 ## Gotchas ops
 
@@ -50,4 +52,6 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 
 - Fork : https://github.com/flowcool/ghostfolio-ibkr-sync
 - Upstream : https://github.com/obol89/ghostfolio-ibkr-sync
-- API : `GET /api/v1/activities`, `POST /api/v1/import`, `GET /api/v1/account/{id}`
+- API : `GET /api/v1/activities` (paginated, skip/take), `POST /api/v1/import`, `GET/PUT /api/v1/account/{id}`
+- Ghostfolio minimum version: 2.248.0 (activities endpoint); `/api/v1/order` removed in 3.5.0
+- Upstream remote: `upstream` → https://github.com/obol89/ghostfolio-ibkr-sync (HTTPS, added this session)
