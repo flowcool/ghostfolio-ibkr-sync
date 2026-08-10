@@ -1,4 +1,5 @@
 {
+  "outputStyle": "dev",
   "permissions": {
     "allow": [
       "Bash(python ibkr_to_ghostfolio.py*)",
