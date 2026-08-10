@@ -859,7 +859,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
             for activity in activities:
                 comment = activity["comment"]
                 if comment.startswith("IBKR#"):
-                    existing_trade_ids.add(comment.split("#", 1)[1])
+                    tid = comment.split("#", 1)[1]
+                    if tid:
+                        existing_trade_ids.add(tid)
                 elif comment.startswith("dividend#"):
                     existing_dividend_comments.add(comment)
         else:
