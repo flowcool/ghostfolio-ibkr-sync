@@ -1,0 +1,50 @@
+# Byte-compiled / optimised files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test, coverage and type-checker caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Run logs
+*.log
+
+# Symbol mapping - lists your own holdings by ISIN, so mount it rather than commit it
+mapping.yaml
+!mapping.example.yaml
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local overrides (a shared .claude/settings.json stays tracked)
+.claude/settings.local.json
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
