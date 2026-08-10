@@ -27,8 +27,6 @@ RUN addgroup --system appuser \
     && adduser --system --no-create-home --gecos "" --ingroup appuser appuser \
     && chown -R appuser:appuser /app
 
-VOLUME ["/app/mapping.yaml"]
-
 USER appuser
 
 ENTRYPOINT ["/app/entrypoint.sh"]

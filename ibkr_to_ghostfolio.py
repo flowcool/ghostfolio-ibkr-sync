@@ -865,4 +865,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        log.error("Fatal error", exc_info=True)
+        sys.exit(2)
