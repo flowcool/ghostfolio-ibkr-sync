@@ -5,6 +5,10 @@ on:
     branches:
       - main
       - staging
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+      - "LICENSE"
     tags:
       - "v*"
   workflow_dispatch:
