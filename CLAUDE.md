@@ -47,6 +47,11 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 
 - `mapping.yaml` bind-mount fichier → `docker restart` pour relire après édition hôte
 - Collision de ticker : mapper par ISIN (ex. IBKR `TAL`=PetroTal, pas TAL Education)
+- Dedup : `comment='IBKR#<tradeID>'` obligatoire, sinon re-duplication au re-run (finding G)
+- GBp/pence : Yahoo cote `.L` en pence (GBp), IBKR reporte en GBP → mismatch ×100 (`gbx_pence_conversion()`, #17)
+- PEA devise locale : achat saisi en EUR alors que devise locale → mismatch ≈ taux de change ; convertir `unitPrice` en devise locale
+- **Split action/ETF NON géré auto** : transactions restent pré-split, Yahoo renvoie post-split → valo absurde. Corriger : transactions (`quantity*ratio`, `unitPrice/ratio`) + MarketData (close brut non ajusté → `UPDATE "MarketData" SET marketPrice=marketPrice/ratio WHERE date < split`). ⚠️ un re-gather Yahoo peut ré-écraser l'historique pré-split en non-ajusté
+- Classification place Yahoo : `.SG`=SICAV, `.PA`=ETF ; `MarketData` keyée par string symbol → purger les orphelines après renommage
 
 ## Références
 
