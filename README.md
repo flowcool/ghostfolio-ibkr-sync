@@ -131,17 +131,25 @@ Do not use "Select All" for the Trades section. IBKR adds new fields over time t
 - TradeMoney
 - TradePrice
 
-**Change in Dividend Accruals (Detail):**
+**Cash Transactions:**
+
+In the section options, tick only these types: **Dividends**, **Payment In Lieu Of Dividends**, **Withholding Tax**, and the **Detail** level of detail. Then select these fields:
+
 - ClientAccountID
 - CurrencyPrimary
+- AssetClass
 - Symbol
+- Description
 - ISIN
 - FIGI
-- Date
-- Quantity
-- Fee
-- GrossRate
-- Code
+- Date/Time
+- Amount
+- Type
+- LevelOfDetail (if listed)
+
+Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so accruals produce phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. The **Change in Dividend Accruals** section is no longer used and can be removed from the query.
+
+> **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or by any dividend of the same symbol in the same account within 3 days, so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
 
 5. Under **General Configuration**, set **Include Currency Rates** to **No**
 
@@ -290,6 +298,7 @@ If the fallback ticker is wrong for Yahoo Finance, add the ISIN to your mapping 
 - **Sells you already entered by hand** - an IBKR sell is treated as already recorded when Ghostfolio has a manual sell (no `IBKR#` comment) of the same quantity within ±2 days, under any symbol sharing the ISIN. Several IBKR fills of one day are also matched against a single manual entry by their sum. When a manual sell is nearby but the quantity does not match, the sell is not imported and a warning asks you to check by hand.
 - **Positions held under another symbol** - if Ghostfolio holds the security under a different symbol with the same ISIN (for example a manual entry on another listing), the sell is not imported and a warning gives the mapping line that fixes it.
 - **Dividends for positions closed before the window** - dividends are skipped for symbols whose trades in the 365-day window are only closes, or net negative, matched by both symbol name and ISIN to handle IBKR symbol variants.
+- **Dividend reversals and orphan tax corrections** - dividend and withholding rows of the same security and day are summed; a net zero (reversed payment) is skipped, and a withholding tax row without a dividend that day is not imported and logged as a `WARNING` to check by hand.
 - **Duplicate activities** - the tool checks existing Ghostfolio activities before importing and skips anything already present.
 
 ### Log levels
@@ -300,7 +309,7 @@ A normal run emits only `INFO` lines. `WARNING` means *check this*, `ERROR` mean
 |---|---|
 | `DEBUG` | FX/options skipped, window-only diagnostics, each sell not imported because already reconciled |
 | `INFO` | Sells imported for long-held positions; one summary line of sells not imported (already entered manually, or no Ghostfolio position) |
-| `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell nearby with another quantity; network retry |
+| `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell nearby with another quantity; withholding tax without a dividend the same day; network retry |
 | `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; run aborted before any write (see [Run stops before importing anything](#run-stops-before-importing-anything)) |
 
 ## Running
@@ -394,6 +403,10 @@ In Portainer, paste this as a stack definition and deploy it directly. Make sure
 ### "positionActionID" or unknown field errors on import
 
 You used "Select All" for the Trades section in your Flex Query. IBKR adds new fields periodically and some of them confuse the parser. Delete the query and recreate it, selecting only the individual fields listed in the setup section.
+
+### "has no Cash Transactions section: dividends not synced"
+
+The Flex Query does not include the Cash Transactions section. Add it as described in [Create a Flex Query](#2-create-a-flex-query); trades still sync meanwhile, but the run exits 1.
 
 ### "Unknown currency RUS" or similar invalid currency codes
 

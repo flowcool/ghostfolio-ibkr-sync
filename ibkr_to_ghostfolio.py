@@ -3,6 +3,7 @@
 
 import logging
 import os
+import re
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -41,6 +42,14 @@ IBKR_ALLOWED_STMT_PREFIXES = (
     "https://ndcdyn.interactivebrokers.com/",
     "https://gdcdyn.interactivebrokers.com/",
 )
+
+# Cash Transactions types that carry a dividend payment or its withholding tax
+DIVIDEND_CASH_TYPES = ("Dividends", "Payment In Lieu Of Dividends")
+WITHHOLDING_CASH_TYPE = "Withholding Tax"
+
+# An existing Ghostfolio dividend of the same account and symbol within this
+# many days counts as the same payment (manual entries, older comment formats)
+DIVIDEND_MATCH_DAYS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -238,20 +247,49 @@ def parse_cash_report(xml_text):
     return None
 
 
-def parse_dividends(xml_text):
-    """Parse ChangeInDividendAccrual elements from the Flex Query XML.
+def parse_cash_dividends(xml_text):
+    """Parse dividend payments from the Cash Transactions section.
 
-    Structure: FlexQueryResponse > FlexStatements > FlexStatement > ChangeInDividendAccruals > ChangeInDividendAccrual
-    Only returns entries where the code attribute contains "Re" (realized).
-    Entries with code "Pr" (pending/reversal) are skipped.
+    Structure: FlexQueryResponse > FlexStatements > FlexStatement > CashTransactions > CashTransaction
+    Dividend accruals are not used: IBKR marks corrections, cancellations and
+    payouts alike with code "Re", so an accrual cannot tell a payment apart.
+
+    Rows are summed per (ISIN or symbol, date): dividends and payments in lieu
+    into "amount", withholding tax (negative, refunds positive) into "tax".
+    Returns None if the report has no Cash Transactions section, else a list
+    of dicts with isin, symbol, currency, date, amount, tax, description.
     """
     root = ET.fromstring(xml_text)
-    dividends = []
-    for el in root.iter("ChangeInDividendAccrual"):
-        code = el.attrib.get("code", "")
-        if "Re" in code:
-            dividends.append(dict(el.attrib))
-    return dividends
+    if next(root.iter("CashTransactions"), None) is None:
+        return None
+    groups = {}
+    for el in root.iter("CashTransaction"):
+        row = el.attrib
+        tx_type = row.get("type", "")
+        if tx_type not in DIVIDEND_CASH_TYPES and tx_type != WITHHOLDING_CASH_TYPE:
+            continue
+        # SUMMARY rows repeat the DETAIL rows when both levels are selected
+        if row.get("levelOfDetail", "DETAIL").upper() != "DETAIL":
+            continue
+        amount = _parse_float(row.get("amount"))
+        date_iso = parse_ibkr_datetime(row.get("dateTime", ""))
+        if amount is None or not date_iso:
+            log.warning("Skipping cash transaction %s for %s: invalid amount or date",
+                        tx_type, row.get("symbol", ""))
+            continue
+        key = (row.get("isin") or row.get("symbol", ""), date_iso[:10])
+        group = groups.setdefault(key, {
+            "isin": row.get("isin", ""), "symbol": row.get("symbol", ""),
+            "currency": row.get("currency", ""), "date": date_iso[:10],
+            "amount": 0.0, "tax": 0.0, "description": ""})
+        if tx_type == WITHHOLDING_CASH_TYPE:
+            group["tax"] += amount
+        else:
+            group["amount"] += amount
+            # the last payment row carries the current rate after a correction
+            if amount > 0:
+                group["description"] = row.get("description", "")
+    return list(groups.values())
 
 
 # ---------------------------------------------------------------------------
@@ -302,14 +340,16 @@ def ghost_get_existing_orders(config):
     - positions: {"qty": net BUY-SELL qty by (accountId, symbol),
                   "isin_symbols": symbols seen by (accountId, isin),
                   "manual_sells": [[date, qty], ...] by (accountId, symbol) for
-                                  SELLs without an IBKR# comment}
+                                  SELLs without an IBKR# comment,
+                  "dividend_dates": [date, ...] by (accountId, symbol) for
+                                    every DIVIDEND}
     """
     url = f"{config['ghost_host']}/api/v1/activities"
     headers = ghost_headers(config["ghost_token"])
     trade_ids = set()
     dividend_comments = set()
     positions = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
-                 "manual_sells": defaultdict(list)}
+                 "manual_sells": defaultdict(list), "dividend_dates": defaultdict(list)}
 
     # One request without skip/take: Ghostfolio has no take cap (default
     # MAX_SAFE_INTEGER), so one call returns one consistent list, with no
@@ -343,6 +383,12 @@ def ghost_get_existing_orders(config):
                 trade_ids.add(tid)
         elif comment.startswith("dividend#"):
             dividend_comments.add(comment)
+
+        if order.get("type") == "DIVIDEND":
+            symbol = (order.get("SymbolProfile") or {}).get("symbol")
+            if symbol:
+                positions["dividend_dates"][(order.get("accountId") or "", symbol)].append(
+                    (order.get("date") or "")[:10])
 
         if order.get("type") in ("BUY", "SELL"):
             qty = _parse_float(order.get("quantity")) or 0.0
@@ -581,18 +627,25 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
 
 
 def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
-    """Convert an IBKR dividend accrual dict to a Ghostfolio DIVIDEND activity.
+    """Convert a parse_cash_dividends() entry to a Ghostfolio DIVIDEND activity.
 
     Returns None if the dividend cannot be processed.
     Adds unmapped ISINs to the unmapped dict.
     """
-    isin = dividend.get("isin", "")
-    ibkr_symbol = dividend.get("symbol", "")
-    currency = dividend.get("currency", "")
-    date_str = dividend.get("date", "")
-    quantity = dividend.get("quantity", "0")
-    gross_rate = dividend.get("grossRate", "0")
-    fee = dividend.get("fee", "0")
+    isin = dividend["isin"]
+    ibkr_symbol = dividend["symbol"]
+    currency = dividend["currency"]
+    amount = dividend["amount"]
+
+    if amount <= 0:
+        if dividend["tax"]:
+            log.warning("Dividend %s %s: withholding tax %.4g %s without a dividend on the "
+                        "same day (tax correction?) — not imported, check by hand",
+                        ibkr_symbol, dividend["date"], dividend["tax"], currency)
+        else:
+            log.debug("Dividend %s %s: net amount %.4g (reversal), skipped",
+                      ibkr_symbol, dividend["date"], amount)
+        return None
 
     symbol = resolve_symbol(isin, ibkr_symbol, mapping)
     if isin and isin in mapping:
@@ -606,30 +659,26 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         log.warning("No symbol resolved for dividend (ISIN: %s), skipping", isin)
         return None
 
-    qty = _parse_float(quantity)
-    if qty is None:
-        log.warning("Invalid quantity '%s' for dividend %s", quantity, ibkr_symbol)
-        return None
-    qty = abs(qty)
+    # IBKR reports withholding as a negative amount; a net refund is not a fee
+    wht = max(0.0, -dividend["tax"])
+    if dividend["tax"] > 0:
+        log.warning("Dividend %s %s: net withholding refund %.4g %s — recorded as 0",
+                    ibkr_symbol, dividend["date"], dividend["tax"], currency)
 
-    unit_price = _parse_float(gross_rate)
-    if unit_price is None:
-        log.warning("Invalid grossRate '%s' for dividend %s", gross_rate, ibkr_symbol)
-        return None
-    unit_price = abs(unit_price)
-
-    try:
-        raw_fee = float(fee)
-        if raw_fee > 0:
-            log.warning("Dividend %s: positive fee %.4g (unexpected) — clamped to 0", ibkr_symbol, raw_fee)
-        # WHT is reported as a negative value by IBKR (outflow); clamp same as trade commission.
-        wht = max(0.0, -raw_fee)
-    except ValueError:
-        log.warning("Invalid dividend fee '%s' for %s, defaulting withholding tax to 0", fee, ibkr_symbol)
-        wht = 0.0
+    # Quantity and rate from the description ("... USD 0.25 PER SHARE ..."),
+    # else book the whole amount as one unit
+    match = re.search(r"\b[A-Z]{3}\s+([0-9]+(?:\.[0-9]+)?)\s+PER SHARE", dividend["description"])
+    rate = _parse_float(match.group(1)) if match else None
+    qty = amount / rate if rate else 1.0
+    # amount is rounded to cents: snap to whole shares when within 1 %, and
+    # derive the price from the amount so quantity x price equals the payment
+    if round(qty) >= 1 and abs(qty - round(qty)) / round(qty) < 0.01:
+        qty = float(round(qty))
+    qty = round(qty, 6)
+    unit_price = amount / qty
 
     # Minor-unit markets (.L GBp, .JO ZAc, .TA ILA): IBKR reports the major
-    # unit, YAHOO quotes the sub-cent unit. Scale grossRate AND withholding tax
+    # unit, YAHOO quotes the sub-cent unit. Scale rate AND withholding tax
     # (single shared activity currency) so the WHT is not read as sub-cents.
     minor_currency, minor_factor = minor_unit_conversion(symbol, currency)
     if minor_factor != 1:
@@ -638,24 +687,17 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     unit_price *= minor_factor
     wht *= minor_factor
 
-    iso_date = parse_ibkr_datetime(date_str)
-    if not iso_date:
-        log.warning("Could not parse date '%s' for dividend %s", date_str, ibkr_symbol)
-        return None
-
-    # Use date portion only for the comment key (YYYY-MM-DD).
     # Key uses ISIN (stable) rather than the resolved Yahoo symbol (changes with mapping updates).
     # Fallback to the raw IBKR symbol only when ISIN is absent.
-    date_key = iso_date[:10]
     dedup_id = isin if isin else ibkr_symbol
-    comment = f"dividend#{dedup_id}#{date_key}"
+    comment = f"dividend#{dedup_id}#{dividend['date']}"
 
     return {
         "accountId": ghost_account_id,
         "comment": comment,
         "currency": currency,
         "dataSource": "YAHOO",
-        "date": iso_date,
+        "date": f"{dividend['date']}T00:00:00+00:00",
         "fee": wht,
         "quantity": qty,
         "symbol": symbol,
@@ -955,6 +997,19 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 
+def _dividend_date_matches(positions, activity):
+    """True if Ghostfolio already has a dividend of the same account and symbol
+    within DIVIDEND_MATCH_DAYS of the activity date (any comment, or none)."""
+    date = datetime.strptime(activity["date"][:10], "%Y-%m-%d")
+    for existing in positions["dividend_dates"].get((activity["accountId"], activity["symbol"]), []):
+        try:
+            if abs((datetime.strptime(existing, "%Y-%m-%d") - date).days) <= DIVIDEND_MATCH_DAYS:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
                     existing_trade_ids, existing_dividend_comments, positions):
     """Process a single IBKR account: fetch, parse, and sync to Ghostfolio.
@@ -985,8 +1040,14 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     # Parse trades and dividends
     trades = parse_trades(xml_text)
-    dividends = parse_dividends(xml_text)
-    log.debug("Found %d trades and %d dividend entries in Flex Query report",
+    dividends = parse_cash_dividends(xml_text)
+    if dividends is None:
+        log.error("Flex Query %s has no Cash Transactions section: dividends not synced. "
+                  "Add Cash Transactions (Dividends, Payment In Lieu Of Dividends, "
+                  "Withholding Tax) to the query, see README", query_id)
+        ok = False
+        dividends = []
+    log.debug("Found %d trades and %d dividend payments in Flex Query report",
               len(trades), len(dividends))
 
     # CASH (FX conversions) and OPT are never imported; drop them before any gate
@@ -1049,7 +1110,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
         if activity:
             date_part = activity["comment"].rsplit("#", 1)[-1]
             old_comment = f"dividend#{activity['symbol']}#{date_part}"
-            if activity["comment"] in existing_dividend_comments or old_comment in existing_dividend_comments:
+            if (activity["comment"] in existing_dividend_comments
+                    or old_comment in existing_dividend_comments
+                    or _dividend_date_matches(positions, activity)):
                 div_skipped_dup += 1
             else:
                 div_activities.append(activity)
@@ -1073,6 +1136,8 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
                     positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
                 elif comment.startswith("dividend#"):
                     existing_dividend_comments.add(comment)
+                    positions["dividend_dates"][(activity["accountId"], activity["symbol"])].append(
+                        activity["date"][:10])
         else:
             ok = False
 
