@@ -239,7 +239,7 @@ All configuration is done via environment variables:
 | `GHOST_CURRENCY` | No | Default currency (default: `USD`) | `EUR` |
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count) | `IBKR Individual` |
-| `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`) | `/app/mapping.yaml` |
+| `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
 | `CRON` | No | Cron schedule for recurring runs (Docker only) | `0 6 * * *` |
 | `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
@@ -408,6 +408,10 @@ You used "Select All" for the Trades section in your Flex Query. IBKR adds new f
 
 The Flex Query does not include the Cash Transactions section. Add it as described in [Create a Flex Query](#2-create-a-flex-query); trades still sync meanwhile, but the run exits 1.
 
+### "Mapping file ... not found"
+
+The mapping file is missing at the configured path (or at the default `mapping.yaml` in the working directory, `/app` in the image). The run stops before contacting IBKR or Ghostfolio, because raw IBKR symbols can book trades on the wrong security (ticker collisions). Check the volume mount (`./mapping.yaml:/app/mapping.yaml`); if the host file did not exist when the container was created, Docker created a directory at `/app/mapping.yaml` instead: create the file on the host and recreate the container. Or set `MAPPING_FILE=""` to run without mappings on purpose. Invalid YAML, or a `symbol_mapping` that is not `ISIN: TICKER` pairs, also stops the run.
+
 ### "Unknown currency RUS" or similar invalid currency codes
 
 You have **Include Currency Rates** enabled in your Flex Query's General Configuration. Set it to **No** and re-run.
@@ -436,7 +440,7 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 | Code | Meaning |
 | --- | --- |
 | 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration, the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
+| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, and a failed cash balance update.
 
