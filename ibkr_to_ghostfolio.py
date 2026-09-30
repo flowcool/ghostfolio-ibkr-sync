@@ -330,8 +330,9 @@ def ghost_get_existing_orders(config):
     if any(a.get("quantity") is None for a in activities):
         raise RuntimeError(
             "Ghostfolio redacted activity values (quantity/comment are null): "
-            "disable restricted view for the GHOST_TOKEN user; refusing to sync "
-            "without existing IBKR# IDs (duplicates risk)")
+            "disable restricted view for the GHOST_TOKEN user, or use a token "
+            "with the portfolio:read:values scope; refusing to sync without "
+            "existing IBKR# IDs (duplicates risk)")
 
     for order in activities:
         # comment is nullable in Ghostfolio, so JSON null arrives as None
