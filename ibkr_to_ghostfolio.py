@@ -19,6 +19,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
+# urllib3 logs full request lines (incl. the IBKR token query param) at DEBUG.
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 IBKR_SEND_URL = (
     "https://ndcdyn.interactivebrokers.com/AccountManagement"
