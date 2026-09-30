@@ -324,6 +324,15 @@ def ghost_get_existing_orders(config):
         raise RuntimeError(
             f"Ghostfolio returned {len(activities)} activities but reports count={total}; "
             "refusing to sync on an incomplete list (duplicates risk)")
+    # quantity is a required field; Ghostfolio returns it as null only when it
+    # redacts the response (user restricted view, or a token without the
+    # portfolioReadValues scope), which also nulls the IBKR# comments
+    if any(a.get("quantity") is None for a in activities):
+        raise RuntimeError(
+            "Ghostfolio redacted activity values (quantity/comment are null): "
+            "disable restricted view for the GHOST_TOKEN user, or use a token "
+            "with the portfolio:read:values scope; refusing to sync without "
+            "existing IBKR# IDs (duplicates risk)")
 
     for order in activities:
         # comment is nullable in Ghostfolio, so JSON null arrives as None
