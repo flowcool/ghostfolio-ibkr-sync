@@ -24,6 +24,17 @@ ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 
 Multi-arch image (linux/amd64 and linux/arm64). New images are published automatically on every push to main.
 
+Tagged releases (see [Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)) are also published as `:X.Y.Z` and `:X.Y` — pin one of those if you want controlled upgrades and an easy rollback. `:latest` always follows main.
+
+The running version is logged at container start and at the beginning of every sync:
+
+```
+ghostfolio-ibkr-sync version v1.2.0
+2026-10-01 06:05:00 [INFO] Starting IBKR to Ghostfolio sync (version v1.2.0)
+```
+
+`:latest` reports `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
+
 ## Prerequisites
 
 - A running self-hosted Ghostfolio instance, version **2.248.0 or newer**
@@ -56,9 +67,9 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
    > The sync script relies on the 365-day window to match opening and closing trades.
    > A shorter period causes two classes of silent failures:
    >
-   > - **Missing sells**: a sell trade within the period whose matching buy is outside the
-   >   window will be skipped without error (the script sees only a closing trade with no
-   >   corresponding open and drops it to avoid creating phantom short positions).
+   > - **Missing trades**: trades older than the period are never seen, and a sell whose
+   >   buy is outside the window is imported only if Ghostfolio already holds that buy
+   >   (see [What the tool skips automatically](#what-the-tool-skips-automatically)).
    > - **Silent re-imports on period change**: if you later switch to 365 days, all trades
    >   from the gap period will look new to the dedup system — creating duplicates for any
    >   trades you had previously entered manually or synced under a different period.
@@ -261,25 +272,34 @@ European ETFs and stocks require mapping because Yahoo Finance uses exchange suf
 
 ### Unmapped ISINs
 
-When the script encounters an ISIN not in the mapping file, it falls back to the IBKR symbol. At the end of each run, it prints all unmapped ISINs in a format you can copy-paste directly into your mapping file:
+When the script encounters an ISIN not in the mapping file, it falls back to the IBKR symbol and **still imports the activity**. At the end of the run it logs one self-contained warning per ISIN:
 
 ```
-Unmapped ISINs found. Add to your mapping file under symbol_mapping:
-
-  DE0002635307: ???  # IBKR symbol: EXSA, description: ISHARES STOXX EU 600
-  IE00B52MJD48: ???  # IBKR symbol: EIMI, description: ISHARES MSCI EM IMI
+[WARNING] Unmapped ISIN JP3637000005 (TRINITY INDUSTRIAL CORP) uses IBKR symbol '6382.T' as ticker (fallback) — verify in Ghostfolio or add to mapping symbol_mapping: 'JP3637000005: <yahoo ticker>'
 ```
 
-Replace `???` with the correct Yahoo Finance ticker.
+If the fallback ticker is wrong for Yahoo Finance, add the ISIN to your mapping file with the correct ticker. Trades are reported only on the run that imports them; dividends on the fallback are reported on every run.
 
 ## What the tool skips automatically
 
 - **FX conversion trades** - trades with assetCategory `CASH` are currency conversions, not investment positions
 - **Options trades** - trades with assetCategory `OPT` are skipped (Ghostfolio does not support options)
-- **Orphaned closing trades** - if a symbol has only sell/close trades in the 365-day window with no corresponding buys, all trades for that symbol are skipped. This means the original buy predates the query period and importing the sell would create a phantom short position.
-- **Net negative positions** - if the net quantity across all trades for a symbol is negative (more sold than bought in the window), all trades for that symbol are skipped for the same reason. This catches cases where IBKR uses different symbol variants for the same ISIN.
-- **Dividends for filtered symbols** - if trades for a symbol are skipped for either of the above reasons, dividend entries for that symbol are also skipped, matched by both symbol name and ISIN to handle IBKR symbol variants.
+- **Sells that would make a position negative** - the Flex Query only covers 365 days, so a sell of a position bought earlier arrives without its buy. For each security (per Ghostfolio account, by the ticker it will be imported under), the tool adds the quantity Ghostfolio already holds to the net quantity of IBKR trades not yet imported. If the result is zero or more, the trades are imported — so selling a long-held position just works. If it would go negative, nothing is imported for that security.
+- **Sells you already entered by hand** - an IBKR sell is treated as already recorded when Ghostfolio has a manual sell (no `IBKR#` comment) of the same quantity within ±2 days, under any symbol sharing the ISIN. Several IBKR fills of one day are also matched against a single manual entry by their sum. When a manual sell is nearby but the quantity does not match, the sell is not imported and a warning asks you to check by hand.
+- **Positions held under another symbol** - if Ghostfolio holds the security under a different symbol with the same ISIN (for example a manual entry on another listing), the sell is not imported and a warning gives the mapping line that fixes it.
+- **Dividends for positions closed before the window** - dividends are skipped for symbols whose trades in the 365-day window are only closes, or net negative, matched by both symbol name and ISIN to handle IBKR symbol variants.
 - **Duplicate activities** - the tool checks existing Ghostfolio activities before importing and skips anything already present.
+
+### Log levels
+
+A normal run emits only `INFO` lines. `WARNING` means *check this*, `ERROR` means *data is not in sync and needs action*:
+
+| Level | Meaning |
+|---|---|
+| `DEBUG` | FX/options skipped, window-only diagnostics, each sell not imported because already reconciled |
+| `INFO` | Sells imported for long-held positions; one summary line of sells not imported (already entered manually, or no Ghostfolio position) |
+| `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell nearby with another quantity; network retry |
+| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures |
 
 ## Running
 
@@ -406,7 +426,7 @@ Run **Gather All Data** in Ghostfolio **Admin** - **Market Data**. This fetches 
 
 ### Negative positions appearing in Ghostfolio
 
-This happens when a sell trade is imported without its corresponding buy. The tool filters these automatically using orphaned closing trade detection and net negative position detection. If you still see negative positions, they were likely imported before this filtering was in place - delete them manually in Ghostfolio.
+This happens when a sell trade is imported without its corresponding buy. The tool never imports trades that would take a Ghostfolio position below zero, and logs an `ERROR` naming the security when Ghostfolio holds less than IBKR sold. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
 
 ### IBKR symbol variants (for example CSNKYz vs CSNKY)
 
@@ -429,7 +449,7 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 ## Limitations
 
 - **No options support** - Ghostfolio does not support options as an asset class; options trades are skipped entirely
-- **365-day window** - IBKR Flex Query maximum period is 365 days. Positions opened before that window will not be imported. Fully closed positions older than 365 days are also not imported - this is expected behaviour, not a bug.
+- **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - both the IBKR Flex token and the Ghostfolio auth token expire and require manual renewal. Set a recurring calendar reminder for the IBKR token (up to 1 year).
