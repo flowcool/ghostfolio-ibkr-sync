@@ -106,14 +106,20 @@ def load_mapping(path):
             f"Mapping file {path} not found (set MAPPING_FILE=\"\" to run without mappings)")
     try:
         with open(path, "r") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError) as exc:
+            data = yaml.safe_load(fh)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         raise RuntimeError(f"Cannot read mapping file {path}: {exc}") from exc
+    if data is None:
+        data = {}
     if not isinstance(data, dict):
         raise RuntimeError(f"Mapping file {path}: top level must be a mapping with a symbol_mapping key")
     mapping = data.get("symbol_mapping") or {}
     if not isinstance(mapping, dict):
         raise RuntimeError(f"Mapping file {path}: symbol_mapping must be ISIN: TICKER pairs")
+    bad = [k for k, v in mapping.items() if not (isinstance(k, str) and isinstance(v, str) and v)]
+    if bad:
+        raise RuntimeError(f"Mapping file {path}: entries {bad[:5]} are not ISIN: \"TICKER\" strings "
+                           "(quote numeric tickers)")
     if not mapping:
         log.warning("Mapping file %s has no symbol_mapping entries", path)
     return mapping
