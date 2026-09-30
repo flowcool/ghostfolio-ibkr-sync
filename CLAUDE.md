@@ -71,3 +71,4 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 
 - Epic Beads : `infra-8tt` (ghostfolio) — enfants actifs via `bd list --status=open --metadata-field project=ghostfolio-ibkr-sync`
 - Findings ouverts : A = `infra-8tt.1`, G = `infra-cfa`
+- Revue de code 2026-09-30 : `bd list --label review-2026-09-30` (ordre porté par les dépendances Beads)
