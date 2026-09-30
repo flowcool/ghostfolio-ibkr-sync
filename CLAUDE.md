@@ -54,6 +54,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - `mapping.yaml` bind-mount fichier → `docker restart` pour relire après édition hôte
 - Collision de ticker : mapper par ISIN (ex. IBKR `TAL`=PetroTal, pas TAL Education)
 - Fenêtre Flex = 365j max (limite IBKR). Trade gate (`filter_trades_by_holdings`) : holding Ghostfolio (par compte, ticker résolu) + trades non importés ≥ 0 → import. Ventes saisies à la main reconnues (même qty ±2j, date la plus proche, fills sommés par jour) → pas de doublon. Position sous un autre symbole même ISIN → WARNING + ligne mapping. Dividendes : logique fenêtre inchangée
+- Dividendes : source = section Flex **Cash Transactions** (paiements réels + retenue), plus les accruals (`Re` = correction/annulation/paiement → fantômes, #33). Dedup dividende = `dividend#ISIN#date` ou dividende existant même compte+symbole ±3j
 - Dedup : `comment='IBKR#<tradeID>'` obligatoire, sinon re-duplication au re-run (finding G)
 - GBp/pence : Yahoo cote `.L` en pence (GBp), IBKR reporte en GBP → mismatch ×100 (`gbx_pence_conversion()`, #17)
 - PEA devise locale : achat saisi en EUR alors que devise locale → mismatch ≈ taux de change ; convertir `unitPrice` en devise locale
