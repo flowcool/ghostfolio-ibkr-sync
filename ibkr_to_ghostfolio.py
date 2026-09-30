@@ -1091,7 +1091,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
 def main():
     """Main entry point.  Returns a process exit code (0 = clean, 1 = failure)."""
-    log.info("Starting IBKR to Ghostfolio sync")
+    log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
 
     try:
         config = load_config()

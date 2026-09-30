@@ -14,6 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Set by CI from `git describe --tags --always`; logged at start
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 COPY ibkr_to_ghostfolio.py .
 
 COPY entrypoint.sh .
