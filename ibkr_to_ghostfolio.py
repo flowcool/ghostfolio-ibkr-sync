@@ -282,6 +282,10 @@ def parse_cash_dividends(xml_text):
             "isin": row.get("isin", ""), "symbol": row.get("symbol", ""),
             "currency": row.get("currency", ""), "date": date_iso[:10],
             "amount": 0.0, "tax": 0.0, "description": ""})
+        if row.get("currency", "") != group["currency"]:
+            log.warning("Dividend %s %s: rows in %s and %s summed as %s — check by hand",
+                        group["symbol"], group["date"], group["currency"],
+                        row.get("currency", ""), group["currency"])
         if tx_type == WITHHOLDING_CASH_TYPE:
             group["tax"] += amount
         else:
@@ -638,13 +642,15 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     amount = dividend["amount"]
 
     if amount <= 0:
-        if dividend["tax"]:
+        if amount < 0:
+            # a reversal dated apart from its payment: the original stays in Ghostfolio
+            log.warning("Dividend %s %s: reversal of %.4g %s without a payment on the "
+                        "same day — not imported, check the original dividend by hand",
+                        ibkr_symbol, dividend["date"], -amount, currency)
+        elif dividend["tax"]:
             log.warning("Dividend %s %s: withholding tax %.4g %s without a dividend on the "
                         "same day (tax correction?) — not imported, check by hand",
                         ibkr_symbol, dividend["date"], dividend["tax"], currency)
-        else:
-            log.debug("Dividend %s %s: net amount %.4g (reversal), skipped",
-                      ibkr_symbol, dividend["date"], amount)
         return None
 
     symbol = resolve_symbol(isin, ibkr_symbol, mapping)
@@ -674,7 +680,7 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     # derive the price from the amount so quantity x price equals the payment
     if round(qty) >= 1 and abs(qty - round(qty)) / round(qty) < 0.01:
         qty = float(round(qty))
-    qty = round(qty, 6)
+    qty = round(qty, 6) or 1.0
     unit_price = amount / qty
 
     # Minor-unit markets (.L GBp, .JO ZAc, .TA ILA): IBKR reports the major
@@ -998,16 +1004,17 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
 
 
 def _dividend_date_matches(positions, activity):
-    """True if Ghostfolio already has a dividend of the same account and symbol
-    within DIVIDEND_MATCH_DAYS of the activity date (any comment, or none)."""
+    """Return the date of a Ghostfolio dividend of the same account and symbol
+    within DIVIDEND_MATCH_DAYS of the activity date (any comment, or none),
+    else None."""
     date = datetime.strptime(activity["date"][:10], "%Y-%m-%d")
     for existing in positions["dividend_dates"].get((activity["accountId"], activity["symbol"]), []):
         try:
             if abs((datetime.strptime(existing, "%Y-%m-%d") - date).days) <= DIVIDEND_MATCH_DAYS:
-                return True
+                return existing
         except ValueError:
             continue
-    return False
+    return None
 
 
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
@@ -1111,8 +1118,14 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
             date_part = activity["comment"].rsplit("#", 1)[-1]
             old_comment = f"dividend#{activity['symbol']}#{date_part}"
             if (activity["comment"] in existing_dividend_comments
-                    or old_comment in existing_dividend_comments
-                    or _dividend_date_matches(positions, activity)):
+                    or old_comment in existing_dividend_comments):
+                div_skipped_dup += 1
+                continue
+            matched = _dividend_date_matches(positions, activity)
+            if matched:
+                log.info("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, "
+                         "treated as the same payment (not imported)",
+                         activity["symbol"], date_part, matched)
                 div_skipped_dup += 1
             else:
                 div_activities.append(activity)
