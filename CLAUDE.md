@@ -6,7 +6,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 
 | Fait | Valeur |
 |---|---|
-| Fichier principal | `ibkr_to_ghostfolio.py` (~1161 lignes) — mono-fichier par design |
+| Fichier principal | `ibkr_to_ghostfolio.py` (~1240 lignes) — mono-fichier par design |
 | Dépendances | `requests`, `pyyaml` — garder minimaliste |
 | Runtime | `python:3.12-slim` + supercronic, cron `5 6 * * *` |
 | Image | `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` |
@@ -47,6 +47,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 | — | Upstream merge Ghostfolio 3.x (pagination, isExcluded, exit codes) | ✅ mergé (#24) |
 | — | Token IBKR dans les logs (URL requests + urllib3 DEBUG), retry réseau | ✅ mergé (#25, v1.0.0) |
 | — | Ventes > 365j ignorées → gate sur holdings Ghostfolio, niveaux de log | ✅ mergé (#27, v1.1.0) |
+| — | Revue 2026-09-30 : lecture activités en 1 appel, garde restricted view, dividendes via Cash Transactions, mapping manquant fatal | ✅ mergé (#30–#34) |
 
 ## Gotchas ops
 
