@@ -8,6 +8,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
+from urllib.parse import quote, quote_plus
 
 import requests
 import yaml
@@ -109,14 +110,50 @@ def resolve_symbol(isin, ibkr_symbol, mapping):
 # IBKR Flex Query fetching
 # ---------------------------------------------------------------------------
 
+IBKR_NETWORK_RETRY_DELAYS = (10, 30)
+
+
+def _ibkr_get(url, params, timeout):
+    """GET an IBKR Flex endpoint with retry on transient network errors.
+
+    The token travels in the query string, so requests exception messages
+    embed it via the URL. Redact it before re-raising, and drop the exception
+    chain so no traceback can leak it either.
+    """
+    token = params.get("t", "")
+    delays = IBKR_NETWORK_RETRY_DELAYS
+    for attempt in range(len(delays) + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if attempt < len(delays):
+                log.warning("IBKR network error (attempt %d/%d), retrying in %ds: %s",
+                            attempt + 1, len(delays) + 1, delays[attempt],
+                            _redact(str(exc), token))
+                time.sleep(delays[attempt])
+                continue
+            msg = _redact(str(exc), token)
+        except requests.RequestException as exc:
+            msg = _redact(str(exc), token)
+        raise RuntimeError(f"IBKR request failed: {msg}") from None
+
+
+def _redact(text, secret):
+    if not secret:
+        return text
+    for form in {secret, quote_plus(secret), quote(secret, safe="")}:
+        text = text.replace(form, "***")
+    return text
+
+
 def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
     """Fetch a Flex Query report from IBKR (two-step process)."""
     log.debug("Requesting Flex Query %s from IBKR...", query_id)
 
     # Step 1 - send request
-    resp = requests.get(IBKR_SEND_URL, params={"t": token, "q": query_id, "v": "3"},
-                        timeout=30)
-    resp.raise_for_status()
+    resp = _ibkr_get(IBKR_SEND_URL, {"t": token, "q": query_id, "v": "3"}, timeout=30)
     root = ET.fromstring(resp.text)
 
     status = root.findtext("Status")
@@ -132,9 +169,7 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
 
     # Step 2 - poll for statement
     for attempt in range(1, max_retries + 1):
-        resp = requests.get(base_url, params={"q": ref_code, "t": token, "v": "3"},
-                            timeout=60)
-        resp.raise_for_status()
+        resp = _ibkr_get(base_url, {"q": ref_code, "t": token, "v": "3"}, timeout=60)
 
         root = ET.fromstring(resp.text)
         status = root.findtext("Status")
