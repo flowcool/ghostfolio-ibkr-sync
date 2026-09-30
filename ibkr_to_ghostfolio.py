@@ -312,8 +312,9 @@ def ghost_get_existing_orders(config):
                  "manual_sells": defaultdict(list)}
 
     # One request without skip/take: Ghostfolio has no take cap (default
-    # MAX_SAFE_INTEGER) and orders by date only, which is not unique, so
-    # skip/take paging can skip or repeat rows at a page boundary.
+    # MAX_SAFE_INTEGER), so one call returns one consistent list, with no
+    # offset drift if activities are added or deleted between pages.
+    # count comes from a separate query, so a mismatch fails closed.
     resp = requests.get(url, headers=headers, timeout=60)
     resp.raise_for_status()
     data = resp.json()
