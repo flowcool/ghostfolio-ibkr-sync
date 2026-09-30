@@ -42,9 +42,6 @@ IBKR_ALLOWED_STMT_PREFIXES = (
     "https://gdcdyn.interactivebrokers.com/",
 )
 
-# Page size for the paginated GET /api/v1/activities sweep
-GHOST_PAGE_SIZE = 1000
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -296,7 +293,7 @@ def ghost_find_account_id(config, account_name):
 def ghost_get_existing_orders(config):
     """Fetch all existing activities from Ghostfolio.
 
-    Uses GET /api/v1/activities with skip/take pagination.  The /api/v1/order
+    Uses one GET /api/v1/activities (no paging).  The /api/v1/order
     endpoints were deprecated in Ghostfolio 2.248.0 and removed in 3.5.0.
 
     Returns a tuple of (trade_ids, dividend_comments, positions):
@@ -314,50 +311,45 @@ def ghost_get_existing_orders(config):
     positions = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
                  "manual_sells": defaultdict(list)}
 
-    skip = 0
-    total = None
-    while True:
-        resp = requests.get(url, headers=headers,
-                            params={"skip": skip, "take": GHOST_PAGE_SIZE},
-                            timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        activities = data.get("activities", [])
-        if total is None:
-            total = data.get("count")
+    # One request without skip/take: Ghostfolio has no take cap (default
+    # MAX_SAFE_INTEGER) and orders by date only, which is not unique, so
+    # skip/take paging can skip or repeat rows at a page boundary.
+    resp = requests.get(url, headers=headers, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    activities = data.get("activities", [])
+    total = data.get("count")
+    if total != len(activities):
+        raise RuntimeError(
+            f"Ghostfolio returned {len(activities)} activities but reports count={total}; "
+            "refusing to sync on an incomplete list (duplicates risk)")
 
-        for order in activities:
-            # comment is nullable in Ghostfolio, so JSON null arrives as None
-            comment = order.get("comment") or ""
-            if comment.startswith("IBKR#"):
-                tid = comment.split("#", 1)[1]
-                if tid:
-                    trade_ids.add(tid)
-            elif comment.startswith("dividend#"):
-                dividend_comments.add(comment)
+    for order in activities:
+        # comment is nullable in Ghostfolio, so JSON null arrives as None
+        comment = order.get("comment") or ""
+        if comment.startswith("IBKR#"):
+            tid = comment.split("#", 1)[1]
+            if tid:
+                trade_ids.add(tid)
+        elif comment.startswith("dividend#"):
+            dividend_comments.add(comment)
 
-            if order.get("type") in ("BUY", "SELL"):
-                qty = _parse_float(order.get("quantity")) or 0.0
-                if order["type"] == "SELL":
-                    qty = -qty
-                account_id = order.get("accountId") or ""
-                profile = order.get("SymbolProfile") or {}
-                symbol = profile.get("symbol")
-                if symbol:
-                    positions["qty"][(account_id, symbol)] += qty
-                    if profile.get("isin"):
-                        positions["isin_symbols"][(account_id, profile["isin"])].add(symbol)
-                    if order["type"] == "SELL" and not comment.startswith("IBKR#"):
-                        positions["manual_sells"][(account_id, symbol)].append(
-                            [(order.get("date") or "")[:10], -qty])
+        if order.get("type") in ("BUY", "SELL"):
+            qty = _parse_float(order.get("quantity")) or 0.0
+            if order["type"] == "SELL":
+                qty = -qty
+            account_id = order.get("accountId") or ""
+            profile = order.get("SymbolProfile") or {}
+            symbol = profile.get("symbol")
+            if symbol:
+                positions["qty"][(account_id, symbol)] += qty
+                if profile.get("isin"):
+                    positions["isin_symbols"][(account_id, profile["isin"])].add(symbol)
+                if order["type"] == "SELL" and not comment.startswith("IBKR#"):
+                    positions["manual_sells"][(account_id, symbol)].append(
+                        [(order.get("date") or "")[:10], -qty])
 
-        skip += len(activities)
-        if len(activities) < GHOST_PAGE_SIZE:
-            break
-        if total is not None and skip >= total:
-            break
-
-    log.info("Scanned %d existing Ghostfolio activities", skip)
+    log.info("Scanned %d existing Ghostfolio activities", len(activities))
     return trade_ids, dividend_comments, positions
 
 
@@ -1116,7 +1108,7 @@ def main():
     # sets current as it imports
     try:
         existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
-    except requests.RequestException as exc:
+    except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
         return 1
     log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
