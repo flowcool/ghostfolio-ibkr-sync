@@ -577,7 +577,8 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     elif symbol:
         log.debug("Dividend %s: ISIN %s resolved via symbol fallback -> %s", ibkr_symbol, isin or "(none)", symbol)
         if isin:
-            unmapped[isin] = {"symbol": ibkr_symbol, "description": ""}
+            # setdefault: keep the description a trade for the same ISIN may have set
+            unmapped.setdefault(isin, {"symbol": ibkr_symbol, "description": ""})
     else:
         log.warning("No symbol resolved for dividend (ISIN: %s), skipping", isin)
         return None
@@ -962,16 +963,17 @@ def main():
         if not ok:
             failed_accounts.append(ibkr_id)
 
-    # Log unmapped ISINs summary
-    if all_unmapped:
-        log.warning("Unmapped ISINs (%d) — trades for these were skipped. Add to mapping file under symbol_mapping:",
-                    len(all_unmapped))
-        for isin, info in sorted(all_unmapped.items()):
-            symbol = info.get("symbol") or ""
-            desc = info.get("description") or ""
-            log.warning("%s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
-    else:
-        log.info("All ISINs resolved via mapping or symbol fallback")
+    # Log unmapped ISINs: one self-contained line per ISIN so each survives line-based log viewers.
+    # Trades are reported only on their import run (deduped before conversion);
+    # dividends are converted before dedup, so they repeat on every run.
+    for isin, info in sorted(all_unmapped.items()):
+        symbol = info.get("symbol") or ""
+        desc = info.get("description") or ""
+        log.warning("Unmapped ISIN %s (%s) uses IBKR symbol %r as ticker (fallback) — "
+                    "verify in Ghostfolio or add to mapping symbol_mapping: '%s: <yahoo ticker>'",
+                    isin, desc or "no description", symbol, isin)
+    if not all_unmapped:
+        log.info("No unmapped ISINs in this run")
 
     if failed_accounts:
         log.error("Sync completed with errors for %d of %d account(s): %s",
