@@ -66,3 +66,8 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - API : `GET /api/v1/activities` (paginated, skip/take), `POST /api/v1/import`, `GET/PUT /api/v1/account/{id}`
 - Ghostfolio minimum version: 2.248.0 (activities endpoint); `/api/v1/order` removed in 3.5.0
 - Upstream remote: `upstream` → https://github.com/obol89/ghostfolio-ibkr-sync (HTTPS, added this session)
+
+## Durable work state
+
+- Epic Beads : `infra-8tt` (ghostfolio) — enfants actifs via `bd list --status=open --metadata-field project=ghostfolio-ibkr-sync`
+- Findings ouverts : A = `infra-8tt.1`, G = `infra-cfa`
