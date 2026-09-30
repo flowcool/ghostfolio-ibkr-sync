@@ -6,7 +6,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 
 | Fait | Valeur |
 |---|---|
-| Fichier principal | `ibkr_to_ghostfolio.py` (~727 lignes) — mono-fichier par design |
+| Fichier principal | `ibkr_to_ghostfolio.py` (~1161 lignes) — mono-fichier par design |
 | Dépendances | `requests`, `pyyaml` — garder minimaliste |
 | Runtime | `python:3.12-slim` + supercronic, cron `5 6 * * *` |
 | Image | `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` |
@@ -32,6 +32,9 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - PRs : isolées par concern, merge commit uniquement (squash/rebase désactivés)
 - CI : push `main` → build amd64+arm64 → `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest`
 - push `staging` → tag `:staging`, tester manuellement avant merge
+- Release : après merge, `git tag -a vX.Y.Z <merge-sha>` + push + `gh release create vX.Y.Z --verify-tag --latest` → CI publie `:X.Y.Z` + `:X.Y`. `:latest` reste main-only (un tag d'un vieux commit ne doit pas l'écraser). NAS reste sur `:latest` (décision opérateur 2026-09-30)
+- Version : CI `git describe --tags --always` → build-arg `APP_VERSION` → loggée au démarrage (`:latest` affiche `vX.Y.Z-N-g<sha>`)
+- Test prod sans écriture : `ssh ugreen 'docker exec -i -e DRY_RUN=1 ghostfolio-ibkr-sync-individual python -' < ibkr_to_ghostfolio.py` (code de la branche, données réelles)
 
 ## Findings d'audit
 
@@ -42,11 +45,14 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 | B,C,D,E,F | Commission abs, sys.exit, SSRF, GBX, DRY_RUN | ✅ mergés (#6–#22) |
 | — | Permissions mapping.yaml + error logging | ✅ mergé (#23) |
 | — | Upstream merge Ghostfolio 3.x (pagination, isExcluded, exit codes) | ✅ mergé (#24) |
+| — | Token IBKR dans les logs (URL requests + urllib3 DEBUG), retry réseau | ✅ mergé (#25, v1.0.0) |
+| — | Ventes > 365j ignorées → gate sur holdings Ghostfolio, niveaux de log | ✅ mergé (#27, v1.1.0) |
 
 ## Gotchas ops
 
 - `mapping.yaml` bind-mount fichier → `docker restart` pour relire après édition hôte
 - Collision de ticker : mapper par ISIN (ex. IBKR `TAL`=PetroTal, pas TAL Education)
+- Fenêtre Flex = 365j max (limite IBKR). Trade gate (`filter_trades_by_holdings`) : holding Ghostfolio (par compte, ticker résolu) + trades non importés ≥ 0 → import. Ventes saisies à la main reconnues (même qty ±2j, date la plus proche, fills sommés par jour) → pas de doublon. Position sous un autre symbole même ISIN → WARNING + ligne mapping. Dividendes : logique fenêtre inchangée
 - Dedup : `comment='IBKR#<tradeID>'` obligatoire, sinon re-duplication au re-run (finding G)
 - GBp/pence : Yahoo cote `.L` en pence (GBp), IBKR reporte en GBP → mismatch ×100 (`gbx_pence_conversion()`, #17)
 - PEA devise locale : achat saisi en EUR alors que devise locale → mismatch ≈ taux de change ; convertir `unitPrice` en devise locale
