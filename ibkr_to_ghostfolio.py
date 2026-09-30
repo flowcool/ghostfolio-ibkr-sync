@@ -540,7 +540,8 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     elif symbol:
         log.debug("Dividend %s: ISIN %s resolved via symbol fallback -> %s", ibkr_symbol, isin or "(none)", symbol)
         if isin:
-            unmapped[isin] = {"symbol": ibkr_symbol, "description": ""}
+            # setdefault: keep the description a trade for the same ISIN may have set
+            unmapped.setdefault(isin, {"symbol": ibkr_symbol, "description": ""})
     else:
         log.warning("No symbol resolved for dividend (ISIN: %s), skipping", isin)
         return None
@@ -926,7 +927,8 @@ def main():
             failed_accounts.append(ibkr_id)
 
     # Log unmapped ISINs: one self-contained line per ISIN so each survives line-based log viewers.
-    # Trades are only reported on the run that imports them (later runs dedup first).
+    # Trades are reported only on their import run (deduped before conversion);
+    # dividends are converted before dedup, so they repeat on every run.
     for isin, info in sorted(all_unmapped.items()):
         symbol = info.get("symbol") or ""
         desc = info.get("description") or ""
@@ -934,7 +936,7 @@ def main():
                     "verify in Ghostfolio or add to mapping symbol_mapping: '%s: <yahoo ticker>'",
                     isin, desc or "no description", symbol, isin)
     if not all_unmapped:
-        log.info("All new activities resolved via mapping")
+        log.info("No unmapped ISINs in this run")
 
     if failed_accounts:
         log.error("Sync completed with errors for %d of %d account(s): %s",
