@@ -299,14 +299,17 @@ def ghost_get_existing_orders(config):
     Uses GET /api/v1/activities with skip/take pagination.  The /api/v1/order
     endpoints were deprecated in Ghostfolio 2.248.0 and removed in 3.5.0.
 
-    Returns a tuple of (trade_ids, dividend_comments):
+    Returns a tuple of (trade_ids, dividend_comments, holdings):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
     - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"
+    - holdings: net BUY-SELL quantity keyed by (accountId, symbol) and
+      (accountId, "isin:" + isin), manual entries included
     """
     url = f"{config['ghost_host']}/api/v1/activities"
     headers = ghost_headers(config["ghost_token"])
     trade_ids = set()
     dividend_comments = set()
+    holdings = defaultdict(float)
 
     skip = 0
     total = None
@@ -330,6 +333,17 @@ def ghost_get_existing_orders(config):
             elif comment.startswith("dividend#"):
                 dividend_comments.add(comment)
 
+            if order.get("type") in ("BUY", "SELL"):
+                qty = _parse_float(order.get("quantity")) or 0.0
+                if order["type"] == "SELL":
+                    qty = -qty
+                account_id = order.get("accountId") or ""
+                profile = order.get("SymbolProfile") or {}
+                if profile.get("symbol"):
+                    holdings[(account_id, profile["symbol"])] += qty
+                if profile.get("isin"):
+                    holdings[(account_id, "isin:" + profile["isin"])] += qty
+
         skip += len(activities)
         if len(activities) < GHOST_PAGE_SIZE:
             break
@@ -337,7 +351,7 @@ def ghost_get_existing_orders(config):
             break
 
     log.info("Scanned %d existing Ghostfolio activities", skip)
-    return trade_ids, dividend_comments
+    return trade_ids, dividend_comments, holdings
 
 
 def ghost_import_activities(config, activities):
@@ -705,8 +719,8 @@ def filter_orphaned_closing_trades(trades):
 
     for sym in sorted(orphaned_symbols):
         isin = symbol_info[sym]["isin"]
-        log.warning(
-            "Skipping %s (%s) - has closing trades but no opening trades in the "
+        log.debug(
+            "Window-only: %s (%s) - has closing trades but no opening trades in the "
             "365-day window. These are fully closed positions where the buy "
             "predates the query period.",
             sym, isin or "no ISIN",
@@ -769,8 +783,8 @@ def filter_net_negative_positions(trades):
         negative_symbols.update(info["symbols"])
         if info["isin"]:
             negative_isins.add(info["isin"])
-        log.warning(
-            "Skipping %s (%s) - net position is negative (%.4g shares). "
+        log.debug(
+            "Window-only: %s (%s) - net position is negative (%.4g shares). "
             "The original buy predates the 365-day query window.",
             info["symbol"], info["isin"] or "no ISIN", info["net_qty"],
         )
@@ -788,8 +802,66 @@ def filter_net_negative_positions(trades):
 # Main sync logic
 # ---------------------------------------------------------------------------
 
+def filter_trades_by_holdings(trades, holdings, ghost_account_id, mapping, existing_trade_ids):
+    """Drop trade groups whose import would drive a Ghostfolio position negative.
+
+    The Flex window is 365 days, so a sell of a position bought earlier comes
+    without its buy. Ghostfolio usually already holds that buy (imported by an
+    earlier run, or entered manually), so the check is:
+    Ghostfolio net qty + net of window trades not yet imported >= 0.
+
+    Groups are keyed by ISIN (symbol when absent), so symbol variants of one
+    security count together. Ghostfolio qty is looked up by the resolved
+    symbol, then by ISIN (covers Yahoo symbol canonicalization).
+    """
+    groups = defaultdict(lambda: {"pending": 0.0, "symbol": "", "isin": ""})
+    for trade in trades:
+        trade_id = trade.get("tradeID", "")
+        if not trade_id or trade_id in existing_trade_ids:
+            continue
+        isin = trade.get("isin", "")
+        symbol = trade.get("symbol", "")
+        key = isin or symbol
+        if not key:
+            continue
+        # Invalid quantity: conversion rejects the trade anyway
+        groups[key]["pending"] += _parse_float(trade.get("quantity", "0")) or 0.0
+        groups[key]["symbol"] = groups[key]["symbol"] or symbol
+        groups[key]["isin"] = groups[key]["isin"] or isin
+
+    rejected = set()
+    closed_elsewhere = 0
+    for key, info in sorted(groups.items()):
+        if info["pending"] >= 0:
+            continue
+        ticker = resolve_symbol(info["isin"], info["symbol"], mapping)
+        held = holdings.get((ghost_account_id, ticker))
+        if held is None and info["isin"]:
+            held = holdings.get((ghost_account_id, "isin:" + info["isin"]))
+        held = held or 0.0
+        if held + info["pending"] >= -0.001:
+            log.info("Importing sells for %s (%s): Ghostfolio holds %.4g, net new trades %.4g",
+                     info["symbol"], info["isin"] or "no ISIN", held, info["pending"])
+            continue
+        rejected.add(key)
+        if abs(held) < 0.001:
+            closed_elsewhere += 1
+            log.debug("Not importing %s (%s): net new trades %.4g but Ghostfolio holds no position "
+                      "(sold manually or never tracked)",
+                      info["symbol"], info["isin"] or "no ISIN", info["pending"])
+        else:
+            log.error("Not importing %s (%s): Ghostfolio holds %.4g, net new trades %.4g would go "
+                      "negative — fix the position in Ghostfolio manually",
+                      info["symbol"], info["isin"] or "no ISIN", held, info["pending"])
+
+    if closed_elsewhere:
+        log.info("%d security(ies) with sells not imported: Ghostfolio holds no position "
+                 "(sold manually or never tracked) — LOG_LEVEL=DEBUG for the list", closed_elsewhere)
+    return [t for t in trades if (t.get("isin", "") or t.get("symbol", "")) not in rejected]
+
+
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
-                    existing_trade_ids, existing_dividend_comments):
+                    existing_trade_ids, existing_dividend_comments, holdings):
     """Process a single IBKR account: fetch, parse, and sync to Ghostfolio.
 
     The two existing_* sets are shared across accounts and updated in place with
@@ -822,16 +894,17 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     log.debug("Found %d trades and %d dividend entries in Flex Query report",
               len(trades), len(dividends))
 
-    # Drop orphaned closing trades (buy predates the 365-day query window)
-    trades, orphaned_symbols, orphaned_isins, dropped_orphans = filter_orphaned_closing_trades(trades)
-    if dropped_orphans:
-        log.debug("Dropped %d orphaned closing trade(s) with no matching open in window",
-                  dropped_orphans)
+    # CASH (FX conversions) and OPT are never imported; drop them before any gate
+    trades = [t for t in trades if t.get("assetCategory", "") not in SKIP_ASSET_CATEGORIES]
 
-    # Drop trades where net quantity across the window is negative
-    trades, negative_symbols, negative_isins, dropped_negative = filter_net_negative_positions(trades)
-    if dropped_negative:
-        log.debug("Dropped %d trade(s) with net negative position in window", dropped_negative)
+    # Dividend skip sets: window-only view (positions whose buy predates the
+    # 365-day window). Kept as-is so dividend behaviour does not change.
+    window_trades, orphaned_symbols, orphaned_isins, _ = filter_orphaned_closing_trades(trades)
+    _, negative_symbols, negative_isins, _ = filter_net_negative_positions(window_trades)
+
+    # Trade gate: Ghostfolio holdings + not-yet-imported trades must not go negative
+    trades = filter_trades_by_holdings(trades, holdings, ghost_account_id, mapping,
+                                       existing_trade_ids)
 
     # Combined skip sets for dividend filtering
     skip_symbols = orphaned_symbols | negative_symbols
@@ -946,7 +1019,7 @@ def main():
     # Fetch existing activities once for the whole run; process_account keeps the
     # sets current as it imports
     try:
-        existing_trade_ids, existing_dividend_comments = ghost_get_existing_orders(config)
+        existing_trade_ids, existing_dividend_comments, holdings = ghost_get_existing_orders(config)
     except requests.RequestException as exc:
         log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
         return 1
@@ -958,7 +1031,7 @@ def main():
 
     for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
         unmapped, ok = process_account(config, ibkr_id, qid, gf_name, mapping,
-                                       existing_trade_ids, existing_dividend_comments)
+                                       existing_trade_ids, existing_dividend_comments, holdings)
         all_unmapped.update(unmapped)
         if not ok:
             failed_accounts.append(ibkr_id)
