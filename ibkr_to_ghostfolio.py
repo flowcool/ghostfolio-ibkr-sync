@@ -925,16 +925,16 @@ def main():
         if not ok:
             failed_accounts.append(ibkr_id)
 
-    # Log unmapped ISINs summary
-    if all_unmapped:
-        log.warning("Unmapped ISINs (%d) — trades for these were skipped. Add to mapping file under symbol_mapping:",
-                    len(all_unmapped))
-        for isin, info in sorted(all_unmapped.items()):
-            symbol = info.get("symbol") or ""
-            desc = info.get("description") or ""
-            log.warning("%s: ???  # IBKR symbol: %s, description: %s", isin, symbol, desc)
-    else:
-        log.info("All ISINs resolved via mapping or symbol fallback")
+    # Log unmapped ISINs: one self-contained line per ISIN so each survives line-based log viewers.
+    # Trades are only reported on the run that imports them (later runs dedup first).
+    for isin, info in sorted(all_unmapped.items()):
+        symbol = info.get("symbol") or ""
+        desc = info.get("description") or ""
+        log.warning("Unmapped ISIN %s (%s) uses IBKR symbol %r as ticker (fallback) — "
+                    "verify in Ghostfolio or add to mapping symbol_mapping: '%s: <yahoo ticker>'",
+                    isin, desc or "no description", symbol, isin)
+    if not all_unmapped:
+        log.info("All new activities resolved via mapping")
 
     if failed_accounts:
         log.error("Sync completed with errors for %d of %d account(s): %s",
