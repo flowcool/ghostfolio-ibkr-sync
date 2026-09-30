@@ -51,3 +51,14 @@ gh pr comment <N> --repo flowcool/ghostfolio-ibkr-sync --body "## Review sub-age
 - One PR at a time (rate limit ~5/hour)
 - Trigger: `@coderabbitai review` as PR comment
 - Wait for walkthrough before merging
+
+## Step 6: After merge — merge is not deployment
+
+No Watchtower on ugreen: the NAS keeps the image of its last recreate. After merge, tell the operator
+the change is NOT live until pull + recreate, and show what runs now:
+
+```bash
+ssh ugreen 'docker image inspect -f "{{.Created}}" $(docker inspect -f "{{.Image}}" ghostfolio-ibkr-sync-individual); docker exec ghostfolio-ibkr-sync-individual printenv APP_VERSION'
+```
+
+Image older than the merge commit, or no APP_VERSION → not deployed. Deployment is the operator's call.

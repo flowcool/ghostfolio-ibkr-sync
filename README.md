@@ -64,8 +64,10 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
 
    > **⚠️ Critical — do not use a shorter period (e.g. Last Month, Last Quarter)**
    >
-   > The sync script relies on the 365-day window to match opening and closing trades.
-   > A shorter period causes two classes of silent failures:
+   > 365 days is the widest period IBKR allows. A wide window lets the sync recover
+   > trades missed during a gap in daily runs (container down, expired token), as long
+   > as they are still inside the period. A shorter period causes two classes of silent
+   > failures:
    >
    > - **Missing trades**: trades older than the period are never seen, and a sell whose
    >   buy is outside the window is imported only if Ghostfolio already holds that buy
@@ -299,7 +301,7 @@ A normal run emits only `INFO` lines. `WARNING` means *check this*, `ERROR` mean
 | `DEBUG` | FX/options skipped, window-only diagnostics, each sell not imported because already reconciled |
 | `INFO` | Sells imported for long-held positions; one summary line of sells not imported (already entered manually, or no Ghostfolio position) |
 | `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell nearby with another quantity; network retry |
-| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures |
+| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; run aborted before any write (see [Run stops before importing anything](#run-stops-before-importing-anything)) |
 
 ## Running
 
@@ -409,12 +411,19 @@ An imported symbol is not recognised by Yahoo Finance. Check the unmapped ISINs 
 
 The tool logs the error and continues - it still updates the cash balance and still processes the remaining accounts rather than crashing - but the run **exits 1** so your scheduler flags it. Fix the failing symbol in your mapping file and re-run; duplicate detection will skip already-imported activities.
 
+### Run stops before importing anything
+
+Before any import, the tool reads all existing Ghostfolio activities in one request, because deduplication depends on them. If that list cannot be trusted, the run stops with exit 1 and writes nothing (no import, no cash balance update):
+
+- `Ghostfolio redacted activity values (quantity/comment are null)` — Ghostfolio hides quantities and comments when **Presenter View** (restricted view, the eye icon) is on for the user that owns `GHOST_TOKEN`, or when the token lacks the `portfolio:read:values` scope. Without the `IBKR#` comments every trade would look new. Turn Presenter View off, or use a token with full read access, and re-run.
+- `Ghostfolio returned N activities but reports count=M` — the list and its total disagree, usually because an activity was added or deleted in Ghostfolio during the read. Re-run; the next scheduled run recovers on its own.
+
 ### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration, the initial activities fetch failed, at least one account failed, or an unhandled error occurred |
+| 1 | Missing or inconsistent configuration, the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, and a failed cash balance update.
 
