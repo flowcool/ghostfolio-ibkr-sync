@@ -92,13 +92,31 @@ def load_config():
 # ---------------------------------------------------------------------------
 
 def load_mapping(path):
-    """Load ISIN-to-Yahoo-ticker mapping from a YAML file."""
-    if not os.path.isfile(path):
-        log.warning("Mapping file %s not found, proceeding without mappings", path)
+    """Load ISIN-to-Yahoo-ticker mapping from a YAML file.
+
+    An empty path (MAPPING_FILE="") is the explicit opt-out.  A missing or
+    invalid file raises: syncing with raw IBKR symbols can book trades on the
+    wrong security (ticker collisions).
+    """
+    if not path:
+        log.warning("MAPPING_FILE is empty: proceeding without symbol mappings")
         return {}
-    with open(path, "r") as fh:
-        data = yaml.safe_load(fh) or {}
-    return data.get("symbol_mapping", {})
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"Mapping file {path} not found (set MAPPING_FILE=\"\" to run without mappings)")
+    try:
+        with open(path, "r") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise RuntimeError(f"Cannot read mapping file {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Mapping file {path}: top level must be a mapping with a symbol_mapping key")
+    mapping = data.get("symbol_mapping") or {}
+    if not isinstance(mapping, dict):
+        raise RuntimeError(f"Mapping file {path}: symbol_mapping must be ISIN: TICKER pairs")
+    if not mapping:
+        log.warning("Mapping file %s has no symbol_mapping entries", path)
+    return mapping
 
 
 def resolve_symbol(isin, ibkr_symbol, mapping):
@@ -1180,7 +1198,11 @@ def main():
         sys.exit(1)
     if config["dry_run"]:
         log.info("DRY RUN enabled (DRY_RUN) — no writes will be sent to Ghostfolio")
-    mapping = load_mapping(config["mapping_file"])
+    try:
+        mapping = load_mapping(config["mapping_file"])
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        return 1
     log.info("Loaded %d symbol mappings", len(mapping))
 
     account_ids = config["account_ids"]
