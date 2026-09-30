@@ -299,17 +299,20 @@ def ghost_get_existing_orders(config):
     Uses GET /api/v1/activities with skip/take pagination.  The /api/v1/order
     endpoints were deprecated in Ghostfolio 2.248.0 and removed in 3.5.0.
 
-    Returns a tuple of (trade_ids, dividend_comments, holdings):
+    Returns a tuple of (trade_ids, dividend_comments, positions):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
     - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"
-    - holdings: net BUY-SELL quantity keyed by (accountId, symbol) and
-      (accountId, "isin:" + isin), manual entries included
+    - positions: {"qty": net BUY-SELL qty by (accountId, symbol),
+                  "isin_symbols": symbols seen by (accountId, isin),
+                  "manual_sells": [[date, qty], ...] by (accountId, symbol) for
+                                  SELLs without an IBKR# comment}
     """
     url = f"{config['ghost_host']}/api/v1/activities"
     headers = ghost_headers(config["ghost_token"])
     trade_ids = set()
     dividend_comments = set()
-    holdings = defaultdict(float)
+    positions = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
+                 "manual_sells": defaultdict(list)}
 
     skip = 0
     total = None
@@ -339,10 +342,14 @@ def ghost_get_existing_orders(config):
                     qty = -qty
                 account_id = order.get("accountId") or ""
                 profile = order.get("SymbolProfile") or {}
-                if profile.get("symbol"):
-                    holdings[(account_id, profile["symbol"])] += qty
-                if profile.get("isin"):
-                    holdings[(account_id, "isin:" + profile["isin"])] += qty
+                symbol = profile.get("symbol")
+                if symbol:
+                    positions["qty"][(account_id, symbol)] += qty
+                    if profile.get("isin"):
+                        positions["isin_symbols"][(account_id, profile["isin"])].add(symbol)
+                    if order["type"] == "SELL" and not comment.startswith("IBKR#"):
+                        positions["manual_sells"][(account_id, symbol)].append(
+                            [(order.get("date") or "")[:10], -qty])
 
         skip += len(activities)
         if len(activities) < GHOST_PAGE_SIZE:
@@ -351,7 +358,7 @@ def ghost_get_existing_orders(config):
             break
 
     log.info("Scanned %d existing Ghostfolio activities", skip)
-    return trade_ids, dividend_comments, holdings
+    return trade_ids, dividend_comments, positions
 
 
 def ghost_import_activities(config, activities):
@@ -802,18 +809,41 @@ def filter_net_negative_positions(trades):
 # Main sync logic
 # ---------------------------------------------------------------------------
 
-def filter_trades_by_holdings(trades, holdings, ghost_account_id, mapping, existing_trade_ids):
-    """Drop trade groups whose import would drive a Ghostfolio position negative.
+def _matches_manual_sell(trade, manual_sells):
+    """Consume and return True if a manual Ghostfolio SELL of the same quantity
+    lies within 2 days of this IBKR sell (same rule as cleanup_duplicates.py)."""
+    iso = parse_ibkr_datetime(trade.get("dateTime", ""))
+    qty = abs(_parse_float(trade.get("quantity", "0")) or 0.0)
+    if not iso or not qty:
+        return False
+    day = datetime.fromisoformat(iso).date()
+    for entry in manual_sells:
+        try:
+            gap = abs((datetime.strptime(entry[0], "%Y-%m-%d").date() - day).days)
+        except ValueError:
+            continue
+        if gap <= 2 and abs(entry[1] - qty) < 0.001:
+            manual_sells.remove(entry)
+            return True
+    return False
+
+
+def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, existing_trade_ids):
+    """Drop trades whose import would duplicate a manual sell or drive a
+    Ghostfolio position negative.
 
     The Flex window is 365 days, so a sell of a position bought earlier comes
     without its buy. Ghostfolio usually already holds that buy (imported by an
-    earlier run, or entered manually), so the check is:
+    earlier run, or entered manually), so per resolved ticker the check is:
     Ghostfolio net qty + net of window trades not yet imported >= 0.
 
-    Groups are keyed by ISIN (symbol when absent), so symbol variants of one
-    security count together. Ghostfolio qty is looked up by the resolved
-    symbol, then by ISIN (covers Yahoo symbol canonicalization).
+    Sells already entered by hand (same qty, +/-2 days, no IBKR# comment) are
+    dropped first. Grouping is by the ticker the trade will be imported under;
+    a position held under another symbol with the same ISIN is not guessed at
+    (the sell would land on the wrong symbol) — a mapping entry fixes it.
     """
+    qty_by_symbol = positions["qty"]
+    manual_recorded = set()
     groups = defaultdict(lambda: {"pending": 0.0, "symbol": "", "isin": ""})
     for trade in trades:
         trade_id = trade.get("tradeID", "")
@@ -821,47 +851,65 @@ def filter_trades_by_holdings(trades, holdings, ghost_account_id, mapping, exist
             continue
         isin = trade.get("isin", "")
         symbol = trade.get("symbol", "")
-        key = isin or symbol
-        if not key:
+        ticker = resolve_symbol(isin, symbol, mapping)
+        if not ticker:
             continue
-        # Invalid quantity: conversion rejects the trade anyway
-        groups[key]["pending"] += _parse_float(trade.get("quantity", "0")) or 0.0
-        groups[key]["symbol"] = groups[key]["symbol"] or symbol
-        groups[key]["isin"] = groups[key]["isin"] or isin
+        qty = _parse_float(trade.get("quantity", "0")) or 0.0
+        # A manual sell may sit under any symbol sharing this ISIN (duplicate check only)
+        symbols = {ticker} | positions["isin_symbols"].get((ghost_account_id, isin), set())
+        if qty < 0 and any(_matches_manual_sell(trade, positions["manual_sells"][(ghost_account_id, sym)])
+                           for sym in sorted(symbols)
+                           if (ghost_account_id, sym) in positions["manual_sells"]):
+            manual_recorded.add(trade_id)
+            log.debug("Not importing sell %s of %s: already entered manually in Ghostfolio",
+                      trade_id, ticker)
+            continue
+        groups[ticker]["pending"] += qty
+        groups[ticker]["symbol"] = groups[ticker]["symbol"] or symbol
+        groups[ticker]["isin"] = groups[ticker]["isin"] or isin
 
     rejected = set()
     closed_elsewhere = 0
-    for key, info in sorted(groups.items()):
+    for ticker, info in sorted(groups.items()):
         if info["pending"] >= 0:
             continue
-        ticker = resolve_symbol(info["isin"], info["symbol"], mapping)
-        held = holdings.get((ghost_account_id, ticker))
-        if held is None and info["isin"]:
-            held = holdings.get((ghost_account_id, "isin:" + info["isin"]))
-        held = held or 0.0
+        label = f"{ticker} ({info['isin'] or 'no ISIN'})"
+        held = qty_by_symbol.get((ghost_account_id, ticker))
+        if held is None:
+            others = sorted(sym for sym in positions["isin_symbols"].get((ghost_account_id, info["isin"]), ())
+                            if abs(qty_by_symbol.get((ghost_account_id, sym), 0.0)) >= 0.001)
+            if others:
+                rejected.add(ticker)
+                log.warning("Not importing sells for %s: Ghostfolio holds this ISIN under %s — "
+                            "add mapping symbol_mapping: '%s: %s'",
+                            label, ", ".join(others), info["isin"], others[0])
+                continue
+            held = 0.0
         if held + info["pending"] >= -0.001:
-            log.info("Importing sells for %s (%s): Ghostfolio holds %.4g, net new trades %.4g",
-                     info["symbol"], info["isin"] or "no ISIN", held, info["pending"])
+            log.info("Importing sells for %s: Ghostfolio holds %.4g, net new trades %.4g",
+                     label, held, info["pending"])
             continue
-        rejected.add(key)
+        rejected.add(ticker)
         if abs(held) < 0.001:
             closed_elsewhere += 1
-            log.debug("Not importing %s (%s): net new trades %.4g but Ghostfolio holds no position "
-                      "(sold manually or never tracked)",
-                      info["symbol"], info["isin"] or "no ISIN", info["pending"])
+            log.debug("Not importing %s: net new trades %.4g but Ghostfolio holds no position "
+                      "(sold manually or never tracked)", label, info["pending"])
         else:
-            log.error("Not importing %s (%s): Ghostfolio holds %.4g, net new trades %.4g would go "
+            log.error("Not importing %s: Ghostfolio holds %.4g, net new trades %.4g would go "
                       "negative — fix the position in Ghostfolio manually",
-                      info["symbol"], info["isin"] or "no ISIN", held, info["pending"])
+                      label, held, info["pending"])
 
-    if closed_elsewhere:
-        log.info("%d security(ies) with sells not imported: Ghostfolio holds no position "
-                 "(sold manually or never tracked) — LOG_LEVEL=DEBUG for the list", closed_elsewhere)
-    return [t for t in trades if (t.get("isin", "") or t.get("symbol", "")) not in rejected]
+    if closed_elsewhere or manual_recorded:
+        log.info("Sells not imported: %d security(ies) with no Ghostfolio position, %d sell(s) "
+                 "already entered manually — LOG_LEVEL=DEBUG for the list",
+                 closed_elsewhere, len(manual_recorded))
+    return [t for t in trades
+            if t.get("tradeID", "") not in manual_recorded
+            and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
-                    existing_trade_ids, existing_dividend_comments, holdings):
+                    existing_trade_ids, existing_dividend_comments, positions):
     """Process a single IBKR account: fetch, parse, and sync to Ghostfolio.
 
     The two existing_* sets are shared across accounts and updated in place with
@@ -903,7 +951,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     _, negative_symbols, negative_isins, _ = filter_net_negative_positions(window_trades)
 
     # Trade gate: Ghostfolio holdings + not-yet-imported trades must not go negative
-    trades = filter_trades_by_holdings(trades, holdings, ghost_account_id, mapping,
+    trades = filter_trades_by_holdings(trades, positions, ghost_account_id, mapping,
                                        existing_trade_ids)
 
     # Combined skip sets for dividend filtering
@@ -973,6 +1021,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
                     tid = comment.split("#", 1)[1]
                     if tid:
                         existing_trade_ids.add(tid)
+                    # Keep holdings current for a later account mapped to the same Ghostfolio account
+                    sign = -1.0 if activity["type"] == "SELL" else 1.0
+                    positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
                 elif comment.startswith("dividend#"):
                     existing_dividend_comments.add(comment)
         else:
@@ -1019,7 +1070,7 @@ def main():
     # Fetch existing activities once for the whole run; process_account keeps the
     # sets current as it imports
     try:
-        existing_trade_ids, existing_dividend_comments, holdings = ghost_get_existing_orders(config)
+        existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
     except requests.RequestException as exc:
         log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
         return 1
@@ -1031,7 +1082,7 @@ def main():
 
     for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
         unmapped, ok = process_account(config, ibkr_id, qid, gf_name, mapping,
-                                       existing_trade_ids, existing_dividend_comments, holdings)
+                                       existing_trade_ids, existing_dividend_comments, positions)
         all_unmapped.update(unmapped)
         if not ok:
             failed_accounts.append(ibkr_id)
