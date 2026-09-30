@@ -50,6 +50,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 
 ## Gotchas ops
 
+- **Merge ≠ déploiement** : pas de Watchtower sur ugreen ; le conteneur garde l'image du dernier recreate (vu 2026-09-30 : image du 2026-09-22, sans `APP_VERSION`). Après merge : pull + recreate de la stack, puis vérifier la version au log de démarrage
 - `mapping.yaml` bind-mount fichier → `docker restart` pour relire après édition hôte
 - Collision de ticker : mapper par ISIN (ex. IBKR `TAL`=PetroTal, pas TAL Education)
 - Fenêtre Flex = 365j max (limite IBKR). Trade gate (`filter_trades_by_holdings`) : holding Ghostfolio (par compte, ticker résolu) + trades non importés ≥ 0 → import. Ventes saisies à la main reconnues (même qty ±2j, date la plus proche, fills sommés par jour) → pas de doublon. Position sous un autre symbole même ISIN → WARNING + ligne mapping. Dividendes : logique fenêtre inchangée
