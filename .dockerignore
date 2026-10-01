@@ -5,3 +5,8 @@ __pycache__
 *.pyc
 .env
 sync*.log
+.venv
+tests
+requirements-dev.txt
+pytest.ini
+.pytest_cache

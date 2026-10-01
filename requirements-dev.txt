@@ -1,0 +1,3 @@
+# Dev/CI only: never installed in the Docker image (Dockerfile reads requirements.txt only)
+-r requirements.txt
+pytest==9.1.1

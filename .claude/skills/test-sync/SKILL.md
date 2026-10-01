@@ -1,10 +1,10 @@
 ---
-description: Test the sync script manually (no test suite)
+description: Test the sync script against live data (manual / DRY_RUN); unit tests are in tests/ (pytest)
 ---
 
 # Test Sync
 
-No mocks, no fixtures — the script is stateless and idempotent (dedup on Ghostfolio side).
+Live-data checks: the script is stateless and idempotent (dedup on Ghostfolio side). Offline unit tests: `.venv/bin/python -m pytest -q` (see `tests/`).
 
 ## Run in existing container (production cron)
 
