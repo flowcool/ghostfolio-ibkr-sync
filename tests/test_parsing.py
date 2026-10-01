@@ -181,3 +181,7 @@ def test_fetch_flex_report_rejects_foreign_statement_url(monkeypatch):
     monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: Resp())
     with pytest.raises(RuntimeError, match="Unexpected IBKR statement URL"):
         m.fetch_flex_report("tok", "q")
+
+
+def test_deliberate_failure_ci_demo():
+    assert False, "throwaway: proves a failing test blocks CI"
