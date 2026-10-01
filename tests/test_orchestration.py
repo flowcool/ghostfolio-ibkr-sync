@@ -261,6 +261,40 @@ def test_main_unmapped_isin_is_reported_but_is_not_a_failure(env, caplog):
     assert any("Unmapped ISIN JP1 (ACME)" in r.message for r in caplog.records)
 
 
+def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, caplog):
+    # real process_account: the conversion blows up for the first account only
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    fetched, imported, cash = [], [], []
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(m, "fetch_flex_report", lambda token, qid, *a, **k: fetched.append(qid) or report(trade_xml("T1")))
+    env.setattr(m, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
+    env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or True)
+    env.setattr(m, "ghost_update_cash_balance", lambda cfg, acc, bal: cash.append(acc) or True)
+    real = m.convert_trade_to_activity
+    calls = []
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyError("unforeseen field")
+        return real(*a, **k)
+    env.setattr(m, "convert_trade_to_activity", flaky)
+    assert m.main() == 1                                            # the run is still flagged
+    assert fetched == ["q1", "q2"]                                  # second account reached
+    assert len(imported) == 1 and cash == ["gf-B"]                  # and fully synced
+    rec = [r for r in caplog.records if "Unexpected error while processing IBKR account U1" in r.message]
+    assert len(rec) == 1 and rec[0].exc_info and rec[0].exc_info[0] is KeyError   # traceback kept
+    assert any("1 of 2 account(s): U1" in r.message for r in caplog.records)
+
+
+def test_main_does_not_swallow_keyboard_interrupt_or_system_exit(env):
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+    stub_main(env, {})
+    env.setattr(m, "process_account", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        m.main()
+
+
 @pytest.mark.parametrize("exc", [RuntimeError("count mismatch"), m.requests.ConnectionError("down")])
 def test_main_untrusted_or_unreadable_existing_activities_stops_before_any_account(env, exc):
     calls = stub_main(env, {})
