@@ -6,7 +6,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 
 | Fait | Valeur |
 |---|---|
-| Fichier principal | `ibkr_to_ghostfolio.py` (~1130 lignes) — mono-fichier par design |
+| Fichier principal | `ibkr_to_ghostfolio.py` (~1146 lignes) — mono-fichier par design |
 | Dépendances | `requests`, `pyyaml` — garder minimaliste |
 | Runtime | `python:3.12-slim` + supercronic, cron `5 6 * * *` |
 | Image | `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` |
@@ -55,7 +55,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - **Merge ≠ déploiement** : pas de Watchtower sur ugreen ; le conteneur garde l'image du dernier recreate (vu 2026-09-30 : image du 2026-09-22, sans `APP_VERSION`). Après merge : pull + recreate de la stack, puis vérifier la version au log de démarrage
 - `mapping.yaml` bind-mount fichier → `docker restart` pour relire après édition hôte
 - Collision de ticker : mapper par ISIN (ex. IBKR `TAL`=PetroTal, pas TAL Education)
-- Fenêtre Flex = 365j max (limite IBKR). Trade gate (`filter_trades_by_holdings`) : holding Ghostfolio (par compte, ticker résolu) + trades non importés ≥ 0 → import. Ventes saisies à la main reconnues (même qty ±2j, date la plus proche, fills sommés par jour) → pas de doublon. Position sous un autre symbole même ISIN → WARNING + ligne mapping. Dividendes : aucun filtre fenêtre (un titre long-détenu vendu en partie garde ses dividendes), dédup seule
+- Fenêtre Flex = 365j max (limite IBKR). Trade gate (`filter_trades_by_holdings`) : holding Ghostfolio (par compte, ticker résolu) + trades non importés ≥ 0 → import. Ventes ET achats saisis à la main reconnus (même qty ±2j, date la plus proche, fills sommés par jour) → pas de doublon ; un achat ignoré est toujours signalé en WARNING (remède : `IBKR#<tradeID>` dans le commentaire manuel). Position sous un autre symbole même ISIN → WARNING + ligne mapping. Dividendes : aucun filtre fenêtre (un titre long-détenu vendu en partie garde ses dividendes), dédup seule
 - Dividendes : source = section Flex **Cash Transactions** (paiements réels + retenue), plus les accruals (`Re` = correction/annulation/paiement → fantômes, #33). Dedup dividende = `dividend#ISIN#date` ou dividende existant même compte+symbole ±3j
 - Dedup : `comment='IBKR#<tradeID>'` obligatoire, sinon re-duplication au re-run (finding G)
 - GBp/pence : Yahoo cote `.L` en pence (GBp), IBKR reporte en GBP → mismatch ×100 (`gbx_pence_conversion()`, #17)
