@@ -22,12 +22,12 @@ One run does this, in order:
 
 1. Load the configuration and the symbol mapping. A missing or invalid mapping file stops the run before anything is contacted.
 2. Read **all** existing Ghostfolio activities once. Deduplication depends on them, so if the list looks incomplete or redacted the run stops and writes nothing.
-3. For each IBKR account: fetch its Flex Query report (two steps: request, then poll until IBKR has generated the statement), find the Ghostfolio account by name, and parse trades, dividend payments and the cash balance.
-4. Decide what is new: skip FX and options, skip anything already in Ghostfolio (by `IBKR#<tradeID>` comment), skip trades already entered by hand, and never let a sell push a position below zero.
+3. Then, for each IBKR account in turn (steps 3 to 6): fetch its Flex Query report (two steps: request, then poll until IBKR has generated the statement), find the Ghostfolio account by name (if `GHOST_ACCOUNT_NAMES` is unset, the IBKR account IDs are used as names, with a warning), and parse trades, dividend payments and the cash balance.
+4. Decide what is new: skip FX and options; skip trades already in Ghostfolio (`IBKR#<tradeID>` comment) and trades without a trade ID (they cannot be deduplicated); skip dividends already in Ghostfolio (`dividend#...` comment, or any dividend of the same symbol in the same account within ±3 days); skip trades already entered by hand; and never let a sell push a position below zero.
 5. Convert what is left to Ghostfolio activities and import them in one request per account.
-6. Set the account's cash balance, then exit `0` if every account was clean, `1` otherwise.
+6. Set the account's cash balance. This happens even if the import failed; it is skipped, with a warning, only when the report has no base-currency cash row. After all accounts, the run exits `0` if every account was clean and `1` otherwise.
 
-The tool never deletes or edits an existing Ghostfolio activity: it only adds new ones and sets the cash balance. Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
+The tool never deletes or edits an existing Ghostfolio activity: it only adds new ones and updates each account's cash balance (and its platform, if `GHOST_PLATFORM_ID` is set and the account has none). Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
 
 ## Docker image
 
@@ -331,7 +331,7 @@ A normal run emits only `INFO` lines. `WARNING` means *check this*, `ERROR` mean
 |---|---|
 | Trade | `BUY` when IBKR says `BUY`, otherwise `SELL`. Quantity and price are absolute values. The comment is `IBKR#<tradeID>`, the data source is always `YAHOO`. |
 | Commission | `fee` = the commission cost. A positive `ibCommission` (a rebate) is recorded as a fee of 0 and logged as a `WARNING`, because Ghostfolio fees cannot be negative. |
-| Dividend | One `DIVIDEND` per security and day: dividends and payments in lieu are summed (a reversal nets out), withholding tax becomes the `fee`. A net refund of tax is recorded as a fee of 0 with a `WARNING`. The comment is `dividend#<ISIN>#<date>` (or the IBKR symbol when there is no ISIN) and the date is the date of the cash transaction at 00:00 UTC. |
+| Dividend | One `DIVIDEND` per security and day: dividends and payments in lieu are summed (a reversal nets out), withholding tax becomes the `fee`. A net refund of tax is recorded as a fee of 0 with a `WARNING`. The comment is `dividend#<ISIN>#<date>` (or the IBKR symbol when there is no ISIN) and the date is the date of the cash transaction at 00:00 UTC. A dividend is treated as already present if Ghostfolio has that comment, **or any dividend of the same symbol in the same account within ±3 days** (so a real dividend that falls that close to a manual one is not imported). |
 | Dividend quantity and price | Read from the description (`... USD 0.25 PER SHARE ...`): quantity = amount ÷ rate, rounded to whole shares when within 1 %, price derived so that quantity × price equals the payment. Without such a rate the whole amount is booked as one unit. |
 | Date and time | IBKR timestamps are treated as UTC. A manual entry made in local time can differ by a day, which is why the manual-entry matching accepts ±2 days. |
 | Currency | The trade or dividend currency, except on markets where Yahoo quotes the minor unit (below). |
@@ -388,7 +388,7 @@ docker run --rm -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
-Look for lines starting with `[DRY RUN]`. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
+Look for lines starting with `[DRY RUN]`; when there is nothing to import the log simply says `No new activities to import`. Add `--network <your-ghostfolio-network>` if `GHOST_HOST` is a Docker hostname. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
 
 ## Docker Compose / Portainer
 
@@ -546,4 +546,4 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-CI runs the same tests on every pull request to `main` and before every image build, so an image is only published when they pass. A change to the sync logic should come with a test; for checks against real data use `DRY_RUN=1`, comparing the log of the current release with the log of your change.
+CI runs the same tests on every pull request to `main` that touches code (documentation-only changes skip the workflow) and before every image build, so an image is only published when they pass. A change to the sync logic should come with a test; for checks against real data use `DRY_RUN=1`, comparing the log of the current release with the log of your change.
