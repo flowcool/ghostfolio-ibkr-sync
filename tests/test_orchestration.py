@@ -166,14 +166,19 @@ def test_trade_without_id_is_skipped_and_warned(monkeypatch, caplog):
     assert any("missing tradeID" in r.message for r in caplog.records)
 
 
-def test_already_imported_trade_is_not_reimported(monkeypatch):
+def test_already_imported_trade_is_not_reimported(monkeypatch, caplog):
+    caplog.set_level("INFO")
     w = World(monkeypatch, report(trade_xml("T1")))
     w.run(ids={"T1"})
     assert w.activities == []
+    assert any("duplicates skipped: 1" in r.message for r in caplog.records)
 
 
-def test_fx_and_option_trades_never_reach_the_import(monkeypatch):
-    xml = report(trade_xml("C1", assetCategory="CASH") + trade_xml("O1", assetCategory="OPT") + trade_xml("T1"))
+def test_fx_and_option_trades_never_reach_the_import_nor_the_holdings_gate(monkeypatch):
+    # a CASH sell of the same symbol would push KO to -40 and get the real buy rejected
+    # if it were not dropped before the gate
+    xml = report(trade_xml("C1", "SELL", 50, assetCategory="CASH") + trade_xml("O1", assetCategory="OPT")
+                 + trade_xml("T1"))
     w = World(monkeypatch, xml)
     w.run()
     assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
@@ -188,12 +193,14 @@ def test_dividend_already_present_by_comment_new_or_old_format_is_skipped(monkey
     assert w.activities == []
 
 
-def test_dividend_within_three_days_of_an_existing_one_is_skipped(monkeypatch):
+@pytest.mark.parametrize("existing,skipped", [("2026-07-17", True), ("2026-07-18", True), ("2026-07-12", True),
+                                              ("2026-07-19", False), ("2026-07-11", False)])
+def test_dividend_match_window_is_exactly_three_days(monkeypatch, existing, skipped):
     pos = positions()
-    pos["dividend_dates"][(ACC, "KO")].append("2026-07-17")
-    w = World(monkeypatch, report(divs=div_xml()))
+    pos["dividend_dates"][(ACC, "KO")].append(existing)
+    w = World(monkeypatch, report(divs=div_xml()))              # dividend dated 2026-07-15
     w.run(pos=pos)
-    assert w.activities == []
+    assert (w.activities == []) is skipped
 
 
 def test_new_dividend_is_imported(monkeypatch):
@@ -217,8 +224,8 @@ def env(monkeypatch):
     for k, v in {"IBKR_TOKEN": "tok", "IBKR_ACCOUNT_IDS": "U1,U2", "IBKR_QUERY_IDS": "q1,q2",
                  "GHOST_TOKEN": "g", "GHOST_HOST": "http://ghost:3333/", "MAPPING_FILE": ""}.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.delenv("GHOST_ACCOUNT_NAMES", raising=False)
-    monkeypatch.delenv("DRY_RUN", raising=False)
+    for k in ("GHOST_ACCOUNT_NAMES", "DRY_RUN", "GHOST_CURRENCY", "GHOST_PLATFORM_ID"):
+        monkeypatch.delenv(k, raising=False)
     return monkeypatch
 
 
@@ -346,6 +353,19 @@ def test_flex_fetch_polls_while_statement_is_not_ready(monkeypatch):
     assert len(urls) == 4 and sleeps == [7, 7]
 
 
+def test_flex_fetch_status_warn_without_error_code_also_means_not_ready(monkeypatch):
+    urls, sleeps = script_flex(monkeypatch, SEND_OK, "<R><Status>Warn</Status></R>", READY)
+    assert m.fetch_flex_report("TOK", "1") == READY and len(sleeps) == 1
+
+
+def test_flex_fetch_other_error_code_such_as_too_many_requests_fails_immediately(monkeypatch):
+    urls, sleeps = script_flex(monkeypatch, SEND_OK, "<R><Status>Fail</Status><ErrorCode>1018</ErrorCode>"
+                                                     "<ErrorMessage>Too many requests</ErrorMessage></R>")
+    with pytest.raises(RuntimeError, match="GetStatement failed: Too many requests"):
+        m.fetch_flex_report("TOK", "1")
+    assert sleeps == []
+
+
 def test_flex_fetch_error_code_1019_alone_also_means_not_ready(monkeypatch):
     pending = "<R><Status>Fail</Status><ErrorCode>1019</ErrorCode></R>"
     urls, sleeps = script_flex(monkeypatch, SEND_OK, pending, READY)
@@ -414,6 +434,17 @@ def test_ibkr_get_gives_up_after_the_last_retry_and_never_leaks_the_token(monkey
     assert e.value.__cause__ is None and e.value.__suppress_context__   # no chained traceback with the URL
 
 
+def test_ibkr_get_redacts_url_encoded_forms_of_the_token(monkeypatch):
+    token = "a+b/c="
+    leaked = f"GET https://x/?t={m.quote_plus(token)} raw {token} and {m.quote(token, safe='')}"
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: (_ for _ in ()).throw(m.requests.ConnectionError(leaked)))
+    monkeypatch.setattr(m.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError) as e:
+        m._ibkr_get("https://x", {"t": token}, 5)
+    msg = str(e.value)
+    assert token not in msg and m.quote_plus(token) not in msg and m.quote(token, safe="") not in msg
+
+
 def test_ibkr_get_http_error_is_not_retried_and_is_redacted(monkeypatch):
     attempts = []
     def get(url, params, timeout):
@@ -424,3 +455,41 @@ def test_ibkr_get_http_error_is_not_retried_and_is_redacted(monkeypatch):
     with pytest.raises(RuntimeError) as e:
         m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
     assert len(attempts) == 1 and "SECRET-TOK" not in str(e.value)
+
+
+# --- end to end through the real functions ------------------------------------
+
+class ForbiddenHttp:
+    """requests stand-in that fails the test on any Ghostfolio call."""
+    def __getattr__(self, name):
+        def call(*a, **k):
+            pytest.fail(f"unexpected HTTP {name} in dry run")
+        return call
+
+
+def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch):
+    # real ghost_import_activities / ghost_update_cash_balance, HTTP forbidden
+    monkeypatch.setattr(m, "fetch_flex_report", lambda *a, **k: report(trade_xml("T1"), div_xml()))
+    monkeypatch.setattr(m, "ghost_find_account_id", lambda *a: ACC)
+    monkeypatch.setattr(m, "requests", ForbiddenHttp())
+    ids, comments, pos = set(), set(), positions()
+    _, ok = m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
+    assert ok is True and ids == {"T1"} and comments == {f"dividend#{ISIN_KO}#2026-07-15"}
+
+
+def test_main_shares_the_existing_sets_between_accounts_through_the_real_process_account(env, monkeypatch):
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    imported = []
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(m, "fetch_flex_report", lambda *a, **k: report(trade_xml("T1")))        # same trade for both
+    env.setattr(m, "ghost_find_account_id", lambda cfg, name: "same-gf-account")       # both map to one account
+    env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or True)
+    env.setattr(m, "ghost_update_cash_balance", lambda *a: True)
+    assert m.main() == 0
+    assert len(imported) == 1 and imported[0][0]["comment"] == "IBKR#T1"               # B sees A's import
+
+
+def test_malformed_flex_report_fails_only_that_account(monkeypatch):
+    script_flex(monkeypatch, SEND_OK, "<not-xml")
+    monkeypatch.setattr(m, "ghost_find_account_id", lambda *a: pytest.fail("must not be reached"))
+    assert m.process_account(CFG, "U1", "q1", "IBKR", {}, set(), set(), positions()) == ({}, False)
