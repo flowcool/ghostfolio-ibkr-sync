@@ -70,7 +70,9 @@ gh pr comment <N> --repo flowcool/ghostfolio-ibkr-sync --body "## Review sub-age
 - Trigger: `@coderabbitai review` as PR comment
 - Wait for walkthrough before merging
 
-## Step 6: After merge — merge is not deployment
+## Step 6: After merge — release, then remember merge is not deployment
+
+Release first (CLAUDE.md § Git): `git tag -a vX.Y.Z <merge-sha>` (patch bump for a fix) + push + `gh release create vX.Y.Z --verify-tag --latest`. Docs/CI/skill-only merges need no release.
 
 No Watchtower on ugreen: the NAS keeps the image of its last recreate. After merge, tell the operator
 the change is NOT live until pull + recreate, and show what runs now:
