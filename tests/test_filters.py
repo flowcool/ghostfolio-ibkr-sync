@@ -61,18 +61,23 @@ def test_buys_alone_are_always_kept():
 
 
 def test_rejected_ticker_drops_its_buys_too_but_not_other_tickers():
-    trades = [tr("S1", -50), tr("B2", 3, symbol="PEP", isin="US7134481081")]
+    # KO nets negative (-40) with no Ghostfolio position: both its trades go, PEP stays
+    trades = [tr("B1", 10, "20260701;100000"), tr("S1", -50, "20260801;100000"),
+              tr("B2", 3, symbol="PEP", isin="US7134481081")]
     assert ids(gate(trades, positions())) == ["B2"]
 
 
 def test_already_imported_trade_does_not_count_as_pending():
-    # S0 is already in Ghostfolio (its qty is in `held`); it must not be counted again
+    # Ghostfolio holds 10 AFTER the already-imported sell S0 (-10). If S0 were counted again,
+    # held 10 + (-10 - 8) = -8 would reject S1; excluded, 10 - 8 = 2 keeps it.
     pos = positions(qty={(ACC, "KO"): 10})
-    trades = [tr("S0", -10, "20260701;100000"), tr("B1", 5, "20260801;100000")]
-    assert "B1" in ids(gate(trades, pos, existing={"S0"}))
+    trades = [tr("S0", -10, "20260701;100000"), tr("S1", -8, "20260801;100000")]
+    assert "S1" in ids(gate(trades, pos, existing={"S0"}))
 
 
-def test_trade_without_id_is_ignored_by_the_gate_bookkeeping():
+def test_trade_without_id_passes_the_gate_untouched():
+    # by design the gate skips ID-less trades; process_account then refuses them
+    # ("missing tradeID, cannot deduplicate safely"), so they are never imported
     assert ids(gate([tr("", -5)], positions())) == [""]
 
 
