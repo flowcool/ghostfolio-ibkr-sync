@@ -286,12 +286,13 @@ def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, 
     assert any("1 of 2 account(s): U1" in r.message for r in caplog.records)
 
 
-def test_main_does_not_swallow_keyboard_interrupt_or_system_exit(env):
+@pytest.mark.parametrize("exc", [KeyboardInterrupt, SystemExit])
+def test_main_does_not_swallow_keyboard_interrupt_or_system_exit(env, exc):
     def interrupted(*a, **k):
-        raise KeyboardInterrupt
+        raise exc
     stub_main(env, {})
     env.setattr(m, "process_account", interrupted)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(exc):
         m.main()
 
 
