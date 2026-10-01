@@ -810,7 +810,8 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
     (the sell would land on the wrong symbol) — a mapping entry fixes it.
     """
     qty_by_symbol = positions["qty"]
-    manual_recorded = set()
+    manual_recorded = set()   # sells already entered by hand
+    manual_buys = set()       # buys already entered by hand (always warned about)
     ambiguous = set()
     split_fills = defaultdict(list)
     groups = defaultdict(lambda: {"pending": 0.0, "symbol": "", "isin": ""})
@@ -843,7 +844,7 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
         side = "SELL" if qty < 0 else "BUY"
         result, entry = match_one(trade, ticker, isin, side)
         if result == "match":
-            manual_recorded.add(trade_id)
+            (manual_recorded if side == "SELL" else manual_buys).add(trade_id)
             if side == "SELL":
                 log.debug("Not importing sell %s of %s: already entered manually in Ghostfolio",
                           trade_id, ticker)
@@ -866,7 +867,7 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
         summed = {"dateTime": fills[0].get("dateTime", ""), "quantity": str(total)}
         ids = [t.get("tradeID", "") for t in fills]
         if len(fills) > 1 and match_one(summed, ticker, isin, side)[0] == "match":
-            manual_recorded.update(ids)
+            (manual_recorded if side == "SELL" else manual_buys).update(ids)
             log.log(logging.DEBUG if side == "SELL" else logging.WARNING,
                     "Not importing %ss %s of %s: fills sum to a manual Ghostfolio %s",
                     side.lower(), ",".join(ids), ticker, side.lower())
@@ -913,7 +914,7 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
                  "already entered manually — LOG_LEVEL=DEBUG for the list",
                  closed_elsewhere, len(manual_recorded))
     return [t for t in trades
-            if t.get("tradeID", "") not in manual_recorded | ambiguous
+            if t.get("tradeID", "") not in manual_recorded | manual_buys | ambiguous
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 

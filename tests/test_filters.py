@@ -200,6 +200,19 @@ def test_skipped_manual_buy_does_not_count_as_pending_for_later_sells():
     assert ids(gate(trades, pos)) == ["S1"]
 
 
+def test_skipped_buys_are_not_counted_as_sells_in_the_summary(caplog):
+    caplog.set_level("INFO")
+    pos = positions(qty={(ACC, "KO"): 100}, manual_buys={(ACC, "KO"): [["2026-08-01", 10.0]]},
+                    manual_sells={(ACC, "KO"): [["2026-08-02", 5.0]]})
+    gate([tr("B1", 10), tr("S1", -5, "20260802;100000")], pos)
+    summary = [r.message for r in caplog.records if "Sells not imported" in r.message]
+    assert len(summary) == 1 and "1 sell(s) already entered manually" in summary[0]
+    only_buy = positions(manual_buys={(ACC, "KO"): [["2026-08-01", 10.0]]})
+    caplog.clear()
+    gate([tr("B1", 10)], only_buy)
+    assert not [r for r in caplog.records if "Sells not imported" in r.message]
+
+
 # --- dividend date matching ----------------------------------------------
 
 def act(date="2026-07-15", symbol="KO"):
