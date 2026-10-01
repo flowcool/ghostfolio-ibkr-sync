@@ -6,7 +6,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 
 | Fait | Valeur |
 |---|---|
-| Fichier principal | `ibkr_to_ghostfolio.py` (~1240 lignes) — mono-fichier par design |
+| Fichier principal | `ibkr_to_ghostfolio.py` (~1130 lignes) — mono-fichier par design |
 | Dépendances | `requests`, `pyyaml` — garder minimaliste |
 | Runtime | `python:3.12-slim` + supercronic, cron `5 6 * * *` |
 | Image | `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` |
@@ -21,6 +21,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 | Rule `security` | `.claude/rules/security.md` | Toujours chargée |
 | Skill `/review-pr` | `.claude/skills/review-pr/` | Manuel — obligatoire avant merge |
 | Skill `/test-sync` | `.claude/skills/test-sync/` | Manuel |
+| Tests `pytest` | `tests/` (offline) | `.venv/bin/python -m pytest -q` avant commit ; CI les lance avant le build |
 | Hook `pre-commit-compile` | `.claude/hooks/pre-commit-compile.sh` | Avant `git commit` — bloque si syntax error |
 
 Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/env vars touché, `simplify` après fix.
@@ -30,7 +31,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - Branches : `fix/<sujet>`, `feat/<sujet>`, `refactor/<sujet>`
 - Commits : `fix:`, `feat:`, `refactor:`, `chore:` — message court, impératif
 - PRs : isolées par concern, merge commit uniquement (squash/rebase désactivés)
-- CI : push `main` → build amd64+arm64 → `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest`
+- CI : tests pytest (PR + push) puis, hors PR, build amd64+arm64 → `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest`
 - push `staging` → tag `:staging`, tester manuellement avant merge
 - Release : après merge, `git tag -a vX.Y.Z <merge-sha>` + push + `gh release create vX.Y.Z --verify-tag --latest` → CI publie `:X.Y.Z` + `:X.Y`. `:latest` reste main-only (un tag d'un vieux commit ne doit pas l'écraser). NAS reste sur `:latest` (décision opérateur 2026-09-30)
 - Version : CI `git describe --tags --always` → build-arg `APP_VERSION` → loggée au démarrage (`:latest` affiche `vX.Y.Z-N-g<sha>`)
@@ -76,3 +77,4 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - Epic Beads : `infra-8tt` (ghostfolio) — enfants actifs via `bd list --status=open --metadata-field project=ghostfolio-ibkr-sync`
 - Findings ouverts : A = `infra-8tt.1`, G = `infra-cfa`
 - Revue de code 2026-09-30 : `bd list --label review-2026-09-30` (ordre porté par les dépendances Beads)
+- Revue de code 2026-10-01 : `bd list --label review-2026-10-01` (dividendes long-détenus, achats manuels, suite pytest)

@@ -11,6 +11,14 @@ on:
       - "LICENSE"
     tags:
       - "v*"
+  # PRs run the tests only; the build job below never runs for them
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - ".claude/**"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       ref:
@@ -19,7 +27,21 @@ on:
         default: "staging"
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # same as the image base
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+
   build-and-push:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
