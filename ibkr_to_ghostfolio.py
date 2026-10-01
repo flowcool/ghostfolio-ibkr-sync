@@ -369,6 +369,7 @@ def ghost_get_existing_orders(config):
                   "isin_symbols": symbols seen by (accountId, isin),
                   "manual_sells": [[date, qty], ...] by (accountId, symbol) for
                                   SELLs without an IBKR# comment,
+                  "manual_buys": same for BUYs without an IBKR# comment,
                   "dividend_dates": [date, ...] by (accountId, symbol) for
                                     every DIVIDEND}
     """
@@ -377,7 +378,8 @@ def ghost_get_existing_orders(config):
     trade_ids = set()
     dividend_comments = set()
     positions = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
-                 "manual_sells": defaultdict(list), "dividend_dates": defaultdict(list)}
+                 "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
+                 "dividend_dates": defaultdict(list)}
 
     # One request without skip/take: Ghostfolio has no take cap (default
     # MAX_SAFE_INTEGER), so one call returns one consistent list, with no
@@ -429,9 +431,10 @@ def ghost_get_existing_orders(config):
                 positions["qty"][(account_id, symbol)] += qty
                 if profile.get("isin"):
                     positions["isin_symbols"][(account_id, profile["isin"])].add(symbol)
-                if order["type"] == "SELL" and not comment.startswith("IBKR#"):
-                    positions["manual_sells"][(account_id, symbol)].append(
-                        [(order.get("date") or "")[:10], -qty])
+                if not comment.startswith("IBKR#"):
+                    key = "manual_sells" if order["type"] == "SELL" else "manual_buys"
+                    positions[key][(account_id, symbol)].append(
+                        [(order.get("date") or "")[:10], abs(qty)])
 
     log.info("Scanned %d existing Ghostfolio activities", len(activities))
     return trade_ids, dividend_comments, positions
@@ -757,22 +760,24 @@ def parse_ibkr_datetime(dt_str):
 # Main sync logic
 # ---------------------------------------------------------------------------
 
-def _match_manual_sell(trade, manual_sells):
-    """Compare an IBKR sell with manual Ghostfolio SELLs (no IBKR# comment).
+def _match_manual_entry(trade, entries):
+    """Compare an IBKR trade with manual Ghostfolio entries of the same side
+    (no IBKR# comment).
 
-    Returns "match" (closest entry within 2 days with the same qty, consumed),
-    "ambiguous" (a manual sell within 2 days but another qty, e.g. one manual
-    entry for an order IBKR reports as several fills) or None.
+    Returns (result, entry): ("match", entry) for the closest entry within 2
+    days with the same qty (consumed), ("ambiguous", None) for an entry within
+    2 days but another qty (e.g. one manual entry for an order IBKR reports as
+    several fills), else (None, None).
     Same +/-2 days rule as cleanup_duplicates.py (UTC vs local date shift).
     """
     iso = parse_ibkr_datetime(trade.get("dateTime", ""))
     qty = abs(_parse_float(trade.get("quantity", "0")) or 0.0)
     if not iso or not qty:
-        return None
+        return None, None
     day = datetime.fromisoformat(iso).date()
     best = None
     near = False
-    for entry in manual_sells:
+    for entry in entries:
         try:
             gap = abs((datetime.strptime(entry[0], "%Y-%m-%d").date() - day).days)
         except ValueError:
@@ -783,13 +788,13 @@ def _match_manual_sell(trade, manual_sells):
         if abs(entry[1] - qty) < 0.001 and (best is None or gap < best[0]):
             best = (gap, entry)
     if best:
-        manual_sells.remove(best[1])
-        return "match"
-    return "ambiguous" if near else None
+        entries.remove(best[1])
+        return "match", best[1]
+    return ("ambiguous", None) if near else (None, None)
 
 
 def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, existing_trade_ids):
-    """Drop trades whose import would duplicate a manual sell or drive a
+    """Drop trades whose import would duplicate a manual entry or drive a
     Ghostfolio position negative.
 
     The Flex window is 365 days, so a sell of a position bought earlier comes
@@ -797,31 +802,35 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
     earlier run, or entered manually), so per resolved ticker the check is:
     Ghostfolio net qty + net of window trades not yet imported >= 0.
 
-    Sells already entered by hand (same qty, +/-2 days, no IBKR# comment) are
-    dropped first. Grouping is by the ticker the trade will be imported under;
+    Trades already entered by hand (same side and qty, +/-2 days, no IBKR#
+    comment) are dropped first: silently for sells, with a WARNING for buys
+    (the user can add IBKR#<tradeID> to the manual comment to silence it).
+    Grouping is by the ticker the trade will be imported under;
     a position held under another symbol with the same ISIN is not guessed at
     (the sell would land on the wrong symbol) — a mapping entry fixes it.
     """
     qty_by_symbol = positions["qty"]
-    manual_recorded = set()
+    manual_recorded = set()   # sells already entered by hand
+    manual_buys = set()       # buys already entered by hand (always warned about)
     ambiguous = set()
     split_fills = defaultdict(list)
     groups = defaultdict(lambda: {"pending": 0.0, "symbol": "", "isin": ""})
 
-    def match_one(trade, ticker, isin):
-        # A manual sell may sit under any symbol sharing this ISIN (duplicate check only)
+    def match_one(trade, ticker, isin, side):
+        # A manual entry may sit under any symbol sharing this ISIN (duplicate check only)
+        manual = positions["manual_sells" if side == "SELL" else "manual_buys"]
         symbols = {ticker} | positions["isin_symbols"].get((ghost_account_id, isin), set())
         result = None
         for sym in sorted(symbols):
-            if (ghost_account_id, sym) not in positions["manual_sells"]:
+            if (ghost_account_id, sym) not in manual:
                 continue
-            found = _match_manual_sell(trade, positions["manual_sells"][(ghost_account_id, sym)])
+            found, entry = _match_manual_entry(trade, manual[(ghost_account_id, sym)])
             if found == "match":
-                return found
+                return found, entry
             result = result or found
-        return result
+        return result, None
 
-    # Chronological order so each IBKR sell claims its own manual entry first
+    # Chronological order so each IBKR trade claims its own manual entry first
     for trade in sorted(trades, key=lambda t: t.get("dateTime", "")):
         trade_id = trade.get("tradeID", "")
         if not trade_id or trade_id in existing_trade_ids:
@@ -832,34 +841,42 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
         if not ticker:
             continue
         qty = _parse_float(trade.get("quantity", "0")) or 0.0
-        if qty < 0:
-            result = match_one(trade, ticker, isin)
-            if result == "match":
-                manual_recorded.add(trade_id)
+        side = "SELL" if qty < 0 else "BUY"
+        result, entry = match_one(trade, ticker, isin, side)
+        if result == "match":
+            (manual_recorded if side == "SELL" else manual_buys).add(trade_id)
+            if side == "SELL":
                 log.debug("Not importing sell %s of %s: already entered manually in Ghostfolio",
                           trade_id, ticker)
-                continue
-            if result == "ambiguous":
-                # Maybe one order split into several fills: retried as a daily sum below
-                split_fills[(ticker, isin, trade.get("dateTime", "")[:8])].append(trade)
-                continue
+            else:
+                log.warning("Not importing buy %s of %s (qty %.4g, %s): matches a manual Ghostfolio "
+                            "buy of %.4g on %s — set that entry's comment to IBKR#%s to silence "
+                            "this", trade_id, ticker, abs(qty), trade.get("dateTime", ""),
+                            entry[1], entry[0], trade_id)
+            continue
+        if result == "ambiguous":
+            # Maybe one order split into several fills: retried as a daily sum below
+            split_fills[(side, ticker, isin, trade.get("dateTime", "")[:8])].append(trade)
+            continue
         groups[ticker]["pending"] += qty
         groups[ticker]["symbol"] = groups[ticker]["symbol"] or symbol
         groups[ticker]["isin"] = groups[ticker]["isin"] or isin
 
-    for (ticker, isin, _), fills in sorted(split_fills.items()):
+    for (side, ticker, isin, _), fills in sorted(split_fills.items()):
         total = sum(_parse_float(t.get("quantity", "0")) or 0.0 for t in fills)
         summed = {"dateTime": fills[0].get("dateTime", ""), "quantity": str(total)}
         ids = [t.get("tradeID", "") for t in fills]
-        if len(fills) > 1 and match_one(summed, ticker, isin) == "match":
-            manual_recorded.update(ids)
-            log.debug("Not importing sells %s of %s: fills sum to a manual Ghostfolio sell",
-                      ",".join(ids), ticker)
+        if len(fills) > 1 and match_one(summed, ticker, isin, side)[0] == "match":
+            (manual_recorded if side == "SELL" else manual_buys).update(ids)
+            log.log(logging.DEBUG if side == "SELL" else logging.WARNING,
+                    "Not importing %ss %s of %s: fills sum to a manual Ghostfolio %s",
+                    side.lower(), ",".join(ids), ticker, side.lower())
             continue
         ambiguous.update(ids)
-        log.warning("Not importing sell(s) %s of %s (qty %.4g, %s): a manual Ghostfolio sell "
+        log.warning("Not importing %s(s) %s of %s (qty %.4g, %s): a manual Ghostfolio %s "
                     "within 2 days has another quantity — check for a duplicate by hand",
-                    ",".join(ids), ticker, total, fills[0].get("dateTime", ""))
+                    side.lower(), ",".join(ids), ticker, abs(total), fills[0].get("dateTime", ""),
+                    side.lower())
 
     rejected = set()
     closed_elsewhere = 0
@@ -897,7 +914,7 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
                  "already entered manually — LOG_LEVEL=DEBUG for the list",
                  closed_elsewhere, len(manual_recorded))
     return [t for t in trades
-            if t.get("tradeID", "") not in manual_recorded | ambiguous
+            if t.get("tradeID", "") not in manual_recorded | manual_buys | ambiguous
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 
