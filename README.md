@@ -297,7 +297,6 @@ If the fallback ticker is wrong for Yahoo Finance, add the ISIN to your mapping 
 - **Sells that would make a position negative** - the Flex Query only covers 365 days, so a sell of a position bought earlier arrives without its buy. For each security (per Ghostfolio account, by the ticker it will be imported under), the tool adds the quantity Ghostfolio already holds to the net quantity of IBKR trades not yet imported. If the result is zero or more, the trades are imported — so selling a long-held position just works. If it would go negative, nothing is imported for that security.
 - **Sells you already entered by hand** - an IBKR sell is treated as already recorded when Ghostfolio has a manual sell (no `IBKR#` comment) of the same quantity within ±2 days, under any symbol sharing the ISIN. Several IBKR fills of one day are also matched against a single manual entry by their sum. When a manual sell is nearby but the quantity does not match, the sell is not imported and a warning asks you to check by hand.
 - **Positions held under another symbol** - if Ghostfolio holds the security under a different symbol with the same ISIN (for example a manual entry on another listing), the sell is not imported and a warning gives the mapping line that fixes it.
-- **Dividends for positions closed before the window** - dividends are skipped for symbols whose trades in the 365-day window are only closes, or net negative, matched by both symbol name and ISIN to handle IBKR symbol variants.
 - **Dividend reversals and orphan tax corrections** - dividend and withholding rows of the same security and day are summed; a net zero (reversed payment) is skipped, and a withholding tax row without a dividend that day is not imported and logged as a `WARNING` to check by hand.
 - **Duplicate activities** - the tool checks existing Ghostfolio activities before importing and skips anything already present.
 
@@ -307,7 +306,7 @@ A normal run emits only `INFO` lines. `WARNING` means *check this*, `ERROR` mean
 
 | Level | Meaning |
 |---|---|
-| `DEBUG` | FX/options skipped, window-only diagnostics, each sell not imported because already reconciled |
+| `DEBUG` | FX/options skipped, each sell not imported because already reconciled |
 | `INFO` | Sells imported for long-held positions; one summary line of sells not imported (already entered manually, or no Ghostfolio position) |
 | `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell nearby with another quantity; withholding tax without a dividend the same day; network retry |
 | `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; run aborted before any write (see [Run stops before importing anything](#run-stops-before-importing-anything)) |

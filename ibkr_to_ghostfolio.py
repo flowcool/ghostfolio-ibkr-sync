@@ -754,132 +754,6 @@ def parse_ibkr_datetime(dt_str):
 
 
 # ---------------------------------------------------------------------------
-# Trade filtering
-# ---------------------------------------------------------------------------
-
-def filter_orphaned_closing_trades(trades):
-    """Remove trades for symbols that have closing trades but no opening trades.
-
-    IBKR Flex Query covers at most 365 days. A position bought before that
-    window but sold within it produces only closing ("C") trades in the export.
-    Importing those sells without the corresponding buys would create phantom
-    short positions in Ghostfolio.
-
-    Rules:
-    - Symbol has only "C" trades  → skip all (orphaned closes, buy predates window)
-    - Symbol has both "O" and "C" → keep all (round-trip captured in full)
-    - Symbol has only "O" trades  → keep all (currently open position)
-
-    Trades without an openCloseIndicator are kept unconditionally.
-
-    Returns (filtered_trades, orphaned_symbols, orphaned_isins, dropped_count).
-    """
-    # Group trade indices by symbol, tracking which indicators appear
-    symbol_info = defaultdict(lambda: {"has_open": False, "has_close": False, "isin": ""})
-    for trade in trades:
-        indicator = trade.get("openCloseIndicator", "")
-        symbol = trade.get("symbol", "")
-        if not symbol or not indicator:
-            continue
-        if indicator == "O":
-            symbol_info[symbol]["has_open"] = True
-        elif indicator == "C":
-            symbol_info[symbol]["has_close"] = True
-        if not symbol_info[symbol]["isin"]:
-            symbol_info[symbol]["isin"] = trade.get("isin", "")
-
-    orphaned_symbols = {
-        sym for sym, info in symbol_info.items()
-        if info["has_close"] and not info["has_open"]
-    }
-    orphaned_isins = {
-        symbol_info[sym]["isin"]
-        for sym in orphaned_symbols
-        if symbol_info[sym]["isin"]
-    }
-
-    for sym in sorted(orphaned_symbols):
-        isin = symbol_info[sym]["isin"]
-        log.debug(
-            "Window-only: %s (%s) - has closing trades but no opening trades in the "
-            "365-day window. These are fully closed positions where the buy "
-            "predates the query period.",
-            sym, isin or "no ISIN",
-        )
-
-    filtered = [
-        t for t in trades
-        if t.get("symbol", "") not in orphaned_symbols
-        and t.get("isin", "") not in orphaned_isins
-    ]
-    dropped = len(trades) - len(filtered)
-    return filtered, orphaned_symbols, orphaned_isins, dropped
-
-
-def filter_net_negative_positions(trades):
-    """Remove trades for symbols whose net quantity across the window is negative.
-
-    A net negative position means more shares were sold than bought within the
-    365-day query period, which implies the original buy predates the window.
-    Importing such trades would create a phantom short position in Ghostfolio.
-
-    Grouping is by ISIN so that symbol variants (e.g. "CSNKY" / "CSNKYz")
-    for the same security are treated as one position.  Falls back to symbol
-    when ISIN is absent.
-
-    IBKR encodes quantity as positive for buys and negative for sells, so
-    net = sum(quantity) across all trades for the group.
-
-    Returns (filtered_trades, negative_symbols, negative_isins, dropped_count).
-    """
-    # key → canonical symbol / isin for logging, net qty, all symbol variants
-    group_info = defaultdict(lambda: {"symbol": "", "isin": "", "net_qty": 0.0, "symbols": set()})
-    for trade in trades:
-        symbol = trade.get("symbol", "")
-        isin = trade.get("isin", "")
-        key = isin if isin else symbol
-        if not key:
-            continue
-        qty = _parse_float(trade.get("quantity", "0"))
-        if qty is None:
-            log.warning(
-                "Invalid quantity '%s' for trade %s (%s) — excluded from net accumulation"
-                " (conversion will also reject it)",
-                trade.get("quantity", ""), trade.get("tradeID", "?"), symbol,
-            )
-            continue
-        group_info[key]["net_qty"] += qty
-        group_info[key]["symbols"].add(symbol)
-        if not group_info[key]["isin"]:
-            group_info[key]["isin"] = isin
-        if not group_info[key]["symbol"]:
-            group_info[key]["symbol"] = symbol
-
-    negative_keys = {key for key, info in group_info.items() if info["net_qty"] < -0.001}
-
-    negative_symbols = set()
-    negative_isins = set()
-    for key in sorted(negative_keys):
-        info = group_info[key]
-        negative_symbols.update(info["symbols"])
-        if info["isin"]:
-            negative_isins.add(info["isin"])
-        log.debug(
-            "Window-only: %s (%s) - net position is negative (%.4g shares). "
-            "The original buy predates the 365-day query window.",
-            info["symbol"], info["isin"] or "no ISIN", info["net_qty"],
-        )
-
-    filtered = [
-        t for t in trades
-        if t.get("symbol", "") not in negative_symbols
-        and t.get("isin", "") not in negative_isins
-    ]
-    dropped = len(trades) - len(filtered)
-    return filtered, negative_symbols, negative_isins, dropped
-
-
-# ---------------------------------------------------------------------------
 # Main sync logic
 # ---------------------------------------------------------------------------
 
@@ -1084,18 +958,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # CASH (FX conversions) and OPT are never imported; drop them before any gate
     trades = [t for t in trades if t.get("assetCategory", "") not in SKIP_ASSET_CATEGORIES]
 
-    # Dividend skip sets: window-only view (positions whose buy predates the
-    # 365-day window). Kept as-is so dividend behaviour does not change.
-    window_trades, orphaned_symbols, orphaned_isins, _ = filter_orphaned_closing_trades(trades)
-    _, negative_symbols, negative_isins, _ = filter_net_negative_positions(window_trades)
-
     # Trade gate: Ghostfolio holdings + not-yet-imported trades must not go negative
     trades = filter_trades_by_holdings(trades, positions, ghost_account_id, mapping,
                                        existing_trade_ids)
-
-    # Combined skip sets for dividend filtering
-    skip_symbols = orphaned_symbols | negative_symbols
-    skip_isins = orphaned_isins | negative_isins
 
     # Convert and filter trades
     unmapped = {}
@@ -1130,13 +995,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     div_activities = []
     div_skipped_dup = 0
 
+    # Cash Transactions only pay shares actually held, so a symbol without a
+    # buy in the 365-day window (long-held, partly sold) still gets its dividends
     for div in dividends:
-        div_symbol = div.get("symbol", "")
-        div_isin = div.get("isin", "")
-        if div_symbol in skip_symbols or (div_isin and div_isin in skip_isins):
-            log.debug("Skipping dividend for %s - position was fully closed (orphaned)", div_symbol)
-            continue
-
         activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
         if activity:
             date_part = activity["comment"].rsplit("#", 1)[-1]
