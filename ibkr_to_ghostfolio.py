@@ -1112,8 +1112,14 @@ def main():
     failed_accounts = []
 
     for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
-        unmapped, ok = process_account(config, ibkr_id, qid, gf_name, mapping,
-                                       existing_trade_ids, existing_dividend_comments, positions)
+        # process_account handles the failures it expects; an unforeseen error in one
+        # account must cost that account, not the accounts still to be processed
+        try:
+            unmapped, ok = process_account(config, ibkr_id, qid, gf_name, mapping,
+                                           existing_trade_ids, existing_dividend_comments, positions)
+        except Exception:
+            log.exception("Unexpected error while processing IBKR account %s", ibkr_id)
+            unmapped, ok = {}, False
         all_unmapped.update(unmapped)
         if not ok:
             failed_accounts.append(ibkr_id)
