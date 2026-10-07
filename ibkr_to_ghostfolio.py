@@ -369,7 +369,9 @@ def ghost_get_existing_orders(config):
 
     Returns a tuple of (trade_ids, dividend_comments, positions):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
-    - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"
+    - dividend_comments: set of (accountId, comment) tuples, e.g.
+      ("acc-id", "dividend#SPY#2024-01-15"). Keyed by account so two accounts
+      holding the same ISIN paid on the same day do not dedup against each other
     - positions: {"qty": net BUY-SELL qty by (accountId, symbol),
                   "isin_symbols": symbols seen by (accountId, isin),
                   "manual_sells": [[date, qty], ...] by (accountId, symbol) for
@@ -431,7 +433,7 @@ def ghost_get_existing_orders(config):
             if tid:
                 trade_ids.add(tid)
         elif comment.startswith("dividend#"):
-            dividend_comments.add(comment)
+            dividend_comments.add((order.get("accountId") or "", comment))
 
         if order.get("type") == "DIVIDEND":
             symbol = profile["symbol"]
@@ -1111,8 +1113,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
         if activity:
             date_part = activity["comment"].rsplit("#", 1)[-1]
             old_comment = f"dividend#{activity['symbol']}#{date_part}"
-            if (activity["comment"] in existing_dividend_comments
-                    or old_comment in existing_dividend_comments):
+            acct = activity["accountId"]
+            if ((acct, activity["comment"]) in existing_dividend_comments
+                    or (acct, old_comment) in existing_dividend_comments):
                 div_skipped_dup += 1
                 continue
             matched = _dividend_date_matches(positions, activity)
@@ -1144,7 +1147,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
                 sign = -1.0 if activity["type"] == "SELL" else 1.0
                 positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
             elif comment.startswith("dividend#"):
-                existing_dividend_comments.add(comment)
+                existing_dividend_comments.add((activity["accountId"], comment))
                 positions["dividend_dates"][(activity["accountId"], activity["symbol"])].append(
                     activity["date"][:10])
         if not import_ok:
