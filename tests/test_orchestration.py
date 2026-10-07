@@ -707,3 +707,26 @@ def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch)
 
 
 original_import = m.ghost_import_activities
+
+
+@pytest.mark.parametrize("change", ["source", "date", "missing-id"])
+def test_wrong_accepted_identity_cannot_back_sale(monkeypatch, change):
+    from types import SimpleNamespace
+    w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL")))
+    monkeypatch.setattr(m, "ghost_import_activities", original_import)
+    calls = []
+    def post(*args, **kwargs):
+        candidates = kwargs["json"]["activities"]
+        calls.append(candidates)
+        row = {**candidates[0], "id": "new-row", "assetProfile": {"symbol": "KO", "dataSource": "YAHOO"}}
+        if change == "source":
+            row["assetProfile"]["dataSource"] = "MANUAL"
+        elif change == "date":
+            row["date"] = "2026-09-01T00:00:00Z"
+        else:
+            del row["id"]
+        return SimpleNamespace(status_code=201, json=lambda: {"activities": [row]})
+    monkeypatch.setattr(m.requests, "post", post)
+    cfg = {**CFG}
+    assert m.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
+    assert len(calls) == 1 and all(a["type"] == "BUY" for a in calls[0])

@@ -510,6 +510,20 @@ def accepted_import_subset(submitted, body):
         if any(not isinstance(v, str) or not v for v in key) or key not in by_key or key in seen:
             raise RuntimeError("Unmatched or repeated accepted import identity")
         original = by_key[key]
+        profile = row.get("assetProfile")
+        if (not isinstance(row.get("id"), str) or not row["id"].strip()
+                or not isinstance(profile, dict)
+                or not isinstance(profile.get("symbol"), str) or not profile["symbol"].strip()
+                or profile.get("dataSource") != original.get("dataSource")):
+            raise RuntimeError("Accepted activity lacks created identity or matching data source")
+        try:
+            returned_date = datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
+            submitted_date = datetime.fromisoformat(original["date"].replace("Z", "+00:00"))
+        except (KeyError, AttributeError, TypeError, ValueError):
+            raise RuntimeError("Accepted activity lacks a valid date") from None
+        if (returned_date.tzinfo is None or submitted_date.tzinfo is None
+                or returned_date != submitted_date):
+            raise RuntimeError("Accepted activity has a different date")
         for field in ("type", "quantity", "unitPrice", "fee", "currency"):
             if row.get(field) != original.get(field):
                 raise RuntimeError("Accepted activity differs from submitted financial evidence")
