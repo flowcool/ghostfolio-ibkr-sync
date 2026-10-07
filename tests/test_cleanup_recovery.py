@@ -270,3 +270,38 @@ def test_changed_second_pair_aborts_before_first_mutation(world):
     with pytest.raises(RuntimeError, match="changed"):
         resume(world)
     assert world["calls"] == []
+
+
+
+def test_completion_between_reads_records_both_inferred_outcomes(world, monkeypatch):
+    world["put"] = "timeout-committed"
+    with pytest.raises(RuntimeError):
+        apply(world)
+    real = recovery.pair_state
+    reads = []
+    def read(*args):
+        reads.append(1)
+        if len(reads) == 3:
+            world["rows"].pop("synced", None)
+        return real(*args)
+    monkeypatch.setattr(recovery, "pair_state", read)
+    resume(world)
+    pair = journal(world)["pairs"]["synced"]
+    assert pair["put"] == pair["delete"] == "succeeded"
+    assert world["calls"] == ["PUT"]
+
+
+def test_failed_inferred_put_persistence_prevents_recovery_delete(world, monkeypatch):
+    world["put"] = "timeout-committed"
+    with pytest.raises(RuntimeError):
+        apply(world)
+    real = recovery.write_journal
+    def write(path, doc, create=False):
+        if doc["pairs"]["synced"]["put"] == "succeeded":
+            raise OSError("disk")
+        real(path, doc, create)
+    monkeypatch.setattr(recovery, "write_journal", write)
+    with pytest.raises(OSError):
+        resume(world)
+    assert world["calls"] == ["PUT"] and "synced" in world["rows"]
+    assert journal(world)["pairs"]["synced"]["put"] == "unknown"

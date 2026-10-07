@@ -155,7 +155,7 @@ def execute_pairs(tool, config, path, journal, apply):
         # operators must quiesce other writers for both normal apply and resume.
         action, _ = pair_state(tool, config, pair)
         if action == "complete":
-            pair["delete"] = "succeeded"
+            pair["put"] = pair["delete"] = "succeeded"
             write_journal(path, journal)
             continue
         if action != "delete":
