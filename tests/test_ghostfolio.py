@@ -77,31 +77,104 @@ def test_http_error_propagates(monkeypatch):
 
 # --- import ---------------------------------------------------------------
 
+def _unresolved_400(symbol, index=0):
+    """A Ghostfolio import 400 body for a symbol the data source cannot resolve."""
+    return {"error": "Bad Request", "statusCode": 400,
+            "message": [f'activities.{index}.symbol ("{symbol}") '
+                        f'cannot be resolved by the data source ("YAHOO")']}
+
+
+def sequence_post(monkeypatch, responses):
+    """Serve the given responses to successive POSTs; record the sent batches."""
+    sent = []
+    it = iter(responses)
+
+    def _post(url, headers, json, timeout):
+        sent.append(json["activities"])
+        return next(it)
+    monkeypatch.setattr(m.requests, "post", _post)
+    return sent
+
+
 def test_import_with_nothing_to_do_sends_nothing(monkeypatch):
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("POST must not be sent"))
-    assert m.ghost_import_activities(CFG, []) is True
+    assert m.ghost_import_activities(CFG, []) == ([], True)
 
 
 def test_dry_run_never_posts(monkeypatch):
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("POST must not be sent"))
-    assert m.ghost_import_activities({**CFG, "dry_run": True}, [{"type": "BUY"}]) is True
+    acts = [{"type": "BUY"}]
+    assert m.ghost_import_activities({**CFG, "dry_run": True}, acts) == (acts, True)
 
 
-def test_import_http_error_returns_false(monkeypatch):
-    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({}, 400, "bad symbol"))
-    assert m.ghost_import_activities(CFG, [{"type": "BUY"}]) is False
+def test_import_success_returns_all_activities(monkeypatch):
+    acts = [{"symbol": "KO"}, {"symbol": "AAPL"}]
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": acts}, 201))
+    assert m.ghost_import_activities(CFG, acts) == (acts, True)
+
+
+def test_unknown_400_fails_hard_without_retry(monkeypatch):
+    """A non per-symbol 400 (e.g. too many activities) fails hard, no retry."""
+    sent = sequence_post(monkeypatch, [Resp({"message": ["Too many activities (1 at most)"]}, 400)])
+    assert m.ghost_import_activities(CFG, [{"symbol": "KO"}]) == ([], False)
+    assert len(sent) == 1                                                   # no retry
 
 
 def test_import_network_error_returns_false(monkeypatch):
     def boom(*a, **k):
         raise m.requests.ConnectionError("down")
     monkeypatch.setattr(m.requests, "post", boom)
-    assert m.ghost_import_activities(CFG, [{"type": "BUY"}]) is False
+    assert m.ghost_import_activities(CFG, [{"symbol": "KO"}]) == ([], False)
 
 
 def test_import_short_accepted_count_is_not_a_failure(monkeypatch):
+    acts = [{"symbol": "KO"}, {"symbol": "AAPL"}]
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [{}]}, 201))
-    assert m.ghost_import_activities(CFG, [{"a": 1}, {"a": 2}]) is True
+    assert m.ghost_import_activities(CFG, acts) == (acts, True)
+
+
+# --- unresolved-symbol drop-and-retry -------------------------------------
+
+def test_parse_unresolved_symbol():
+    assert m.parse_unresolved_symbol(_unresolved_400("XYZ")) == "XYZ"
+    # Raw escaped JSON text (no decoded body) still parses.
+    assert m.parse_unresolved_symbol(None, 'symbol (\\"XYZ\\") cannot be resolved '
+                                           'by the data source (\\"YAHOO\\")') == "XYZ"
+    # Not a per-symbol resolution error -> None (must not be retried).
+    assert m.parse_unresolved_symbol({"message": ["Too many activities (1 at most)"]}) is None
+    assert m.parse_unresolved_symbol(None, "") is None
+
+
+def test_unresolved_symbol_is_dropped_and_batch_retried(monkeypatch):
+    acts = [{"symbol": "KO", "comment": "IBKR#1", "type": "BUY"},
+            {"symbol": "BADSYM", "comment": "IBKR#2", "type": "BUY"},
+            {"symbol": "AAPL", "comment": "IBKR#3", "type": "BUY"}]
+    sent = sequence_post(monkeypatch, [
+        Resp(_unresolved_400("BADSYM", index=1), 400),
+        Resp({"activities": [{}, {}]}, 201),
+    ])
+    imported, ok = m.ghost_import_activities(CFG, acts)
+    assert [a["symbol"] for a in imported] == ["KO", "AAPL"]                 # BADSYM dropped
+    assert ok is False                                                      # degraded -> exit 1
+    assert len(sent) == 2                                                   # one retry
+    assert [a["symbol"] for a in sent[1]] == ["KO", "AAPL"]                 # retry excludes BADSYM
+
+
+def test_all_symbols_unresolved_imports_nothing(monkeypatch):
+    acts = [{"symbol": "BAD1"}, {"symbol": "BAD2"}]
+    sequence_post(monkeypatch, [
+        Resp(_unresolved_400("BAD1"), 400),
+        Resp(_unresolved_400("BAD2"), 400),
+    ])
+    assert m.ghost_import_activities(CFG, acts) == ([], False)
+
+
+def test_unmatched_rejected_symbol_aborts_without_looping(monkeypatch):
+    """A rejected symbol absent from the batch must not spin the retry loop."""
+    acts = [{"symbol": "KO"}]
+    sent = sequence_post(monkeypatch, [Resp(_unresolved_400("NOTSENT"), 400)] * 5)
+    assert m.ghost_import_activities(CFG, acts) == ([], False)
+    assert len(sent) == 1                                                   # aborted, no loop
 
 
 # --- account lookup and cash balance -------------------------------------
