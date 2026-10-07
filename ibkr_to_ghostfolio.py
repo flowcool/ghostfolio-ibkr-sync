@@ -458,16 +458,56 @@ def ghost_get_existing_orders(config):
     return trade_ids, dividend_comments, positions
 
 
-def ghost_import_activities(config, activities):
-    """Import activities into Ghostfolio.  Returns True on success.
+# Ghostfolio aborts the whole import on the first activity whose symbol the
+# data provider cannot resolve, returning a 400 whose message names that symbol
+# (data-provider.service.ts validateActivities, confirmed at 3.80.2). The symbol
+# is quoted; the backslashes tolerate both the decoded message and the raw
+# escaped JSON text.
+_UNRESOLVED_SYMBOL_RE = re.compile(
+    r'symbol \(\\?"([^"\\]+)\\?"\) cannot be resolved by the data source')
 
-    Ghostfolio reports its own duplicate detection per activity in a 200
-    response and silently skips those, so a short accepted count is not a
-    failure.
+
+def parse_unresolved_symbol(body, text=""):
+    """Return the ticker Ghostfolio could not resolve from an import 400, else None.
+
+    None means the 400 is not a per-symbol resolution error (too many
+    activities, premium required, invalid data source, ...) and must not be
+    retried.  body is the parsed JSON (dict or None); text is the raw fallback.
+    """
+    messages = []
+    if isinstance(body, dict):
+        msg = body.get("message")
+        if isinstance(msg, list):
+            messages = [str(x) for x in msg]
+        elif msg:
+            messages = [str(msg)]
+    haystack = " ".join(messages) if messages else (text or "")
+    match = _UNRESOLVED_SYMBOL_RE.search(haystack)
+    return match.group(1) if match else None
+
+
+def ghost_import_activities(config, activities):
+    """Import activities into Ghostfolio.  Returns (imported, ok).
+
+    imported — the activities Ghostfolio accepted, for the caller's dedup
+               bookkeeping; a strict subset when some symbols were dropped.
+    ok       — True for a clean run, False when the run is degraded (a symbol
+               was dropped) or failed, so the caller exits non-zero.
+
+    Ghostfolio validates the whole /api/v1/import batch and aborts on the first
+    activity whose symbol the data provider cannot resolve, failing trades and
+    dividends alike with a single 400.  To stop one bad ticker from costing the
+    whole account, such a 400 drops that symbol's activities, warns, and retries
+    the reduced batch; the run still ends non-zero so the skipped symbol stays
+    visible.  Other 400s (too many activities, premium, ...) are not per-symbol
+    and fail hard without retrying.
+
+    Ghostfolio reports its own duplicate detection per activity in a 2xx and
+    silently skips those, so a short accepted count is not a failure.
     """
     if not activities:
         log.info("No new activities to import")
-        return True
+        return [], True
     if config.get("dry_run"):
         log.info("[DRY RUN] would import %d activities (no POST sent):", len(activities))
         for a in activities:
@@ -475,33 +515,67 @@ def ghost_import_activities(config, activities):
                      a.get("type"), a.get("symbol"), a.get("quantity"),
                      a.get("unitPrice"), a.get("currency"), a.get("fee"),
                      a.get("comment"))
-        return True
+        return list(activities), True
     url = f"{config['ghost_host']}/api/v1/import"
-    payload = {"activities": activities}
-    try:
-        resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
-                             json=payload, timeout=60)
-    except requests.RequestException as exc:
-        log.error("Import request failed: %s", exc)
-        return False
-    if resp.status_code >= 400:
-        log.error("Import failed (%d): %s", resp.status_code, resp.text)
-        log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
-        return False
+    remaining = list(activities)
+    dropped_symbols = []
+    # Each iteration drops one symbol, so the loop can never run more times than
+    # there are distinct symbols (+1 for the final accepting POST).
+    max_attempts = len({a.get("symbol") for a in activities}) + 1
 
-    accepted = None
-    try:
-        body = resp.json()
-    except ValueError:
-        body = None
-    if isinstance(body, dict) and isinstance(body.get("activities"), list):
-        accepted = len(body["activities"])
-    if accepted is not None and accepted < len(activities):
-        log.info("Ghostfolio accepted %d of %d activities (the rest were detected as duplicates)",
-                 accepted, len(activities))
-    else:
-        log.info("Successfully imported %d activities", len(activities))
-    return True
+    for _ in range(max_attempts):
+        try:
+            resp = requests.post(url, headers=ghost_headers(config["ghost_token"]),
+                                 json={"activities": remaining}, timeout=60)
+        except requests.RequestException as exc:
+            log.error("Import request failed: %s", exc)
+            return [], False
+
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+
+        if resp.status_code < 400:
+            accepted = None
+            if isinstance(body, dict) and isinstance(body.get("activities"), list):
+                accepted = len(body["activities"])
+            if accepted is not None and accepted < len(remaining):
+                log.info("Ghostfolio accepted %d of %d activities (the rest were detected as duplicates)",
+                         accepted, len(remaining))
+            else:
+                log.info("Successfully imported %d activities", len(remaining))
+            if dropped_symbols:
+                log.warning("Imported without %d unresolved symbol(s): %s — add a mapping entry "
+                            "(symbol_mapping) so they are recognised next run",
+                            len(dropped_symbols), ", ".join(dropped_symbols))
+                return remaining, False
+            return remaining, True
+
+        symbol = parse_unresolved_symbol(body, resp.text)
+        if symbol is None:
+            log.error("Import failed (%d): %s", resp.status_code, resp.text)
+            log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
+            return [], False
+
+        before = len(remaining)
+        remaining = [a for a in remaining if a.get("symbol") != symbol]
+        if before == len(remaining):
+            # The named symbol matches no activity we can drop (e.g. a
+            # server-side resolved name); retrying would loop forever.
+            log.error("Ghostfolio rejected symbol %r but no matching activity was found to drop; "
+                      "aborting import for this account. Response: %s", symbol, resp.text)
+            return [], False
+        dropped_symbols.append(symbol)
+        log.warning("Ghostfolio cannot resolve symbol %r (%d activity/ies dropped); retrying without it",
+                    symbol, before - len(remaining))
+        if not remaining:
+            log.warning("All activities were dropped as unresolved; nothing imported for this account")
+            return [], False
+
+    log.error("Import did not converge after dropping %d symbol(s): %s",
+              len(dropped_symbols), ", ".join(dropped_symbols))
+    return [], False
 
 
 def ghost_update_cash_balance(config, account_id, balance):
@@ -1055,23 +1129,25 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     activities.extend(div_activities)
 
-    # Import all activities
+    # Import all activities. Bookkeeping runs over the activities actually
+    # imported, never the ones dropped as unresolved, so a dropped symbol is not
+    # recorded as synced.
     if activities:
-        if ghost_import_activities(config, activities):
-            for activity in activities:
-                comment = activity["comment"]
-                if comment.startswith("IBKR#"):
-                    tid = comment.split("#", 1)[1]
-                    if tid:
-                        existing_trade_ids.add(tid)
-                    # Keep holdings current for a later account mapped to the same Ghostfolio account
-                    sign = -1.0 if activity["type"] == "SELL" else 1.0
-                    positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
-                elif comment.startswith("dividend#"):
-                    existing_dividend_comments.add(comment)
-                    positions["dividend_dates"][(activity["accountId"], activity["symbol"])].append(
-                        activity["date"][:10])
-        else:
+        imported, import_ok = ghost_import_activities(config, activities)
+        for activity in imported:
+            comment = activity["comment"]
+            if comment.startswith("IBKR#"):
+                tid = comment.split("#", 1)[1]
+                if tid:
+                    existing_trade_ids.add(tid)
+                # Keep holdings current for a later account mapped to the same Ghostfolio account
+                sign = -1.0 if activity["type"] == "SELL" else 1.0
+                positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
+            elif comment.startswith("dividend#"):
+                existing_dividend_comments.add(comment)
+                positions["dividend_dates"][(activity["accountId"], activity["symbol"])].append(
+                    activity["date"][:10])
+        if not import_ok:
             ok = False
 
     # Update cash balance (independent of import success)

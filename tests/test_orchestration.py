@@ -68,7 +68,7 @@ class World:
 
     def _import(self, cfg, acts):
         self.imported.append(list(acts))
-        return self.import_ok
+        return (list(acts), True) if self.import_ok else ([], False)
 
     def _cash(self, cfg, acc, balance):
         if isinstance(self.cash_ok, Exception):
@@ -268,7 +268,7 @@ def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, 
     env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     env.setattr(m, "fetch_flex_report", lambda token, qid, *a, **k: fetched.append(qid) or report(trade_xml("T1")))
     env.setattr(m, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
-    env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or True)
+    env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(m, "ghost_update_cash_balance", lambda cfg, acc, bal: cash.append(acc) or True)
     real = m.convert_trade_to_activity
     calls = []
@@ -518,7 +518,7 @@ def test_main_shares_the_existing_sets_between_accounts_through_the_real_process
     env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     env.setattr(m, "fetch_flex_report", lambda *a, **k: report(trade_xml("T1")))        # same trade for both
     env.setattr(m, "ghost_find_account_id", lambda cfg, name: "same-gf-account")       # both map to one account
-    env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or True)
+    env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(m, "ghost_update_cash_balance", lambda *a: True)
     assert m.main() == 0
     assert len(imported) == 1 and imported[0][0]["comment"] == "IBKR#T1"               # B sees A's import
