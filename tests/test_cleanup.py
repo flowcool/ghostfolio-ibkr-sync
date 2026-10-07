@@ -101,3 +101,64 @@ def test_comment_update_rejects_missing_source_without_http(tool):
     del a["assetProfile"]["dataSource"]
     with pytest.raises(RuntimeError, match="data source"):
         tool.put_comment({"ghost_host": "http://synthetic", "ghost_token": "fake"}, a, "tag", False)
+
+
+@pytest.mark.parametrize("field,value", [("accountId", "other-account"), ("currency", "EUR"),
+                                        ("dataSource", "MANUAL")])
+def test_duplicate_pairing_requires_same_financial_identity(tool, monkeypatch, caplog, field, value):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    if field == "dataSource":
+        manual["assetProfile"][field] = value
+    else:
+        manual[field] = value
+    run_cleanup(tool, monkeypatch, [activity(tool), manual])
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("field", ["accountId", "currency", "dataSource"])
+@pytest.mark.parametrize("value", [None, "", " "])
+def test_incomplete_identity_aborts_before_planning(tool, monkeypatch, caplog, field, value):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    if field == "dataSource":
+        manual["assetProfile"][field] = value
+    else:
+        manual[field] = value
+    with pytest.raises(RuntimeError, match="identity"):
+        run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert not any("Matched pairs" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("changed", ["accountId", "currency", "symbol", "dataSource", "quantity", "date", "comment"])
+def test_changed_fresh_manual_activity_never_reaches_mutation(tool, monkeypatch, changed):
+    manual = activity(tool, "manual")
+    fresh = deepcopy(manual)
+    if changed in ("symbol", "dataSource"):
+        fresh["assetProfile"][changed] = "OTHER"
+    elif changed == "quantity":
+        fresh[changed] = 2
+    else:
+        fresh[changed] = "changed"
+    monkeypatch.setattr(tool.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: fresh))
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert exc.value.code == 1
+    assert writes == []
+
+
+def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monkeypatch):
+    manual = activity(tool, "manual")
+    fresh = deepcopy(manual)
+    fresh["SymbolProfile"] = fresh.pop("assetProfile")
+    monkeypatch.setattr(tool.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: fresh))
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert writes == ["PUT", "DELETE"]

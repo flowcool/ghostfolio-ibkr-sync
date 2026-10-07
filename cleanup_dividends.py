@@ -111,11 +111,27 @@ def symbol_of(activity):
     return profile_of(activity)["symbol"]
 
 
+def identity_of(activity):
+    """Require complete account, currency and asset identity for cleanup."""
+    profile = profile_of(activity)
+    identity = (activity.get("accountId"), activity.get("currency"),
+                profile.get("dataSource"), profile["symbol"])
+    if any(not isinstance(value, str) or not value.strip() for value in identity):
+        raise RuntimeError("Incomplete cleanup identity (account, currency or data source)")
+    return identity
+
+
+def snapshot_matches(fresh, planned):
+    """Refuse a stale plan before tagging the manual entry or deleting its pair."""
+    fields = ("id", "type", "date", "quantity", "unitPrice", "fee", "comment")
+    return (identity_of(fresh) == identity_of(planned)
+            and all(fresh.get(field) == planned.get(field) for field in fields))
+
+
 def put_comment(config, activity, new_comment, dry_run):
     profile = profile_of(activity)
-    source = profile.get("dataSource")
-    if not isinstance(source, str) or not source.strip():
-        raise RuntimeError("Missing or invalid asset profile data source; refusing cleanup")
+    identity_of(activity)
+    source = profile["dataSource"]
     activity_id = activity["id"]
     url = f"{config['ghost_host']}/api/v1/activities/{activity_id}"
     if dry_run:
@@ -175,7 +191,7 @@ def main():
     # Reject incomplete profile context before planning any destructive cleanup.
     for activity in all_activities:
         if activity.get("type") in ("BUY", "SELL", "DIVIDEND"):
-            profile_of(activity)
+            identity_of(activity)
 
     # Split dividend# (IBKR-synced) vs manual dividends
     div_ibkr = []   # comment starts with "dividend#"
@@ -198,7 +214,7 @@ def main():
     used_manual_ids = set()
 
     for ib in div_ibkr:
-        ib_sym = symbol_of(ib)
+        ib_identity = identity_of(ib)
         ib_qty = ib.get("quantity")
         ib_price = ib.get("unitPrice")
         ib_date = parse_date(ib.get("date"))
@@ -209,7 +225,7 @@ def main():
         for m in div_manual:
             if m["id"] in used_manual_ids:
                 continue
-            if symbol_of(m) != ib_sym:
+            if identity_of(m) != ib_identity:
                 continue
             if abs(m.get("quantity", 0) - ib_qty) > 1e-9:
                 continue
@@ -294,6 +310,15 @@ def main():
             m_full = fresh.json()
         except Exception as e:
             log.error("  Cannot parse response for %s: %s", m["id"], e)
+            errors += 1
+            continue
+
+        try:
+            unchanged = snapshot_matches(m_full, m)
+        except RuntimeError:
+            unchanged = False
+        if not unchanged:
+            log.error("  Manual activity %s changed or has incomplete identity; refusing pair", m["id"])
             errors += 1
             continue
 
