@@ -333,6 +333,15 @@ def ghost_headers(token):
     }
 
 
+def activity_date_is_current(activity):
+    """Conservatively refuse future instants (server drafts use local end of day)."""
+    try:
+        instant = datetime.fromisoformat(activity["date"].replace("Z", "+00:00"))
+        return instant.tzinfo is not None and instant <= datetime.now(timezone.utc)
+    except (KeyError, TypeError, AttributeError, ValueError):
+        return False
+
+
 def activity_is_active(activity):
     """Follow Ghostfolio draft/exclusion tags; refuse malformed active context."""
     if not isinstance(activity, dict):
@@ -547,7 +556,7 @@ def accepted_import_subset(submitted, body):
         if any(not isinstance(v, str) or not v for v in key) or key not in by_key or key in seen:
             raise RuntimeError("Unmatched or repeated accepted import identity")
         original = by_key[key]
-        if not activity_is_active(row):
+        if not activity_is_active(row) or not activity_date_is_current(row):
             raise RuntimeError("Created activity is inactive; cannot update active holdings")
         profile = row.get("assetProfile")
         if (not isinstance(row.get("id"), str) or not row["id"].strip()
@@ -1205,7 +1214,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
         trade_unmapped = {}
         activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
-        if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+        if activity is None or not activity_date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
             ok = False
@@ -1234,6 +1243,10 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # buy in the 365-day window (long-held, partly sold) still gets its dividends
     for div in dividends:
         activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
+        if activity and not activity_date_is_current(activity):
+            log.error("Future or invalid dividend date; deferred until a later run")
+            ok = False
+            continue
         if activity:
             date_part = activity["comment"].rsplit("#", 1)[-1]
             old_comment = f"dividend#{activity['symbol']}#{date_part}"

@@ -765,3 +765,16 @@ def test_canonical_accepted_buy_cannot_back_sale_under_original_ticker(monkeypat
     assert len(calls) == 1
     assert w.pos["qty"][(ACC, "KO")] == 0
     assert w.pos["qty"][(ACC, "KO.CANONICAL")] == 10
+
+
+
+def test_future_buy_cannot_back_current_sell(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("B", date="20990801;100000") + trade_xml("S", "SELL")))
+    assert w.run()[1] is False
+    assert w.activities == []
+
+
+def test_future_dividend_is_not_created_as_draft(monkeypatch):
+    w = World(monkeypatch, report(divs=div_xml(date="20990801")))
+    assert w.run()[1] is False
+    assert w.activities == []

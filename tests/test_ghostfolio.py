@@ -378,3 +378,10 @@ def test_created_inactive_row_does_not_contribute_active_holding():
     row = {**created(candidate), "tags": [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}]}
     with pytest.raises(RuntimeError, match="inactive"):
         m.accepted_import_subset([candidate], {"activities": [row]})
+
+
+
+def test_exact_import_shape_without_tags_does_not_hide_future_draft():
+    candidate = {**import_candidate(), "date": "2099-08-01T00:00:00Z"}
+    with pytest.raises(RuntimeError, match="inactive"):
+        m.accepted_import_subset([candidate], {"activities": [created(candidate)]})
