@@ -155,8 +155,9 @@ def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monk
     manual = activity(tool, "manual")
     fresh = deepcopy(manual)
     fresh["SymbolProfile"] = fresh.pop("assetProfile")
-    monkeypatch.setattr(tool.requests, "get", lambda *args, **kwargs:
-                        SimpleNamespace(status_code=200, json=lambda: fresh))
+    synced = activity(tool)
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: fresh if url.endswith("manual") else synced))
     writes = []
     monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
     monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
@@ -209,7 +210,7 @@ def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkey
         second["assetProfile"] = None
     elif changed == "non-object":
         second = None
-    fresh = iter([deepcopy(acts[1]), second])
+    fresh = iter([deepcopy(acts[1]), deepcopy(acts[0]), second])
     def response(*args, **kwargs):
         obj = next(fresh)
         def json_body():
@@ -225,3 +226,102 @@ def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkey
         run_cleanup(tool, monkeypatch, acts, apply=True)
     assert exc.value.code == 1
     assert writes == [("PUT", "manual"), ("DELETE", "synced")]
+
+
+@pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), -1, True, "1"])
+def test_invalid_financial_evidence_aborts_before_any_write(tool, monkeypatch, field, bad):
+    acts = two_pairs(tool)
+    acts[-1][field] = bad
+    with pytest.raises(RuntimeError, match="financial evidence"):
+        run_cleanup(tool, monkeypatch, acts, apply=True)
+
+
+@pytest.mark.parametrize("field,bad", [("date", None), ("date", "bad"), ("id", ""), ("quantity", 0)])
+def test_incomplete_evidence_is_not_a_match(tool, monkeypatch, field, bad):
+    manual = activity(tool, "manual")
+    manual[field] = bad
+    with pytest.raises(RuntimeError):
+        run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+
+
+def test_fee_conflict_keeps_both_records(tool, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    synced = activity(tool)
+    synced["fee"] = 1
+    run_cleanup(tool, monkeypatch, [synced, activity(tool, "manual")], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_ambiguous_pair_is_never_chosen_by_order(tool, monkeypatch, caplog, reverse):
+    caplog.set_level("INFO")
+    acts = [activity(tool), activity(tool, "manual"), activity(tool, "manual-2")]
+    run_cleanup(tool, monkeypatch, acts[::-1] if reverse else acts, apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+def test_two_synced_candidates_cannot_claim_same_manual(tool, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    other = activity(tool)
+    other["id"] = "synced-2"
+    run_cleanup(tool, monkeypatch, [activity(tool), other, activity(tool, "manual")], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("change", ["quantity", "fee", "id", "comment", "date", "tags"])
+def test_changed_synced_preimage_never_reaches_put_or_delete(tool, monkeypatch, change):
+    synced, manual = activity(tool), activity(tool, "manual")
+    changed = deepcopy(synced)
+    changed[change] = [{"id": "new-tag"}] if change == "tags" else (99 if change in ("quantity", "fee") else "changed")
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: manual if url.endswith("manual") else changed))
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+    assert exc.value.code == 1
+
+
+@pytest.mark.parametrize("which", ["manual", "synced"])
+@pytest.mark.parametrize("flag", ["isExcluded", "isDraft", "account", "tags"])
+def test_inactive_candidate_is_never_used_for_destructive_pair(tool, monkeypatch, caplog, which, flag):
+    caplog.set_level("INFO")
+    synced, manual = activity(tool), activity(tool, "manual")
+    a = manual if which == "manual" else synced
+    a[flag] = ({"isExcluded": True} if flag == "account" else
+               [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}] if flag == "tags" else True)
+    run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("stage", ["get", "put", "delete"])
+def test_request_failure_stops_cleanup_without_blind_retry(tool, monkeypatch, stage):
+    acts = two_pairs(tool)
+    by_id = {a["id"]: a for a in acts}
+    calls = []
+    def get(url, **kwargs):
+        if stage == "get":
+            raise tool.requests.Timeout("synthetic")
+        return SimpleNamespace(status_code=200, json=lambda: deepcopy(by_id[url.rsplit("/", 1)[1]]))
+    def put(*args, **kwargs):
+        calls.append("PUT")
+        if stage == "put":
+            raise tool.requests.Timeout("synthetic")
+        return SimpleNamespace(status_code=200)
+    def delete(*args, **kwargs):
+        calls.append("DELETE")
+        raise tool.requests.Timeout("synthetic")
+    monkeypatch.setattr(tool.requests, "get", get)
+    monkeypatch.setattr(tool.requests, "put", put)
+    monkeypatch.setattr(tool.requests, "delete", delete)
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, acts, apply=True)
+    assert exc.value.code == 1
+    assert calls == ([] if stage == "get" else ["PUT"] if stage == "put" else ["PUT", "DELETE"])
+
+
+def test_incomplete_listing_aborts_cleanup(tool, monkeypatch):
+    monkeypatch.setattr(tool.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(raise_for_status=lambda: None,
+                                        json=lambda: {"activities": [activity(tool)], "count": 2}))
+    with pytest.raises(RuntimeError, match="Incomplete"):
+        tool.fetch_all_activities({"ghost_host": "http://synthetic", "ghost_token": "fake"})
