@@ -503,6 +503,7 @@ def accepted_import_subset(submitted, body):
         by_key[key] = activity
     accepted = []
     seen = set()
+    created_ids = set()
     for row in body["activities"]:
         if not isinstance(row, dict) or row.get("error"):
             raise RuntimeError("Invalid accepted import activity")
@@ -512,6 +513,7 @@ def accepted_import_subset(submitted, body):
         original = by_key[key]
         profile = row.get("assetProfile")
         if (not isinstance(row.get("id"), str) or not row["id"].strip()
+                or row["id"] in created_ids
                 or not isinstance(profile, dict)
                 or not isinstance(profile.get("symbol"), str) or not profile["symbol"].strip()
                 or profile.get("dataSource") != original.get("dataSource")):
@@ -524,10 +526,16 @@ def accepted_import_subset(submitted, body):
         if (returned_date.tzinfo is None or submitted_date.tzinfo is None
                 or returned_date != submitted_date):
             raise RuntimeError("Accepted activity has a different date")
+        for field in ("quantity", "unitPrice", "fee"):
+            for value in (row.get(field), original.get(field)):
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not isfinite(value) or value < 0):
+                    raise RuntimeError("Accepted activity has invalid financial evidence")
         for field in ("type", "quantity", "unitPrice", "fee", "currency"):
             if row.get(field) != original.get(field):
                 raise RuntimeError("Accepted activity differs from submitted financial evidence")
         seen.add(key)
+        created_ids.add(row["id"])
         accepted.append(original)
     return accepted
 

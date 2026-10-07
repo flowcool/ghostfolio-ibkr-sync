@@ -306,3 +306,19 @@ def test_created_identity_date_and_source_required(monkeypatch, field, value):
     cfg = {**CFG}
     assert m.ghost_import_activities(cfg, [candidate]) == ([], False)
     assert cfg["_uncertain_import_accounts"] == {"synthetic"}
+
+
+@pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
+@pytest.mark.parametrize("value", [True, False, None, float("nan"), float("inf"), "1"])
+def test_response_financial_evidence_is_numeric_finite_and_not_boolean(field, value):
+    candidate = {**import_candidate(), field: 1}
+    row = {**created(candidate), field: value}
+    with pytest.raises(RuntimeError, match="financial evidence"):
+        m.accepted_import_subset([candidate], {"activities": [row]})
+
+
+def test_repeated_created_id_does_not_prove_two_created_buys():
+    first, second = import_candidate("IBKR#1"), import_candidate("IBKR#2")
+    rows = [created(first), {**created(second), "id": created(first)["id"]}]
+    with pytest.raises(RuntimeError, match="created identity"):
+        m.accepted_import_subset([first, second], {"activities": rows})
