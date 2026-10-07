@@ -160,6 +160,8 @@ def execute_pairs(tool, config, path, journal, apply):
             continue
         if action != "delete":
             raise RuntimeError("Tagged retained row not verified; refusing DELETE")
+        # A tagged preimage proves a prior PUT committed even after timeout.
+        pair["put"] = "succeeded"
         pair["delete"] = "unknown"
         write_journal(path, journal)
         if not tool.delete_activity(config, pair["synced_preimage"]["id"], dry_run=False):

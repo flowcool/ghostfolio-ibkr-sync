@@ -96,6 +96,8 @@ def test_partial_and_unknown_outcomes_inspect_then_resume_exact_current_state(wo
     assert world["rows"]["manual"]["comment"] == world["synced"]["comment"]
     expected_puts = 2 if stage == "put" and outcome != "timeout-committed" else 1
     assert world["calls"].count("PUT") == expected_puts
+    pair = journal(world)["pairs"]["synced"]
+    assert pair["put"] == pair["delete"] == "succeeded"
     done_calls = list(world["calls"])
     resume(world)
     assert world["calls"] == done_calls
