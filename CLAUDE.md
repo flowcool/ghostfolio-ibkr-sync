@@ -49,6 +49,9 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 | — | Token IBKR dans les logs (URL requests + urllib3 DEBUG), retry réseau | ✅ mergé (#25, v1.0.0) |
 | — | Ventes > 365j ignorées → gate sur holdings Ghostfolio, niveaux de log | ✅ mergé (#27, v1.1.0) |
 | — | Revue 2026-09-30 : lecture activités en 1 appel, garde restricted view, dividendes via Cash Transactions, mapping manquant fatal | ✅ mergé (#30–#34) |
+| — | Dividendes de positions long-détenues partiellement vendues (perte silencieuse) | ✅ mergé (#35, v2.0.1) |
+| — | Revue 2026-10-01 : BUY manuels dédupliqués, isolation exception par compte, suite pytest + CI, README gaps | ✅ mergés (#36–#42, jusqu'à v2.0.3) |
+| — | Contexte de sync restauré depuis l'assetProfile Ghostfolio | ✅ mergé (#43) — pas encore taggé, en prod via `:latest` (`v2.0.3-3-ge610b1d`) |
 
 ## Gotchas ops
 
