@@ -1,0 +1,20 @@
+upstream_repository: ghostfolio/ghostfolio
+first_release: "3.80.2"
+labels: [upstream-release, compatibility, ghostfolio]
+endpoints:
+  - "GET /api/v1/activities: pagination, assetProfile, comments, quantities and account IDs"
+  - "POST /api/v1/import: payload validation, deduplication and error responses"
+  - "GET /api/v1/account: account listing and identifiers"
+  - "GET / PUT /api/v1/account/{id}: balances, currency and body whitelist"
+keywords:
+  - api
+  - breaking
+  - deprecated
+  - removed
+  - activities
+  - assetprofile
+  - symbolprofile
+  - import
+  - account
+  - pagination
+  - authentication
