@@ -1,9 +1,13 @@
 # Build and release guarantees
 
 Every pull request to `main`, including documentation-only changes, runs Python
-regression tests, a runtime dependency audit and container builds/scans for
+regression tests, an audit of the complete Python CI environment and container builds/scans for
 amd64 and arm64. PR builds never log in to GHCR or publish images. CodeQL
-analyzes Python independently. The mandatory checks must pass before merging.
+analyzes Python independently. Dependency Review rejects newly introduced
+moderate or worse dependency vulnerabilities, including development scope.
+The native CodeQL merge rule rejects new medium or worse security findings
+and error-level findings; a successful analysis alone is insufficient.
+The mandatory checks must pass before merging.
 
 Only `main`, `staging` and `v*` tag refs may publish. `latest` is selected only
 for `refs/heads/main`; a release tag publishes its full and minor versions.
