@@ -95,9 +95,7 @@ def verify_endpoints(config):
 def put_comment(config, activity, new_comment, dry_run):
     """PUT the full activity with an updated comment field."""
     profile = profile_of(activity)
-    source = profile.get("dataSource")
-    if not isinstance(source, str) or not source.strip():
-        raise RuntimeError("Missing or invalid asset profile data source; refusing cleanup")
+    source = source_of(activity)
     activity_id = activity["id"]
     url = f"{config['ghost_host']}/api/v1/activities/{activity_id}"
     if dry_run:
@@ -140,6 +138,8 @@ def delete_activity(config, activity_id, dry_run):
 
 def profile_of(activity):
     """Prefer the current profile and refuse unsafe legacy fallback."""
+    if not isinstance(activity, dict):
+        raise RuntimeError("Missing or invalid activity object; refusing cleanup")
     profile = (activity["assetProfile"] if "assetProfile" in activity
                else activity.get("SymbolProfile"))
     if (not isinstance(profile, dict)
@@ -147,6 +147,20 @@ def profile_of(activity):
             or not profile["symbol"].strip()):
         raise RuntimeError("Missing or invalid asset profile symbol; refusing cleanup")
     return profile
+
+
+def source_of(activity):
+    """Require the selected profile's data source before cleanup planning."""
+    source = profile_of(activity).get("dataSource")
+    if not isinstance(source, str) or not source.strip():
+        raise RuntimeError("Missing or invalid asset profile data source; refusing cleanup")
+    return source
+
+
+def validate_fresh_profile(fresh, planned):
+    """Refuse invalid or changed profile context on a fresh manual activity."""
+    if (symbol_of(fresh), source_of(fresh)) != (symbol_of(planned), source_of(planned)):
+        raise RuntimeError("Manual asset profile changed; refusing cleanup pair")
 
 
 def symbol_of(activity):
@@ -177,8 +191,8 @@ def main():
     log.info("Total activities: %d", len(all_activities))
     # Reject incomplete profile context before planning any destructive cleanup.
     for activity in all_activities:
-        if activity.get("type") in ("BUY", "SELL", "DIVIDEND"):
-            profile_of(activity)
+        if activity.get("type") in ("BUY", "SELL"):
+            source_of(activity)
 
     # Split IBKR-synced vs manual
     ibkr = []
@@ -306,7 +320,19 @@ def main():
             log.error("  Cannot fetch manual activity %s (%d)", m["id"], fresh.status_code)
             errors += 1
             continue
-        m_full = fresh.json()
+        try:
+            m_full = fresh.json()
+        except ValueError:
+            log.error("  Cannot parse response for %s", m["id"])
+            errors += 1
+            continue
+
+        try:
+            validate_fresh_profile(m_full, m)
+        except RuntimeError as exc:
+            log.error("  Cannot safely update manual activity %s: %s", m["id"], exc)
+            errors += 1
+            continue
 
         ok = put_comment(config, m_full, new_comment, dry_run=False)
         if ok:
