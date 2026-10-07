@@ -142,7 +142,7 @@ def test_successful_run_imports_and_records_trades_and_dividends(monkeypatch):
     assert sorted(a["comment"] for a in w.activities) == ["IBKR#T1", "IBKR#T2", f"dividend#{ISIN_KO}#2026-07-15"]
     assert len(w.imported) == 1                                     # one POST per account
     assert w.ids == {"T1", "T2"}
-    assert w.comments == {f"dividend#{ISIN_KO}#2026-07-15"}
+    assert w.comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}   # keyed by accountId
     assert w.pos["qty"][(ACC, "KO")] == pytest.approx(10.0)
     assert w.pos["qty"][(ACC, "PEP")] == pytest.approx(6.0)         # 10 - 4
     assert w.pos["dividend_dates"][(ACC, "KO")] == ["2026-07-15"]
@@ -189,8 +189,16 @@ def test_fx_and_option_trades_never_reach_the_import_nor_the_holdings_gate(monke
 @pytest.mark.parametrize("comment", [f"dividend#{ISIN_KO}#2026-07-15", "dividend#KO#2026-07-15"])
 def test_dividend_already_present_by_comment_new_or_old_format_is_skipped(monkeypatch, comment):
     w = World(monkeypatch, report(divs=div_xml()))
-    w.run(comments={comment})
+    w.run(comments={(ACC, comment)})                           # same account -> deduped
     assert w.activities == []
+
+
+def test_dividend_same_isin_and_date_on_a_different_account_is_not_deduped(monkeypatch):
+    """The dedup key is (accountId, comment): a second Ghostfolio account holding
+    the same ISIN paid on the same day must still import its own dividend."""
+    w = World(monkeypatch, report(divs=div_xml()))             # dividend 2026-07-15 on account ACC
+    w.run(comments={("other-gf-account", f"dividend#{ISIN_KO}#2026-07-15")})
+    assert [a["type"] for a in w.activities] == ["DIVIDEND"]    # not skipped: different account
 
 
 @pytest.mark.parametrize("existing,skipped", [("2026-07-17", True), ("2026-07-18", True), ("2026-07-12", True),
@@ -509,7 +517,7 @@ def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch
     monkeypatch.setattr(m, "requests", ForbiddenHttp())
     ids, comments, pos = set(), set(), positions()
     _, ok = m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
-    assert ok is True and ids == {"T1"} and comments == {f"dividend#{ISIN_KO}#2026-07-15"}
+    assert ok is True and ids == {"T1"} and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
 
 
 def test_main_shares_the_existing_sets_between_accounts_through_the_real_process_account(env, monkeypatch):

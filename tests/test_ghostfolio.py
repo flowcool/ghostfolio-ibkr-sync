@@ -49,7 +49,7 @@ def test_existing_activities_are_indexed(monkeypatch, profile_key):
     serve(monkeypatch, {"activities": acts, "count": len(acts)})
     trade_ids, div_comments, pos = m.ghost_get_existing_orders(CFG)
     assert trade_ids == {"T1", "T2"}
-    assert div_comments == {"dividend#US1912161007#2026-07-15"}
+    assert div_comments == {("acc", "dividend#US1912161007#2026-07-15")}   # keyed by accountId
     assert pos["qty"][("acc", "KO")] == pytest.approx(9.0)                  # 10 - 4 - 3 + 6
     assert pos["manual_buys"][("acc", "KO")] == [["2026-07-01", 6.0]]       # IBKR#T1 buy is not manual
     assert pos["manual_sells"][("acc", "KO")] == [["2026-08-01", 3.0]]
