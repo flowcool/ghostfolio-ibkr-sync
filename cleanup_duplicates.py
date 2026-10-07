@@ -27,6 +27,8 @@ from pathlib import Path
 
 import requests
 
+from ibkr_to_ghostfolio import activity_is_active
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -196,14 +198,7 @@ def validate_financial_evidence(activity):
 
 
 def inactive(activity):
-    """Conservatively exclude drafts/exclusions, including account tags."""
-    account = activity.get("account") or {}
-    tags = activity.get("tags", []) + account.get("tags", [])
-    return (activity.get("isDraft") is True or activity.get("isExcluded") is True
-            or account.get("isExcluded") is True
-            or any(tag.get("id") in ("0c077abd-eca2-4cbb-818c-6cefbf2d169a",
-                                     "f2e868af-8333-459f-b161-cbc6544c24bd")
-                   for tag in tags))
+    return not activity_is_active(activity)
 
 
 def fetch_fresh(config, planned):

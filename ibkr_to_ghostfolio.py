@@ -333,6 +333,32 @@ def ghost_headers(token):
     }
 
 
+def activity_is_active(activity):
+    """Follow Ghostfolio draft/exclusion tags; refuse malformed active context."""
+    if not isinstance(activity, dict):
+        raise RuntimeError("Invalid activity eligibility context")
+    account = activity.get("account")
+    if account is None:
+        account = {}
+    if not isinstance(account, dict):
+        raise RuntimeError("Invalid account eligibility context")
+    for context in (activity, account):
+        for flag in ("isDraft", "isExcluded"):
+            if flag in context and not isinstance(context[flag], bool):
+                raise RuntimeError("Invalid activity eligibility flag")
+        tags = context.get("tags", [])
+        if (not isinstance(tags, list)
+                or any(not isinstance(tag, dict) or not isinstance(tag.get("id"), str)
+                       or not tag["id"].strip() for tag in tags)):
+            raise RuntimeError("Invalid activity eligibility tags")
+    inactive_tags = {"0c077abd-eca2-4cbb-818c-6cefbf2d169a",
+                     "f2e868af-8333-459f-b161-cbc6544c24bd"}
+    return not (activity.get("isDraft") or activity.get("isExcluded")
+                or account.get("isDraft") or account.get("isExcluded")
+                or any(tag["id"] in inactive_tags
+                       for context in (activity, account) for tag in context.get("tags", [])))
+
+
 def ghost_get_accounts(config):
     """Fetch all accounts from Ghostfolio."""
     url = f"{config['ghost_host']}/api/v1/account"
@@ -351,6 +377,8 @@ def ghost_find_account_id(config, account_name):
     accounts = data.get("accounts", data) if isinstance(data, dict) else data
     for acc in accounts:
         if acc.get("name") == account_name:
+            if not activity_is_active({"account": acc}):
+                raise RuntimeError("Ghostfolio target account is excluded; refusing sync")
             return acc["id"]
     log.error("Ghostfolio account '%s' not found. Available: %s",
               account_name, [a["name"] for a in accounts])
@@ -436,6 +464,14 @@ def ghost_get_existing_orders(config):
         elif comment.startswith("dividend#"):
             dividend_comments.add((order.get("accountId") or "", comment))
 
+        active = activity_is_active(order)
+        if order.get("type") in ("BUY", "SELL", "DIVIDEND"):
+            source = profile.get("dataSource")
+            if not isinstance(source, str) or not source.strip():
+                raise RuntimeError("Ghostfolio activity has missing data source; refusing sync")
+            if not active or source != "YAHOO":
+                continue
+
         if order.get("type") == "DIVIDEND":
             symbol = profile["symbol"]
             if symbol:
@@ -511,6 +547,8 @@ def accepted_import_subset(submitted, body):
         if any(not isinstance(v, str) or not v for v in key) or key not in by_key or key in seen:
             raise RuntimeError("Unmatched or repeated accepted import identity")
         original = by_key[key]
+        if not activity_is_active(row):
+            raise RuntimeError("Created activity is inactive; cannot update active holdings")
         profile = row.get("assetProfile")
         if (not isinstance(row.get("id"), str) or not row["id"].strip()
                 or row["id"] in created_ids
@@ -536,7 +574,7 @@ def accepted_import_subset(submitted, body):
                 raise RuntimeError("Accepted activity differs from submitted financial evidence")
         seen.add(key)
         created_ids.add(row["id"])
-        accepted.append(original)
+        accepted.append({**original, "symbol": profile["symbol"]})
     return accepted
 
 
@@ -1104,7 +1142,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # Find the Ghostfolio account
     try:
         ghost_account_id = ghost_find_account_id(config, ghost_account_name)
-    except requests.RequestException as exc:
+    except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to look up Ghostfolio account '%s': %s", ghost_account_name, exc)
         return {}, False
     if ghost_account_id is None:
