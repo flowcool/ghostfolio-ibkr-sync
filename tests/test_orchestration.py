@@ -140,7 +140,7 @@ def test_successful_run_imports_and_records_trades_and_dividends(monkeypatch):
     unmapped, ok = w.run(pos=positions({(ACC, "PEP"): 10}))
     assert ok is True
     assert sorted(a["comment"] for a in w.activities) == ["IBKR#T1", "IBKR#T2", f"dividend#{ISIN_KO}#2026-07-15"]
-    assert len(w.imported) == 1                                     # one POST per account
+    assert len(w.imported) == 2                                     # buys/dividends before sells
     assert w.ids == {"T1", "T2"}
     assert w.comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}   # keyed by accountId
     assert w.pos["qty"][(ACC, "KO")] == pytest.approx(10.0)
@@ -628,3 +628,82 @@ def test_main_invalid_api_profile_stops_before_fetch_or_write(monkeypatch):
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("no POST"))
     monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT"))
     assert m.main() == 1
+
+
+def test_identical_report_id_is_only_one_candidate_and_cannot_back_double_sell(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("B") + trade_xml("B") + trade_xml("S", "SELL", 20)))
+    w.run()
+    assert w.activities == []
+    assert w.pos["qty"][(ACC, "KO")] == 0
+
+
+def test_conflicting_report_id_is_excluded_instead_of_arbitrarily_chosen(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("B") + trade_xml("B", qty=20)))
+    assert w.run()[1] is False
+    assert w.activities == []
+
+
+def test_manual_match_trade_id_remembered_across_sequential_queries(monkeypatch):
+    pos = positions({(ACC, "KO"): 10})
+    pos["manual_buys"][(ACC, "KO")].append(["2026-08-01", 10])
+    w = World(monkeypatch, report(trade_xml("B")))
+    w.run(pos=pos)
+    w.run(ids=w.ids, pos=pos)
+    assert w.activities == []
+    assert w.ids == {"B"}
+    assert pos["qty"][(ACC, "KO")] == 10
+
+
+@pytest.mark.parametrize("commission", ["nan", "inf", "n/a"])
+def test_invalid_commission_buy_cannot_authorize_sell(monkeypatch, commission):
+    w = World(monkeypatch, report(trade_xml("B", ibCommission=commission) + trade_xml("S", "SELL")))
+    assert w.run()[1] is False
+    assert w.activities == []
+
+
+def test_server_skipped_buy_cannot_authorize_sell_in_same_batch(monkeypatch):
+    from types import SimpleNamespace
+    w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL", 15)))
+    monkeypatch.setattr(m, "ghost_import_activities", original_import)
+    sent = []
+    monkeypatch.setattr(m.requests, "post", lambda *a, **kw:
+                        sent.append(kw["json"]["activities"]) or
+                        SimpleNamespace(status_code=201, json=lambda: {"activities": []}))
+    assert w.run(pos=positions({(ACC, "KO"): 10}))[1] is False
+    assert [[a["comment"] for a in batch] for batch in sent] == [["IBKR#B"]]
+    assert w.ids == set()
+    assert w.pos["qty"][(ACC, "KO")] == 10
+
+
+def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
+    from types import SimpleNamespace
+    reports = iter([report(trade_xml("B")), report(trade_xml("S", "SELL", 20))])
+    w = World(monkeypatch, report())
+    monkeypatch.setattr(m, "fetch_flex_report", lambda *a: next(reports))
+    monkeypatch.setattr(m, "ghost_import_activities", original_import)
+    sent = []
+    monkeypatch.setattr(m.requests, "post", lambda *a, **kw:
+                        sent.append(kw["json"]["activities"]) or
+                        SimpleNamespace(status_code=201, json=lambda: {"activities": []}))
+    w.run(pos=positions({(ACC, "KO"): 10}))
+    w.run(ids=w.ids, pos=w.pos)
+    assert len(sent) == 1
+    assert w.pos["qty"][(ACC, "KO")] == 10
+
+
+def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch):
+    from types import SimpleNamespace
+    w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL")))
+    monkeypatch.setattr(m, "ghost_import_activities", original_import)
+    calls = []
+    monkeypatch.setattr(m.requests, "post", lambda *a, **kw:
+                        calls.append(kw["json"]["activities"]) or
+                        SimpleNamespace(status_code=201, json=lambda: {}))
+    cfg = {**CFG}
+    assert m.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
+    cash_count = len(w.cash_calls)
+    assert m.process_account(cfg, "U2", "q2", "IBKR", {}, set(), set(), positions())[1] is False
+    assert len(calls) == 1 and len(w.cash_calls) == cash_count
+
+
+original_import = m.ghost_import_activities
