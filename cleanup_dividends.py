@@ -98,6 +98,8 @@ def verify_endpoints(config):
 
 def profile_of(activity):
     """Prefer the current profile and refuse unsafe legacy fallback."""
+    if not isinstance(activity, dict):
+        raise RuntimeError("Missing or invalid activity object; refusing cleanup")
     profile = (activity["assetProfile"] if "assetProfile" in activity
                else activity.get("SymbolProfile"))
     if (not isinstance(profile, dict)
@@ -190,7 +192,7 @@ def main():
     log.info("Total activities: %d", len(all_activities))
     # Reject incomplete profile context before planning any destructive cleanup.
     for activity in all_activities:
-        if activity.get("type") in ("BUY", "SELL", "DIVIDEND"):
+        if activity.get("type") in ("DIVIDEND",):
             identity_of(activity)
 
     # Split dividend# (IBKR-synced) vs manual dividends

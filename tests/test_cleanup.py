@@ -162,3 +162,66 @@ def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monk
     monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
     run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
     assert writes == ["PUT", "DELETE"]
+
+
+def test_excluded_financial_type_with_invalid_profile_does_not_block(tool, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    excluded = {"id": "excluded", "type": "BUY" if tool is cleanup_dividends else "DIVIDEND",
+                "assetProfile": None}
+    run_cleanup(tool, monkeypatch, [activity(tool), excluded, activity(tool, "manual")])
+    assert any("Matched pairs" in r.message and r.message.endswith(": 1") for r in caplog.records)
+
+
+def two_pairs(tool):
+    first = [activity(tool), activity(tool, "manual")]
+    second = [deepcopy(a) for a in first]
+    for a in second:
+        a["id"] += "-2"
+        a["assetProfile"]["symbol"] = "MSFT"
+    return first + second
+
+
+def test_later_missing_source_aborts_before_any_pair_mutation(tool, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    acts = two_pairs(tool)
+    del acts[-1]["assetProfile"]["dataSource"]
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    with pytest.raises(RuntimeError, match="identity"):
+        run_cleanup(tool, monkeypatch, acts, apply=True)
+    assert writes == []
+    assert not any("Matched pairs" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("changed", ["missing-source", "changed-source", "changed-symbol", "invalid-profile",
+                                   "non-object", "invalid-json"])
+def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkeypatch, changed):
+    acts = two_pairs(tool)
+    second = deepcopy(acts[-1])
+    if changed == "missing-source":
+        del second["assetProfile"]["dataSource"]
+    elif changed == "changed-source":
+        second["assetProfile"]["dataSource"] = "MANUAL"
+    elif changed == "changed-symbol":
+        second["assetProfile"]["symbol"] = "OTHER"
+    elif changed == "invalid-profile":
+        second["assetProfile"] = None
+    elif changed == "non-object":
+        second = None
+    fresh = iter([deepcopy(acts[1]), second])
+    def response(*args, **kwargs):
+        obj = next(fresh)
+        def json_body():
+            if changed == "invalid-json" and obj["id"].endswith("-2"):
+                raise ValueError("invalid JSON")
+            return obj
+        return SimpleNamespace(status_code=200, json=json_body)
+    monkeypatch.setattr(tool.requests, "get", response)
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda cfg, a, *args, **kwargs: writes.append(("PUT", a["id"])) or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda cfg, ident, *args, **kwargs: writes.append(("DELETE", ident)) or True)
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, acts, apply=True)
+    assert exc.value.code == 1
+    assert writes == [("PUT", "manual"), ("DELETE", "synced")]
