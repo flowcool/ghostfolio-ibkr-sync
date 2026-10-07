@@ -96,11 +96,26 @@ def verify_endpoints(config):
     log.info("Endpoint verified: GET /api/v1/activities/{id} → 200 (probe: %s)", probe_id)
 
 
+def profile_of(activity):
+    """Prefer the current profile and refuse unsafe legacy fallback."""
+    profile = (activity["assetProfile"] if "assetProfile" in activity
+               else activity.get("SymbolProfile"))
+    if (not isinstance(profile, dict)
+            or not isinstance(profile.get("symbol"), str)
+            or not profile["symbol"].strip()):
+        raise RuntimeError("Missing or invalid asset profile symbol; refusing cleanup")
+    return profile
+
+
 def symbol_of(activity):
-    return (activity.get("SymbolProfile") or {}).get("symbol", "")
+    return profile_of(activity)["symbol"]
 
 
 def put_comment(config, activity, new_comment, dry_run):
+    profile = profile_of(activity)
+    source = profile.get("dataSource")
+    if not isinstance(source, str) or not source.strip():
+        raise RuntimeError("Missing or invalid asset profile data source; refusing cleanup")
     activity_id = activity["id"]
     url = f"{config['ghost_host']}/api/v1/activities/{activity_id}"
     if dry_run:
@@ -114,10 +129,10 @@ def put_comment(config, activity, new_comment, dry_run):
         "date": activity["date"],
         "fee": activity["fee"],
         "quantity": activity["quantity"],
-        "symbol": (activity.get("SymbolProfile") or {}).get("symbol"),
+        "symbol": profile["symbol"],
         "type": activity["type"],
         "unitPrice": activity["unitPrice"],
-        "dataSource": (activity.get("SymbolProfile") or {}).get("dataSource"),
+        "dataSource": source,
     }
     resp = requests.put(url, headers=headers(config["ghost_token"]), json=payload, timeout=30)
     if resp.status_code >= 400:
@@ -157,6 +172,10 @@ def main():
     log.info("Fetching all activities from Ghostfolio...")
     all_activities = fetch_all_activities(config)
     log.info("Total activities: %d", len(all_activities))
+    # Reject incomplete profile context before planning any destructive cleanup.
+    for activity in all_activities:
+        if activity.get("type") in ("BUY", "SELL", "DIVIDEND"):
+            profile_of(activity)
 
     # Split dividend# (IBKR-synced) vs manual dividends
     div_ibkr = []   # comment starts with "dividend#"
