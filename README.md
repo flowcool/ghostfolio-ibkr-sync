@@ -554,4 +554,4 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-CI runs tests, a runtime dependency audit and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; for checks against real data use `DRY_RUN=1`, comparing the log of the current release with the log of your change.
+CI runs tests, an audit of the complete Python CI environment and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; for checks against real data use `DRY_RUN=1`, comparing the log of the current release with the log of your change.
