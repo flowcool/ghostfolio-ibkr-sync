@@ -20,9 +20,9 @@ class Resp:
             raise m.requests.HTTPError(str(self.status_code))
 
 
-def activity(**kw):
+def activity(profile_key="assetProfile", **kw):
     a = {"type": "BUY", "quantity": 10, "comment": None, "accountId": "acc", "date": "2026-08-01T00:00:00.000Z",
-         "SymbolProfile": {"symbol": "KO", "isin": "US1912161007"}}
+         profile_key: {"symbol": "KO", "isin": "US1912161007"}}
     a.update(kw)
     return a
 
@@ -33,12 +33,16 @@ def serve(monkeypatch, body, status=200):
 
 # --- existing activities (duplicate protection) --------------------------
 
-def test_existing_activities_are_indexed(monkeypatch):
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+def test_existing_activities_are_indexed(monkeypatch, profile_key):
     acts = [activity(comment="IBKR#T1"),
             activity(type="SELL", quantity=4, comment="IBKR#T2"),
             activity(type="SELL", quantity=3),                              # manual sell
             activity(quantity=6, date="2026-07-01T00:00:00.000Z"),          # manual buy
             activity(type="DIVIDEND", quantity=100, comment="dividend#US1912161007#2026-07-15")]
+    if profile_key == "SymbolProfile":
+        for row in acts:
+            row[profile_key] = row.pop("assetProfile")
     serve(monkeypatch, {"activities": acts, "count": len(acts)})
     trade_ids, div_comments, pos = m.ghost_get_existing_orders(CFG)
     assert trade_ids == {"T1", "T2"}
@@ -118,3 +122,48 @@ def test_cash_balance_payload_is_the_five_whitelisted_fields(monkeypatch):
 def test_cash_balance_dry_run_does_not_touch_the_api(monkeypatch):
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: pytest.fail("no API call in dry run"))
     assert m.ghost_update_cash_balance({**CFG, "dry_run": True}, "9", 1.0) is True
+
+
+@pytest.mark.parametrize("kind", ["BUY", "SELL", "DIVIDEND"])
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+@pytest.mark.parametrize("profile", [None, [], "bad", {}, {"symbol": None},
+                                      {"symbol": 123}, {"symbol": ""}, {"symbol": "  "}])
+def test_required_asset_profile_is_validated(monkeypatch, kind, profile_key, profile):
+    row = activity(type=kind)
+    row.pop("assetProfile")
+    row[profile_key] = profile
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    with pytest.raises(RuntimeError, match="missing or invalid asset profile symbol"):
+        m.ghost_get_existing_orders(CFG)
+
+
+@pytest.mark.parametrize("kind", ["BUY", "SELL", "DIVIDEND"])
+def test_missing_required_profile_refuses_to_sync(monkeypatch, kind):
+    row = activity(type=kind)
+    row.pop("assetProfile")
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    with pytest.raises(RuntimeError, match="asset profile symbol"):
+        m.ghost_get_existing_orders(CFG)
+
+
+def test_current_profile_takes_precedence_over_legacy(monkeypatch):
+    row = activity(SymbolProfile={"symbol": "STALE", "isin": "STALE"})
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    _, _, pos = m.ghost_get_existing_orders(CFG)
+    assert dict(pos["qty"]) == {("acc", "KO"): 10}
+    assert dict(pos["isin_symbols"]) == {("acc", "US1912161007"): {"KO"}}
+
+
+@pytest.mark.parametrize("profile", [None, {}, {"symbol": ""}])
+def test_invalid_current_profile_does_not_fall_back_to_legacy(monkeypatch, profile):
+    row = activity(assetProfile=profile, SymbolProfile={"symbol": "KO"})
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    with pytest.raises(RuntimeError, match="asset profile symbol"):
+        m.ghost_get_existing_orders(CFG)
+
+
+def test_noninvestment_activity_does_not_require_profile(monkeypatch):
+    serve(monkeypatch, {"activities": [{"type": "FEE", "quantity": 1}], "count": 1})
+    ids, comments, pos = m.ghost_get_existing_orders(CFG)
+    assert ids == comments == set()
+    assert all(not values for values in pos.values())

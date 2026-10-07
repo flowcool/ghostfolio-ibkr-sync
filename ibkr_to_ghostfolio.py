@@ -404,7 +404,21 @@ def ghost_get_existing_orders(config):
             "with the portfolio:read:values scope; refusing to sync without "
             "existing IBKR# IDs (duplicates risk)")
 
-    for order in activities:
+    for index, order in enumerate(activities):
+        profile = {}
+        if order.get("type") in ("BUY", "SELL", "DIVIDEND"):
+            # Current API wins even if malformed: never hide an invalid current
+            # profile behind a stale legacy value. Legacy-only responses remain
+            # supported for Ghostfolio versions before 3.78.0.
+            profile = (order["assetProfile"] if "assetProfile" in order
+                       else order.get("SymbolProfile"))
+            if (not isinstance(profile, dict)
+                    or not isinstance(profile.get("symbol"), str)
+                    or not profile["symbol"].strip()):
+                raise RuntimeError(
+                    f"Ghostfolio activity at index {index} has a missing or invalid "
+                    "asset profile symbol (assetProfile / legacy SymbolProfile); "
+                    "refusing to sync without position and reconciliation context")
         # comment is nullable in Ghostfolio, so JSON null arrives as None
         comment = order.get("comment") or ""
         if comment.startswith("IBKR#"):
@@ -415,7 +429,7 @@ def ghost_get_existing_orders(config):
             dividend_comments.add(comment)
 
         if order.get("type") == "DIVIDEND":
-            symbol = (order.get("SymbolProfile") or {}).get("symbol")
+            symbol = profile["symbol"]
             if symbol:
                 positions["dividend_dates"][(order.get("accountId") or "", symbol)].append(
                     (order.get("date") or "")[:10])
@@ -425,8 +439,7 @@ def ghost_get_existing_orders(config):
             if order["type"] == "SELL":
                 qty = -qty
             account_id = order.get("accountId") or ""
-            profile = order.get("SymbolProfile") or {}
-            symbol = profile.get("symbol")
+            symbol = profile["symbol"]
             if symbol:
                 positions["qty"][(account_id, symbol)] += qty
                 if profile.get("isin"):
