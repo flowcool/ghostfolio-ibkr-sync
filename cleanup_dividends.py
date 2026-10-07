@@ -17,23 +17,22 @@ Usage:
   python cleanup_dividends.py           # dry-run (safe, prints what would happen)
   python cleanup_dividends.py --apply   # apply changes
 
-CRITICAL SAFETY: everything deleted is logged in full to cleanup_div_YYYYMMDDTHHMMSS.json
-before mutation. PUT and DELETE are not transactional; inspect both rows after
-a failure. The snapshot is evidence, not a verified automatic recovery procedure.
+Each apply creates a private YAML recovery journal with exact preimages and outcomes.
+Use --resume JOURNAL to inspect, then --resume JOURNAL --apply for bounded recovery.
+PUT and DELETE remain nontransactional; quiesce concurrent writers.
 """
 
 import argparse
-import json
 import logging
 from math import isfinite
 import os
 import sys
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 
 import requests
 
 from ibkr_to_ghostfolio import activity_is_active
+from cleanup_recovery import process_pairs, resume_cleanup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -173,7 +172,7 @@ def fetch_fresh(config, planned):
 def snapshot_matches(fresh, planned):
     """Refuse a stale plan before tagging the manual entry or deleting its pair."""
     fields = ("id", "type", "date", "quantity", "unitPrice", "fee", "comment",
-              "tags", "account", "isDraft", "isExcluded")
+              "tags", "account", "isDraft", "isExcluded", "userId")
     return (identity_of(fresh) == identity_of(planned)
             and all(fresh.get(field) == planned.get(field) for field in fields))
 
@@ -232,7 +231,20 @@ def delete_activity(config, activity_id, dry_run):
 def main():
     parser = argparse.ArgumentParser(description="Clean up duplicate dividend activities")
     parser.add_argument("--apply", action="store_true", help="Apply changes (default: dry-run)")
+    parser.add_argument("--journal", help="New private YAML journal path for --apply")
+    parser.add_argument("--resume", help="Inspect existing YAML journal; add --apply to resume")
     args = parser.parse_args()
+    if args.resume and args.journal:
+        parser.error("--journal cannot be combined with --resume")
+    if args.journal and not args.apply:
+        parser.error("--journal requires --apply")
+    if args.resume:
+        try:
+            resume_cleanup(sys.modules[__name__], load_config(), args.resume, apply=args.apply)
+        except (RuntimeError, OSError) as exc:
+            log.error("Recovery stopped: %s", exc)
+            sys.exit(1)
+        return
     dry_run = not args.apply
 
     if dry_run:
@@ -333,54 +345,10 @@ def main():
         log.info("=== DRY-RUN complete. Run with --apply to execute. ===")
         return
 
-    # Record verified preimages before mutation; recovery requires independent inspection
-    log_file = Path(f"cleanup_div_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.json")
-    safety_records = []
-    log.info("Safety log will be written to %s (per-pair, before each mutation)", log_file)
-
-    log.info("")
-    log.info("=== APPLYING CHANGES ===")
-    patched = 0
-    deleted = 0
-    errors = 0
-
-    for ib, m in matched_pairs:
-        new_comment = ib.get("comment")
-        log.info("Processing %s qty=%s price=%s...", symbol_of(ib), ib.get("quantity"), ib.get("unitPrice"))
-
-        m_full = fetch_fresh(config, m)
-        ib_full = fetch_fresh(config, ib) if m_full is not None else None
-        if m_full is None or ib_full is None:
-            errors += 1
-            continue
-
-        safety_records.append({
-            "action": "PUT_comment_on_manual",
-            "manual_fresh": m_full,
-            "ibkr_to_delete": ib_full,
-            "new_comment": new_comment,
-        })
-        log_file.write_text(json.dumps(safety_records, indent=2, default=str))
-
-        ok = put_comment(config, m_full, new_comment, dry_run=False)
-        if ok:
-            patched += 1
-        else:
-            errors += 1
-            break
-
-        ok = delete_activity(config, ib["id"], dry_run=False)
-        if ok:
-            deleted += 1
-        else:
-            errors += 1
-            break
-
-    log.info("")
-    log.info("=== DONE ===")
-    log.info("Patched: %d | Deleted: %d | Errors: %d", patched, deleted, errors)
-    if errors:
-        log.warning("Some operations failed — check logs above.")
+    try:
+        process_pairs(sys.modules[__name__], config, matched_pairs, args.journal)
+    except (RuntimeError, OSError) as exc:
+        log.error("Cleanup stopped: %s", exc)
         sys.exit(1)
 
 

@@ -20,7 +20,7 @@ def tool(request, monkeypatch, tmp_path):
 def activity(tool, ident="synced", symbol="AAPL", profile_key="assetProfile"):
     dividend = tool is cleanup_dividends
     return {
-        "id": ident, "accountId": "synthetic-account", "currency": "USD",
+        "id": ident, "userId": "synthetic-owner", "accountId": "synthetic-account", "currency": "USD",
         "type": "DIVIDEND" if dividend else "BUY", "quantity": 1,
         "unitPrice": 10, "fee": 0, "date": "2026-10-01T00:00:00Z",
         "comment": ("dividend#US0378331005#2026-10-01" if dividend else "IBKR#synthetic")
@@ -159,8 +159,15 @@ def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monk
     monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
                         SimpleNamespace(status_code=200, json=lambda: fresh if url.endswith("manual") else synced))
     writes = []
-    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
-    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    def put(cfg, a, comment, **kwargs):
+        fresh["comment"] = comment
+        writes.append("PUT")
+        return True
+    def delete(cfg, ident, **kwargs):
+        writes.append("DELETE")
+        return True
+    monkeypatch.setattr(tool, "put_comment", put)
+    monkeypatch.setattr(tool, "delete_activity", delete)
     run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
     assert writes == ["PUT", "DELETE"]
 
@@ -197,7 +204,7 @@ def test_later_missing_source_aborts_before_any_pair_mutation(tool, monkeypatch,
 
 @pytest.mark.parametrize("changed", ["missing-source", "changed-source", "changed-symbol", "invalid-profile",
                                    "non-object", "invalid-json"])
-def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkeypatch, changed):
+def test_later_invalid_fresh_profile_aborts_before_first_pair(tool, monkeypatch, changed):
     acts = two_pairs(tool)
     second = deepcopy(acts[-1])
     if changed == "missing-source":
@@ -225,7 +232,7 @@ def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkey
     with pytest.raises(SystemExit) as exc:
         run_cleanup(tool, monkeypatch, acts, apply=True)
     assert exc.value.code == 1
-    assert writes == [("PUT", "manual"), ("DELETE", "synced")]
+    assert writes == []
 
 
 @pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
@@ -306,6 +313,8 @@ def test_request_failure_stops_cleanup_without_blind_retry(tool, monkeypatch, st
         calls.append("PUT")
         if stage == "put":
             raise tool.requests.Timeout("synthetic")
+        ident = args[0].rsplit("/", 1)[1]
+        by_id[ident]["comment"] = kwargs["json"]["comment"]
         return SimpleNamespace(status_code=200)
     def delete(*args, **kwargs):
         calls.append("DELETE")
