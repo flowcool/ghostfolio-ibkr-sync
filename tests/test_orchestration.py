@@ -528,3 +528,49 @@ def test_malformed_flex_report_fails_only_that_account(monkeypatch):
     script_flex(monkeypatch, SEND_OK, "<not-xml")
     monkeypatch.setattr(m, "ghost_find_account_id", lambda *a: pytest.fail("must not be reached"))
     assert m.process_account(CFG, "U1", "q1", "IBKR", {}, set(), set(), positions()) == ({}, False)
+
+
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(monkeypatch, profile_key):
+    """Both profile formats preserve account holdings and suppress reconciled imports."""
+    from types import SimpleNamespace
+
+    def row(kind, qty, date, symbol="KO", comment=None, account=ACC):
+        """Build an account activity using the profile format under test."""
+        return {"type": kind, "quantity": qty, "date": date, "comment": comment,
+                "accountId": account, profile_key: {"symbol": symbol, "isin": ISIN_KO}}
+
+    rows = [row("BUY", 20, "2026-01-01", comment="IBKR#OLD"),
+            row("BUY", 10, "2026-08-01"),
+            row("SELL", 3, "2026-08-02", symbol="KO.A"),
+            row("DIVIDEND", 100, "2026-07-16"),
+            row("BUY", 99, "2026-01-01", account="other-account")]
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"activities": rows, "count": len(rows)}))
+    ids, comments, pos = m.ghost_get_existing_orders(CFG)
+    assert pos["qty"][(ACC, "KO")] == 30
+    assert pos["qty"][("other-account", "KO")] == 99
+    xml = report(trade_xml("OLD", date="20260101;100000")
+                 + trade_xml("MANUAL-BUY", qty=10)
+                 + trade_xml("MANUAL-SELL", "SELL", 3, date="20260802;100000")
+                 + trade_xml("VALID-SELL", "SELL", 5, date="20260901;100000"), div_xml())
+    w = World(monkeypatch, xml)
+    assert w.run(ids=ids, comments=comments, pos=pos)[1] is True
+    assert [a["comment"] for a in w.activities] == ["IBKR#VALID-SELL"]
+
+
+def test_main_invalid_api_profile_stops_before_fetch_or_write(monkeypatch):
+    """Abort startup on an invalid profile before account processing or API writes."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(m, "load_config", lambda: {
+        **CFG, "mapping_file": "unused", "account_ids": ["U1"],
+        "query_ids": ["q1"], "account_names": ["IBKR"]})
+    monkeypatch.setattr(m, "load_mapping", lambda path: {})
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"activities": [{"type": "BUY", "quantity": 1}], "count": 1}))
+    monkeypatch.setattr(m, "process_account", lambda *a, **k: pytest.fail("no account processing"))
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("no POST"))
+    monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT"))
+    assert m.main() == 1

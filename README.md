@@ -29,6 +29,13 @@ One run does this, in order:
 
 The tool never deletes or edits an existing Ghostfolio activity: it only adds new ones and updates each account's cash balance (and its platform, if `GHOST_PLATFORM_ID` is set and the account has none). Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
 
+Activities are read from `assetProfile` on current Ghostfolio APIs (the legacy
+`SymbolProfile` response field was removed in 3.78.0). Legacy-only responses
+remain supported for older versions. If both fields are present, `assetProfile`
+takes precedence. BUY, SELL and DIVIDEND activities must have a profile with a
+nonempty string `symbol`; otherwise the run stops before any import or cash
+balance update. ISIN remains optional, as some assets do not have one.
+
 ## Docker image
 
 ```
@@ -486,6 +493,7 @@ The tool logs the error and continues - it still updates the cash balance and st
 Before any import, the tool reads all existing Ghostfolio activities in one request, because deduplication depends on them. If that list cannot be trusted, the run stops with exit 1 and writes nothing (no import, no cash balance update):
 
 - `Ghostfolio redacted activity values (quantity/comment are null)` — Ghostfolio hides quantities and comments when **Presenter View** (restricted view, the eye icon) is on for the user that owns `GHOST_TOKEN`, or when the token lacks the `portfolio:read:values` scope. Without the `IBKR#` comments every trade would look new. Turn Presenter View off, or use a token with full read access, and re-run.
+- `Ghostfolio activity at index N has a missing or invalid asset profile symbol` — a BUY, SELL or DIVIDEND is missing a usable `assetProfile` (or legacy `SymbolProfile`). Check the API response and server compatibility; the tool refuses to reconcile against an empty position context.
 - `Ghostfolio returned N activities but reports count=M` — the list and its total disagree, usually because an activity was added or deleted in Ghostfolio during the read. Re-run; the next scheduled run recovers on its own.
 
 ### Exit codes
