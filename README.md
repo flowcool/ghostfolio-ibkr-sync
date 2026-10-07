@@ -1,20 +1,44 @@
 # ghostfolio-ibkr-sync
 
-Sync Interactive Brokers trades and dividends to a self-hosted [Ghostfolio](https://ghostfol.io) instance.
+[![Build and checks](https://github.com/flowcool/ghostfolio-ibkr-sync/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/flowcool/ghostfolio-ibkr-sync/actions/workflows/docker-publish.yml)
+[![CodeQL](https://github.com/flowcool/ghostfolio-ibkr-sync/actions/workflows/codeql.yml/badge.svg)](https://github.com/flowcool/ghostfolio-ibkr-sync/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/flowcool/ghostfolio-ibkr-sync)](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)
+
+**Your IBKR trades, dividends and cash balance in self-hosted [Ghostfolio](https://ghostfol.io), on a daily schedule.**
+
+| Import | Reconcile | Run |
+| --- | --- | --- |
+| Trades, dividend payments and withholding tax | Trade IDs, manual-entry matching and a holdings gate | Docker on amd64 / arm64, or plain Python |
+| ISIN → Yahoo Finance ticker mapping | Separate Ghostfolio accounts for IBKR sub-accounts | One-off runs, cron scheduling and a preview with `DRY_RUN=1` |
+
+```mermaid
+flowchart LR
+    IBKR[IBKR Flex Query] --> XML[Trades, dividends and cash]
+    XML --> Mapping[ISIN to Yahoo ticker]
+    Ghostfolio[Existing Ghostfolio activities] --> Checks[Deduplication and holdings checks]
+    Mapping --> Checks
+    Checks --> Preview[Dry-run preview]
+    Checks --> Import[Import activities and update cash]
+```
+
+[Get started](#get-started) · [Configuration](#configuration) · [Mapping](#mapping-file) · [Troubleshooting](#troubleshooting) · [Limitations](#limitations) · [Contribute](CONTRIBUTING.md)
+
+## Get started
+
+1. Configure [IBKR Flex Web Service and your query](#ibkr-setup), then [create your Ghostfolio account and token](#ghostfolio-setup). Use the same account currency as the IBKR base currency.
+2. Copy [`mapping.yaml.example`](mapping.yaml.example) to `mapping.yaml` and review your securities' Yahoo tickers. The mapping file must exist unless you explicitly disable it.
+3. Run the [Docker preview](#dry-run-first) with `DRY_RUN=1`. Review ticker mappings, skipped trades and the proposed cash balance before enabling writes.
+4. Run [once](#single-account-one-off-run), then configure [scheduled runs](#docker-compose--portainer). After the first import, gather historical market data in Ghostfolio.
+
+**Before importing:** back up Ghostfolio using your deployment's backup procedure. The sync adds activities and updates cash; there is no automatic undo. The first Flex Query covers at most 365 days, so older positions must already be represented in Ghostfolio. Splits and other corporate actions need manual reconciliation. See [Limitations](#limitations).
+
+## Overview
 
 This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades.
 
 ## Why this exists
 
-This project replaces [agusalex/ghostfolio-sync](https://github.com/AgustaRC/ghostfolio-sync), which has several issues:
-
-- Broken multi-account support
-- No proper ISIN-to-Yahoo-ticker mapping
-- Does not handle options trades gracefully (crashes instead of skipping)
-- Relies on the outdated `ibflex` Python library, which breaks on newer IBKR Flex Query fields
-- No cash balance syncing
-
-This script parses the IBKR XML directly, avoids fragile third-party libraries, and gives you full control over symbol mapping.
+This fork of [obol89/ghostfolio-ibkr-sync](https://github.com/obol89/ghostfolio-ibkr-sync) parses IBKR XML directly, uses only `requests` and `pyyaml` as runtime libraries, and keeps symbol mapping under your control. It is intended for investors operating their own Ghostfolio instance who want repeatable daily imports and visible reconciliation warnings.
 
 ## How it works
 
@@ -23,8 +47,8 @@ One run does this, in order:
 1. Load the configuration and the symbol mapping. A missing or invalid mapping file stops the run before anything is contacted.
 2. Read **all** existing Ghostfolio activities once. Deduplication depends on them, so if the list looks incomplete or redacted the run stops and writes nothing.
 3. Then, for each IBKR account in turn (steps 3 to 6): fetch its Flex Query report (two steps: request, then poll until IBKR has generated the statement), find the Ghostfolio account by name (if `GHOST_ACCOUNT_NAMES` is unset, the IBKR account IDs are used as names, with a warning), and parse trades, dividend payments and the cash balance.
-4. Decide what is new: skip FX and options; skip trades already in Ghostfolio (`IBKR#<tradeID>` comment) and trades without a trade ID (they cannot be deduplicated); skip dividends already in Ghostfolio (`dividend#...` comment, or any dividend of the same symbol in the same account within ±3 days); skip trades already entered by hand; and never let a sell push a position below zero.
-5. Convert what is left to Ghostfolio activities and import them in one request per account.
+4. Decide what is new: skip FX and options; skip trades already in Ghostfolio (`IBKR#<tradeID>` comment) and trades without a trade ID (they cannot be deduplicated); skip dividends already in Ghostfolio (`dividend#...` comment, or any dividend of the same symbol in the same account within ±3 days); skip trades already entered by hand; and check the net quantity against existing holdings. This is a batch-level guard, not chronological position reconciliation.
+5. Convert what is left to Ghostfolio activities and import them as a batch per account. If Ghostfolio reports an unresolved symbol, remove that symbol from the batch and retry the rest; the run still exits 1 so the omitted activities remain visible.
 6. Set the account's cash balance. This happens even if the import failed; it is skipped, with a warning, only when the report has no base-currency cash row. After all accounts, the run exits `0` if every account was clean and `1` otherwise.
 
 The tool never deletes or edits an existing Ghostfolio activity: it only adds new ones and updates each account's cash balance (and its platform, if `GHOST_PLATFORM_ID` is set and the account has none). Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
@@ -44,7 +68,7 @@ ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 
 Multi-arch image (linux/amd64 and linux/arm64). New images are published automatically on every push to main.
 
-Tagged releases (see [Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)) are also published as `:X.Y.Z` and `:X.Y` — pin one of those if you want controlled upgrades and an easy rollback. `:latest` always follows main.
+Tagged releases (see [Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)) are also published as `:X.Y.Z` and `:X.Y`. Select a full version for controlled upgrades; record the deployed image digest for a reproducible rollback, since container tags are mutable. `:latest` always follows main. CI also refreshes the main image weekly. See [build and release guarantees](.github/BUILD.md).
 
 The running version is logged at container start and at the beginning of every sync:
 
@@ -59,7 +83,7 @@ ghostfolio-ibkr-sync version v1.2.0
 
 - A running self-hosted Ghostfolio instance, version **2.248.0 or newer**
 - An Interactive Brokers account with Flex Web Service enabled
-- Docker (for containerised runs) or Python 3.10+ with `requests` and `pyyaml`
+- Docker (for containerised runs) or Python 3.12+ with `requests` and `pyyaml` (CI and the container use Python 3.12)
 
 The tool reads existing activities via `GET /api/v1/activities`, which landed in Ghostfolio 2.248.0. The `/api/v1/order` endpoints it replaced were deprecated in that same release and removed in 3.5.0, so on Ghostfolio 3.x this is the only endpoint that works.
 
@@ -92,29 +116,18 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
    > - **Missing trades**: trades older than the period are never seen, and a sell whose
    >   buy is outside the window is imported only if Ghostfolio already holds that buy
    >   (see [What the tool skips automatically](#what-the-tool-skips-automatically)).
-   > - **Silent re-imports on period change**: if you later switch to 365 days, all trades
-   >   from the gap period will look new to the dedup system — creating duplicates for any
-   >   trades you had previously entered manually or synced under a different period.
+   > - **New historical candidates when widening the period**: trade-ID dedup still
+   >   recognises previously synced activities, but older manual entries or activities
+   >   from another importer may need reconciliation before importing the wider report.
    >
-   > **Recovery if you already used a shorter period:**
-   >
-   > Two cleanup scripts are included **in the repository** (they are not part of the Docker image: clone the repository and run them with Python, with `GHOST_TOKEN` and `GHOST_HOST` set):
-   >
-   > - **`cleanup_duplicates.py`** — removes duplicate *trade* activities (BUY/SELL).
-   >   Matches by symbol + type + quantity + unitPrice + date (±2 days to cover the
-   >   UTC vs local-time offset). Patches the manual entry with the IBKR trade ID so
-   >   future syncs recognise it, then deletes the IBKR-synced copy.
-   >
-   > - **`cleanup_dividends.py`** — removes duplicate *dividend* activities.
-   >   Matches by symbol + quantity + unitPrice + date (±35 days). The wider window
-   >   is intentional: IBKR records the ex-dividend date while a manual entry may use
-   >   the pay date — a gap of days to weeks depending on the stock. False positives
-   >   are not a concern because the same company cannot pay two identical dividends
-   >   within a 35-day window (quarterly cadence is ≥ 90 days).
-   >
-   > Both scripts are safe by default: dry-run mode is the default, `--apply` is
-   > required to make changes, and a full safety log (`cleanup_*.json`) is written
-   > before each deletion so you can reinject any activity if needed.
+   > **Recovery if you already used a shorter period:** review existing activities
+   > against the statement before widening the query. The repository contains
+   > `cleanup_duplicates.py` and `cleanup_dividends.py`, but **do not run them with
+   > `--apply`**: their legacy profile matching is incompatible with current
+   > Ghostfolio activity responses and can pair unrelated assets. Their matching
+   > also needs account isolation. Dry-run output is not proof that deletion is
+   > safe. These tools are not included in the Docker image. Reconcile affected
+   > entries manually after taking a verified backup.
 
 4. Select the following sections and fields:
 
@@ -128,7 +141,7 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
 
 **Trades (Execution):**
 
-Do not use "Select All" for the Trades section. IBKR adds new fields over time that can break XML parsing. Select only these fields individually:
+Select these fields for a predictable report. The parser ignores additional attributes, but missing required values can cause trades to be skipped:
 
 - ClientAccountID
 - CurrencyPrimary
@@ -173,7 +186,7 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 
 5. Under **General Configuration**, set **Include Currency Rates** to **No**
 
-   This is required. With currency rates enabled, IBKR sends non-standard currency codes (for example `RUS` instead of `RUB`) that break parsing.
+   Currency-rate rows are not used by this tool. It does not convert the cash balance or commissions between currencies.
 
 6. Save the query and note the Query ID (click the info icon next to the query to find it)
 
@@ -182,7 +195,7 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 If you have multiple IBKR sub-accounts (for example individual and joint):
 
 - Create **one Flex Query per sub-account**, with only that sub-account selected in the account filter
-- Run **one container per sub-account** - do not combine multiple accounts into one Flex Query
+- Prefer **one container per sub-account** for independent scheduling and logs. One container can also process multiple accounts using equally sized, ordered `IBKR_ACCOUNT_IDS`, `IBKR_QUERY_IDS` and `GHOST_ACCOUNT_NAMES` lists. Each query must still select only its corresponding account.
 - **Exclude paper trading or management accounts** that have no positions - these will cause errors
 
 The tool processes each IBKR account independently and syncs it to a matching Ghostfolio account.
@@ -256,7 +269,7 @@ All configuration is done via environment variables:
 | `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs (one per account) | `123456` |
 | `GHOST_TOKEN` | Yes | Ghostfolio auth bearer token | `eyJhbGciOi...` |
 | `GHOST_HOST` | Yes | Ghostfolio base URL | `http://ghostfolio:3333` |
-| `GHOST_CURRENCY` | No | Default currency (default: `USD`) | `EUR` |
+| `GHOST_CURRENCY` | No | Legacy setting, currently unused; it does not override or convert currencies | `EUR` |
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count) | `IBKR Individual` |
 | `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
@@ -271,7 +284,7 @@ The mapping file maps ISINs to Yahoo Finance ticker symbols. This is necessary b
 
 ### Format
 
-The file must have a `symbol_mapping` key at the top level:
+Use a `symbol_mapping` key at the top level (a missing or empty key is treated as an empty mapping with a warning):
 
 ```yaml
 symbol_mapping:
@@ -302,7 +315,7 @@ European ETFs and stocks require mapping because Yahoo Finance uses exchange suf
 
 ### Unmapped ISINs
 
-When the script encounters an ISIN not in the mapping file, it falls back to the IBKR symbol and **still imports the activity**. At the end of the run it logs one self-contained warning per ISIN:
+When the script encounters an ISIN not in the mapping file, it falls back to the IBKR symbol and **attempts to import the activity**. If Ghostfolio cannot resolve that ticker, the tool drops its activities, imports the rest and exits 1. At the end of the run it logs one self-contained warning per ISIN:
 
 ```
 [WARNING] Unmapped ISIN JP3637000005 (TRINITY INDUSTRIAL CORP) uses IBKR symbol '6382.T' as ticker (fallback) — verify in Ghostfolio or add to mapping symbol_mapping: 'JP3637000005: <yahoo ticker>'
@@ -323,7 +336,7 @@ If the fallback ticker is wrong for Yahoo Finance, add the ISIN to your mapping 
 
 ### Log levels
 
-A normal run emits only `INFO` lines. `WARNING` means *check this*, `ERROR` means *data is not in sync and needs action*:
+A clean, fully reconciled run normally emits only `INFO` lines. `WARNING` means *check this*, `ERROR` means *data is not in sync and needs action*:
 
 | Level | Meaning |
 |---|---|
@@ -358,44 +371,46 @@ If you trade on `.JO` or `.TA` and amounts look 100 times off, check this table 
 ### Single account (one-off run)
 
 ```bash
-docker run --rm \
+docker run --rm --network your-ghostfolio-network \
   -e IBKR_TOKEN=your_token \
   -e IBKR_ACCOUNT_IDS=U1234567 \
   -e IBKR_QUERY_IDS=123456 \
   -e GHOST_TOKEN=your_ghost_token \
   -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
-  -v ./mapping.yaml:/app/mapping.yaml \
+  -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
 ### Without Docker
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp mapping.yaml.example mapping.yaml  # edit the copied mappings for your securities
 export IBKR_TOKEN=your_token
 export IBKR_ACCOUNT_IDS=U1234567
 export IBKR_QUERY_IDS=123456
 export GHOST_TOKEN=your_ghost_token
 export GHOST_HOST=http://localhost:3333
 export GHOST_ACCOUNT_NAMES="IBKR Main"
-python ibkr_to_ghostfolio.py
+.venv/bin/python ibkr_to_ghostfolio.py
 ```
 
 ### Dry run first
 
-Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but nothing is sent to Ghostfolio. IBKR and Ghostfolio are still **read**.
+Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no Ghostfolio POST or PUT is sent. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
 ```bash
-docker run --rm -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
+docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
   -e IBKR_TOKEN=your_token -e IBKR_ACCOUNT_IDS=U1234567 -e IBKR_QUERY_IDS=123456 \
   -e GHOST_TOKEN=your_ghost_token -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
-  -v ./mapping.yaml:/app/mapping.yaml \
+  -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
-Look for lines starting with `[DRY RUN]`; when there is nothing to import the log simply says `No new activities to import`. Add `--network <your-ghostfolio-network>` if `GHOST_HOST` is a Docker hostname. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
+Look for lines starting with `[DRY RUN]`; when there is nothing to import the log simply says `No new activities to import`. Replace `your-ghostfolio-network` with the Docker network shared with Ghostfolio. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
 
 ## Docker Compose / Portainer
 
@@ -407,8 +422,6 @@ services:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
     container_name: ghostfolio-ibkr-sync-individual
     restart: unless-stopped
-    depends_on:
-      - ghostfolio
     environment:
       TZ: Europe/Warsaw
       IBKR_TOKEN: your_token
@@ -420,7 +433,7 @@ services:
       MAPPING_FILE: /app/mapping.yaml
       CRON: "0 6 * * *"
     volumes:
-      - ./mapping.yaml:/app/mapping.yaml
+      - ./mapping.yaml:/app/mapping.yaml:ro
     networks:
       - ghostfolio
 
@@ -428,8 +441,6 @@ services:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
     container_name: ghostfolio-ibkr-sync-joint
     restart: unless-stopped
-    depends_on:
-      - ghostfolio
     environment:
       TZ: Europe/Warsaw
       IBKR_TOKEN: your_token
@@ -441,7 +452,7 @@ services:
       MAPPING_FILE: /app/mapping.yaml
       CRON: "5 6 * * *"
     volumes:
-      - ./mapping.yaml:/app/mapping.yaml
+      - ./mapping.yaml:/app/mapping.yaml:ro
     networks:
       - ghostfolio
 
@@ -452,13 +463,9 @@ networks:
 
 Use `http://ghostfolio:3333` (internal Docker network hostname) rather than an external IP or localhost. Stagger the cron times by a few minutes so the two containers do not run simultaneously.
 
-In Portainer, paste this as a stack definition and deploy it directly. Make sure the `ghostfolio` network name matches the network your Ghostfolio instance is on.
+This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml`. Create that file first and make it readable by the non-root container user (for a non-secret mapping file, `chmod o+r mapping.yaml` is one option). The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
 
 ## Troubleshooting
-
-### "positionActionID" or unknown field errors on import
-
-You used "Select All" for the Trades section in your Flex Query. IBKR adds new fields periodically and some of them confuse the parser. Delete the query and recreate it, selecting only the individual fields listed in the setup section.
 
 ### "has no Cash Transactions section: dividends not synced"
 
@@ -472,21 +479,13 @@ An IBKR buy was **not** imported because Ghostfolio already has a buy of the sam
 
 The mapping file is missing at the configured path (or at the default `mapping.yaml` in the working directory, `/app` in the image). The run stops before contacting IBKR or Ghostfolio, because raw IBKR symbols can book trades on the wrong security (ticker collisions). Check the volume mount (`./mapping.yaml:/app/mapping.yaml`); if the host file did not exist when the container was created, Docker created a directory at `/app/mapping.yaml` instead: create the file on the host and recreate the container. Or set `MAPPING_FILE=""` to run without mappings on purpose. Invalid YAML, or a `symbol_mapping` that is not `ISIN: TICKER` pairs, also stops the run.
 
-### "Unknown currency RUS" or similar invalid currency codes
-
-You have **Include Currency Rates** enabled in your Flex Query's General Configuration. Set it to **No** and re-run.
-
-### "AccountInformation NoneType" or account has no data
-
-The IBKR account ID you specified has no activity (often a paper trading or master management account). Exclude it from `IBKR_ACCOUNT_IDS` and `IBKR_QUERY_IDS`.
-
 ### "not valid for the specified data source YAHOO"
 
 An imported symbol is not recognised by Yahoo Finance. Check the unmapped ISINs output at the end of the run and add the correct Yahoo Finance ticker to your mapping file. European ETFs almost always need an explicit mapping with an exchange suffix.
 
 ### Import fails but activities were expected
 
-The tool logs the error and continues - it still updates the cash balance and still processes the remaining accounts rather than crashing - but the run **exits 1** so your scheduler flags it. Fix the failing symbol in your mapping file and re-run; duplicate detection will skip already-imported activities.
+If Ghostfolio identifies an unresolved symbol, the tool drops that symbol and retries the remaining activities. Other import failures stop that account's import. It still updates cash and processes remaining accounts, but the run **exits 1** so your scheduler flags it. Fix the failing symbol in your mapping file and re-run; duplicate detection will skip already-imported activities.
 
 ### Run stops before importing anything
 
@@ -513,7 +512,7 @@ Run **Gather All Data** in Ghostfolio **Admin** - **Market Data**. This fetches 
 
 ### Negative positions appearing in Ghostfolio
 
-This happens when a sell trade is imported without its corresponding buy. The tool never imports trades that would take a Ghostfolio position below zero, and logs an `ERROR` naming the security when Ghostfolio holds less than IBKR sold. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
+This happens when a sell trade is imported without its corresponding buy. The tool checks each security's net batch quantity against Ghostfolio holdings, and logs an `ERROR` when existing holdings plus new trades would be negative. This guard does not check chronological balances, and malformed trades skipped during conversion can invalidate its earlier quantity calculation. Review conversion warnings and compare positions after importing. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
 
 ### IBKR symbol variants (for example CSNKYz vs CSNKY)
 
@@ -538,11 +537,14 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 - **No options support** - Ghostfolio does not support options as an asset class; options trades are skipped entirely
 - **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
-- **Stock splits and other corporate actions are not handled** - Ghostfolio keeps your transactions as they were, while Yahoo returns split-adjusted prices, so a split makes the valuation wrong until the old transactions are corrected by hand (multiply the quantity and divide the unit price by the ratio, and fix the stored market data). Corporate actions that IBKR lists among the trades may be imported as ordinary trades.
+- **Stock splits and other corporate actions are not handled** - Ghostfolio keeps your transactions as they were, while Yahoo returns split-adjusted prices, so a split makes the valuation wrong until the old transactions are corrected by hand (multiply the quantity and divide the unit price by the ratio, and fix the stored market data). The Corporate Actions section of Flex reports is not parsed; it does not create split or merger activities.
 - **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. Give the Ghostfolio account the same currency as the IBKR base currency (see [Create accounts](#3-create-accounts)).
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - both the IBKR Flex token and the Ghostfolio auth token expire and require manual renewal. Set a recurring calendar reminder for the IBKR token (up to 1 year).
-- **One container per account** - running multiple sub-accounts requires multiple containers with separate Flex Queries
+- **Account-scoped queries** - use a separate Flex Query per sub-account. Several account/query pairs can run sequentially in one container; separate containers are recommended for operational isolation.
+- **Additive imports** - later IBKR corrections to already-imported trades or same-date dividends are not reconciled. Dividend proximity matching can suppress distinct payments within ±3 days; check unusual payment schedules and tax corrections manually.
+- **Commission currency** - commissions are booked in the activity currency; a different IBKR commission currency is not converted.
+- **No overlap protection** - avoid concurrent sync runs targeting the same Ghostfolio account; deduplication is based on a snapshot read at startup.
 
 ## Development
 
@@ -554,4 +556,8 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-CI runs tests, an audit of the complete Python CI environment and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; for checks against real data use `DRY_RUN=1`, comparing the log of the current release with the log of your change.
+CI runs tests, an audit of the complete Python CI environment and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; use synthetic fixtures and mocked HTTP for regression checks. See [Contributing](CONTRIBUTING.md) for review and reporting guidance.
+
+## Credits and license
+
+Forked from [obol89/ghostfolio-ibkr-sync](https://github.com/obol89/ghostfolio-ibkr-sync), with thanks to its contributors. See [LICENSE](LICENSE) for the inherited **MIT NON-AI License**, including its additional restrictions.

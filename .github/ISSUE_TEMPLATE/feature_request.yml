@@ -1,0 +1,26 @@
+name: Feature request
+description: Describe a missing workflow and its smallest useful outcome.
+title: "feat: "
+body:
+  - type: markdown
+    attributes:
+      value: Search existing issues first. Use synthetic examples and omit all credentials and private portfolio information.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Missing workflow
+      description: What are you trying to achieve, and how do you handle it today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe the smallest useful improvement and how its behavior could be verified.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and constraints
+      description: Include relevant account, currency or deployment constraints using synthetic examples.

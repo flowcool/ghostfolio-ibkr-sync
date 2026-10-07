@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible sync problem using sanitized evidence.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: "Use synthetic examples. Do not post tokens, account IDs, private URLs, portfolio details or real Flex XML. Report security vulnerabilities privately: https://github.com/flowcool/ghostfolio-ibkr-sync/security/advisories/new"
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Sync version from startup log, Ghostfolio version, and Python version if running without Docker.
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      options:
+        - Docker one-off
+        - Docker scheduled / Compose / Portainer
+        - Python
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Explain what is missing or incorrect, including whether the run exits 0 or 1.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction and sanitized evidence
+      description: Steps, synthetic transactions, relevant warnings and mapping examples. Remove all private information.
+    validations:
+      required: true
