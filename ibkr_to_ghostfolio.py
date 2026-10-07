@@ -362,6 +362,11 @@ def ghost_get_existing_orders(config):
     Uses one GET /api/v1/activities (no paging).  The /api/v1/order
     endpoints were deprecated in Ghostfolio 2.248.0 and removed in 3.5.0.
 
+    Prefers assetProfile; accepts legacy SymbolProfile only when the current
+    key is absent. BUY, SELL and DIVIDEND require a nonempty string symbol.
+    Raises RuntimeError on incomplete, redacted or invalid profile context,
+    before reconciliation can import activities or update cash balances.
+
     Returns a tuple of (trade_ids, dividend_comments, positions):
     - trade_ids: set of tradeIDs extracted from "IBKR#..." comments
     - dividend_comments: set of full comment strings like "dividend#SPY#2024-01-15"

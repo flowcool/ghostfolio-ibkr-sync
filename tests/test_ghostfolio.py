@@ -21,6 +21,7 @@ class Resp:
 
 
 def activity(profile_key="assetProfile", **kw):
+    """Build a valid current or legacy activity fixture with field overrides."""
     a = {"type": "BUY", "quantity": 10, "comment": None, "accountId": "acc", "date": "2026-08-01T00:00:00.000Z",
          profile_key: {"symbol": "KO", "isin": "US1912161007"}}
     a.update(kw)
@@ -28,6 +29,7 @@ def activity(profile_key="assetProfile", **kw):
 
 
 def serve(monkeypatch, body, status=200):
+    """Stub Ghostfolio GET requests with an isolated response body."""
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(body, status))
 
 
@@ -35,6 +37,7 @@ def serve(monkeypatch, body, status=200):
 
 @pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
 def test_existing_activities_are_indexed(monkeypatch, profile_key):
+    """Both profile formats populate trade IDs and account reconciliation indexes."""
     acts = [activity(comment="IBKR#T1"),
             activity(type="SELL", quantity=4, comment="IBKR#T2"),
             activity(type="SELL", quantity=3),                              # manual sell
@@ -129,6 +132,7 @@ def test_cash_balance_dry_run_does_not_touch_the_api(monkeypatch):
 @pytest.mark.parametrize("profile", [None, [], "bad", {}, {"symbol": None},
                                       {"symbol": 123}, {"symbol": ""}, {"symbol": "  "}])
 def test_required_asset_profile_is_validated(monkeypatch, kind, profile_key, profile):
+    """Reject malformed symbols on every investment type and supported profile key."""
     row = activity(type=kind)
     row.pop("assetProfile")
     row[profile_key] = profile
@@ -139,6 +143,7 @@ def test_required_asset_profile_is_validated(monkeypatch, kind, profile_key, pro
 
 @pytest.mark.parametrize("kind", ["BUY", "SELL", "DIVIDEND"])
 def test_missing_required_profile_refuses_to_sync(monkeypatch, kind):
+    """Reject investment activities when neither profile key is available."""
     row = activity(type=kind)
     row.pop("assetProfile")
     serve(monkeypatch, {"activities": [row], "count": 1})
@@ -147,6 +152,7 @@ def test_missing_required_profile_refuses_to_sync(monkeypatch, kind):
 
 
 def test_current_profile_takes_precedence_over_legacy(monkeypatch):
+    """Index the current profile when a conflicting legacy profile is also present."""
     row = activity(SymbolProfile={"symbol": "STALE", "isin": "STALE"})
     serve(monkeypatch, {"activities": [row], "count": 1})
     _, _, pos = m.ghost_get_existing_orders(CFG)
@@ -156,6 +162,7 @@ def test_current_profile_takes_precedence_over_legacy(monkeypatch):
 
 @pytest.mark.parametrize("profile", [None, {}, {"symbol": ""}])
 def test_invalid_current_profile_does_not_fall_back_to_legacy(monkeypatch, profile):
+    """An invalid current profile must fail even when the legacy profile is valid."""
     row = activity(assetProfile=profile, SymbolProfile={"symbol": "KO"})
     serve(monkeypatch, {"activities": [row], "count": 1})
     with pytest.raises(RuntimeError, match="asset profile symbol"):
@@ -163,6 +170,7 @@ def test_invalid_current_profile_does_not_fall_back_to_legacy(monkeypatch, profi
 
 
 def test_noninvestment_activity_does_not_require_profile(monkeypatch):
+    """Accept noninvestment activities without an asset profile."""
     serve(monkeypatch, {"activities": [{"type": "FEE", "quantity": 1}], "count": 1})
     ids, comments, pos = m.ghost_get_existing_orders(CFG)
     assert ids == comments == set()

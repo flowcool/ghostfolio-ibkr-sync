@@ -532,9 +532,11 @@ def test_malformed_flex_report_fails_only_that_account(monkeypatch):
 
 @pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
 def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(monkeypatch, profile_key):
+    """Both profile formats preserve account holdings and suppress reconciled imports."""
     from types import SimpleNamespace
 
     def row(kind, qty, date, symbol="KO", comment=None, account=ACC):
+        """Build an account activity using the profile format under test."""
         return {"type": kind, "quantity": qty, "date": date, "comment": comment,
                 "accountId": account, profile_key: {"symbol": symbol, "isin": ISIN_KO}}
 
@@ -558,6 +560,7 @@ def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(mo
 
 
 def test_main_invalid_api_profile_stops_before_fetch_or_write(monkeypatch):
+    """Abort startup on an invalid profile before account processing or API writes."""
     from types import SimpleNamespace
 
     monkeypatch.setattr(m, "load_config", lambda: {
