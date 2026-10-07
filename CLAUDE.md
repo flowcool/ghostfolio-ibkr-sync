@@ -51,7 +51,11 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 | — | Revue 2026-09-30 : lecture activités en 1 appel, garde restricted view, dividendes via Cash Transactions, mapping manquant fatal | ✅ mergé (#30–#34) |
 | — | Dividendes de positions long-détenues partiellement vendues (perte silencieuse) | ✅ mergé (#35, v2.0.1) |
 | — | Revue 2026-10-01 : BUY manuels dédupliqués, isolation exception par compte, suite pytest + CI, README gaps | ✅ mergés (#36–#42, jusqu'à v2.0.3) |
-| — | Contexte de sync restauré depuis l'assetProfile Ghostfolio | ✅ mergé (#43) — pas encore taggé, en prod via `:latest` (`v2.0.3-3-ge610b1d`) |
+| — | Contexte de sync restauré depuis l'assetProfile Ghostfolio | ✅ mergé (#43, v2.0.4) |
+| — | Symbole non résolu bloquait tout l'import du compte → drop-and-retry + exit 1 | ✅ mergé (#44, v2.0.5) |
+| — | Dedup dividende sans compte → 2e compte perdait ses dividendes (clé `(accountId, comment)`) | ✅ mergé (#45, v2.0.6) |
+| — | Durcissement supply-chain : checksum supercronic + SHAs d'actions pinnés | ✅ mergé (#46, v2.0.7) |
+| A, G | Corporate actions : findings fantômes (aucune n'existe dans la query Flex) → reformulés en feature `infra-8tt.29` | Reformulé |
 
 ## Gotchas ops
 
@@ -78,6 +82,6 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 ## Durable work state
 
 - Epic Beads : `infra-8tt` (ghostfolio) — enfants actifs via `bd list --status=open --metadata-field project=ghostfolio-ibkr-sync`
-- Findings ouverts : A = `infra-8tt.1`, G = `infra-cfa`
+- Corporate actions : feature `infra-8tt.29` (findings A `infra-8tt.1` + G `infra-cfa` superseded dedans 2026-10-07 — fantômes : aucune corporate action dans la query Flex ; gate = étendre la query IBKR avant de coder)
 - Revue de code 2026-09-30 : `bd list --label review-2026-09-30` (ordre porté par les dépendances Beads)
 - Revue de code 2026-10-01 : `bd list --label review-2026-10-01` (dividendes long-détenus, achats manuels, suite pytest)
