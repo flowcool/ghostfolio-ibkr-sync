@@ -31,7 +31,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - Branches : `fix/<sujet>`, `feat/<sujet>`, `refactor/<sujet>`
 - Commits : `fix:`, `feat:`, `refactor:`, `chore:` — message court, impératif
 - PRs : isolées par concern, merge commit uniquement (squash/rebase désactivés)
-- CI : tests pytest (PR + push) puis, hors PR, build amd64+arm64 → `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest`
+- CI: every PR runs pytest, dependency-audit, amd64/arm64 container-check and CodeQL. Required checks gate merges; PRs never publish. See `.github/BUILD.md` for publication refs, main-only latest, weekly refresh and rollback.
 - push `staging` → tag `:staging`, tester manuellement avant merge
 - Release : après merge, `git tag -a vX.Y.Z <merge-sha>` + push + `gh release create vX.Y.Z --verify-tag --latest` → CI publie `:X.Y.Z` + `:X.Y`. `:latest` reste main-only (un tag d'un vieux commit ne doit pas l'écraser). NAS reste sur `:latest` (décision opérateur 2026-09-30)
 - Version : CI `git describe --tags --always` → build-arg `APP_VERSION` → loggée au démarrage (`:latest` affiche `vX.Y.Z-N-g<sha>`)
