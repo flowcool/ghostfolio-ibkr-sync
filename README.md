@@ -123,9 +123,10 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
    > **Recovery if you already used a shorter period:** review existing activities
    > against the statement before widening the query. The repository contains
    > `cleanup_duplicates.py` and `cleanup_dividends.py`, but **do not run them with
-   > `--apply`**: their legacy profile matching is incompatible with current
-   > Ghostfolio activity responses and can pair unrelated assets. Their matching
-   > also needs account isolation. Dry-run output is not proof that deletion is
+   > `--apply`**: they use heuristic matching and do not provide transactional
+   > protection against concurrent edits. Account, currency and profile identity
+   > checks prevent unrelated identities from being paired, but cannot prove that
+   > two similar payments represent the same event. Dry-run output is not proof that deletion is
    > safe. These tools are not included in the Docker image. Reconcile affected
    > entries manually after taking a verified backup.
 
@@ -512,7 +513,7 @@ Run **Gather All Data** in Ghostfolio **Admin** - **Market Data**. This fetches 
 
 ### Negative positions appearing in Ghostfolio
 
-This happens when a sell trade is imported without its corresponding buy. The tool checks each security's net batch quantity against Ghostfolio holdings, and logs an `ERROR` when existing holdings plus new trades would be negative. This guard does not check chronological balances, and malformed trades skipped during conversion can invalidate its earlier quantity calculation. Review conversion warnings and compare positions after importing. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
+This happens when a sell trade is imported without its corresponding buy. The tool checks each security's net batch quantity against Ghostfolio holdings, and logs an `ERROR` when existing holdings plus new trades would be negative. This guard does not check chronological balances, and cannot repair a pre-existing negative position. Invalid or non-finite trade conversions are excluded before the holdings calculation and make the run exit 1. Review conversion errors and compare positions after importing. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
 
 ### IBKR symbol variants (for example CSNKYz vs CSNKY)
 

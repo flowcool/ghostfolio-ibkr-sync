@@ -184,6 +184,52 @@ def test_fx_and_option_trades_never_reach_the_import_nor_the_holdings_gate(monke
     assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
 
 
+@pytest.mark.parametrize("invalid", [{"tradePrice": "invalid"}, {"dateTime": "garbage"},
+                                    {"quantity": "invalid"}, {"tradePrice": "nan"},
+                                    {"quantity": "inf"}, {"ibCommission": "-inf"}])
+def test_invalid_buy_cannot_authorize_unbacked_sell(monkeypatch, invalid):
+    w = World(monkeypatch, report(trade_xml("B1", **invalid) + trade_xml("S1", "SELL")))
+    _, ok = w.run()
+    assert ok is False
+    assert w.activities == []
+    assert w.ids == set()
+    assert w.pos["qty"][(ACC, "KO")] == 0
+    assert w.cash_calls == [(ACC, 100.5)]
+
+
+def test_invalid_trade_does_not_prevent_unrelated_valid_security_import(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("B1", tradePrice="invalid") + trade_xml("S1", "SELL")
+                                 + trade_xml("P1", symbol="PEP", isin=ISIN_PEP)))
+    assert w.run()[1] is False
+    assert [a["comment"] for a in w.activities] == ["IBKR#P1"]
+    assert w.pos["qty"][(ACC, "KO")] == 0
+    assert w.pos["qty"][(ACC, "PEP")] == 10
+
+
+def test_valid_balanced_batch_still_imports_without_existing_holdings(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("B1") + trade_xml("S1", "SELL")))
+    assert w.run()[1] is True
+    assert [a["comment"] for a in w.activities] == ["IBKR#B1", "IBKR#S1"]
+    assert w.pos["qty"][(ACC, "KO")] == 0
+
+
+def test_gate_uses_sell_quantity_as_it_will_be_imported(monkeypatch):
+    # Converter uses BUY/SELL and abs(quantity); gate must use that same sign.
+    w = World(monkeypatch, report(trade_xml("S1", "SELL", quantity="10")))
+    w.run()
+    assert w.activities == []
+    assert w.pos["qty"][(ACC, "KO")] == 0
+
+
+def test_manual_buy_remains_deduplicated_after_preconversion(monkeypatch):
+    pos = positions({(ACC, "KO"): 10})
+    pos["manual_buys"][(ACC, "KO")].append(["2026-08-01", 10])
+    w = World(monkeypatch, report(trade_xml("B1")))
+    assert w.run(pos=pos)[1] is True
+    assert w.activities == []
+    assert w.pos["qty"][(ACC, "KO")] == 10
+
+
 # --- process_account: dividend deduplication ---------------------------------------
 
 @pytest.mark.parametrize("comment", [f"dividend#{ISIN_KO}#2026-07-15", "dividend#KO#2026-07-15"])

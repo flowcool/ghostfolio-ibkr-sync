@@ -9,6 +9,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
+from math import isfinite
 from urllib.parse import quote, quote_plus
 
 import requests
@@ -1069,13 +1070,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # CASH (FX conversions) and OPT are never imported; drop them before any gate
     trades = [t for t in trades if t.get("assetCategory", "") not in SKIP_ASSET_CATEGORIES]
 
-    # Trade gate: Ghostfolio holdings + not-yet-imported trades must not go negative
-    trades = filter_trades_by_holdings(trades, positions, ghost_account_id, mapping,
-                                       existing_trade_ids)
-
-    # Convert and filter trades
+    # Prepare actual import candidates before calculating their position impact.
     unmapped = {}
-    activities = []
+    prepared_trades = []
     skipped_dup = 0
     skipped_other = 0
 
@@ -1086,18 +1083,31 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
                         trade.get("symbol") or trade.get("isin") or "unknown",
                         trade.get("dateTime", ""))
             skipped_other += 1
+            ok = False
             continue
         if trade_id in existing_trade_ids:
             skipped_dup += 1
             continue
 
-        activity = convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped)
-        if activity:
-            activities.append(activity)
-        else:
-            asset_cat = trade.get("assetCategory", "")
-            if asset_cat not in SKIP_ASSET_CATEGORIES:
-                skipped_other += 1
+        trade_unmapped = {}
+        activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
+        if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+            log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
+            skipped_other += 1
+            ok = False
+            continue
+        # The gate must use the same signed quantity the converted BUY/SELL will
+        # add to Ghostfolio, while retaining raw fields for manual-entry matching.
+        prepared_trades.append({**trade,
+                                "quantity": (-1 if activity["type"] == "SELL" else 1) * activity["quantity"],
+                                "_activity": activity, "_unmapped": trade_unmapped})
+
+    trades = filter_trades_by_holdings(prepared_trades, positions, ghost_account_id, mapping,
+                                      existing_trade_ids)
+    activities = []
+    for trade in trades:
+        activities.append(trade["_activity"])
+        unmapped.update(trade["_unmapped"])
 
     log.info("New trade activities: %d, duplicates skipped: %d, other skipped: %d",
              len(activities), skipped_dup, skipped_other)
