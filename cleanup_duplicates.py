@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import logging
+from math import isfinite
 import os
 import sys
 from datetime import datetime, timezone, timedelta
@@ -55,16 +56,20 @@ def fetch_all_activities(config):
     url = f"{config['ghost_host']}/api/v1/activities"
     resp = requests.get(url, headers=headers(config["ghost_token"]), timeout=60)
     resp.raise_for_status()
-    return resp.json().get("activities", [])
+    data = resp.json()
+    activities = data.get("activities")
+    if not isinstance(activities, list) or data.get("count") != len(activities):
+        raise RuntimeError("Incomplete activity list; refusing cleanup")
+    return activities
 
 
 def parse_date(iso):
-    """Parse ISO date string to UTC-aware datetime."""
-    if not iso:
+    """Require a valid instant; interpret legacy naive dates as UTC."""
+    if not isinstance(iso, str) or not iso.strip():
         return None
-    iso = iso.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(iso)
+        parsed = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
     except ValueError:
         return None
 
@@ -115,8 +120,12 @@ def put_comment(config, activity, new_comment, dry_run):
         "unitPrice": activity["unitPrice"],
         "dataSource": source,
     }
-    resp = requests.put(url, headers=headers(config["ghost_token"]), json=payload, timeout=30)
-    if resp.status_code >= 400:
+    try:
+        resp = requests.put(url, headers=headers(config["ghost_token"]), json=payload, timeout=30)
+    except requests.RequestException:
+        log.error("  PUT outcome uncertain; inspect safety log before recovery")
+        return False
+    if not 200 <= resp.status_code < 300:
         log.error("  PUT failed (%d): %s", resp.status_code, resp.text[:200])
         return False
     log.info("  PUT OK: %s comment → %r", activity_id, new_comment)
@@ -129,8 +138,12 @@ def delete_activity(config, activity_id, dry_run):
     if dry_run:
         log.info("  [DRY-RUN] DELETE %s", activity_id)
         return True
-    resp = requests.delete(url, headers=headers(config["ghost_token"]), timeout=30)
-    if resp.status_code >= 400:
+    try:
+        resp = requests.delete(url, headers=headers(config["ghost_token"]), timeout=30)
+    except requests.RequestException:
+        log.error("  DELETE outcome uncertain; inspect safety log before recovery")
+        return False
+    if not 200 <= resp.status_code < 300:
         log.error("  DELETE failed (%d): %s", resp.status_code, resp.text[:200])
         return False
     log.info("  DELETE OK: %s", activity_id)
@@ -164,9 +177,55 @@ def identity_of(activity):
     return identity
 
 
+def validate_financial_evidence(activity):
+    """Reject incomplete or nonfinite evidence before planning any writes."""
+    identity_of(activity)
+    if not isinstance(activity.get("id"), str) or not activity["id"].strip():
+        raise RuntimeError("Missing cleanup activity id")
+    if parse_date(activity.get("date")) is None:
+        raise RuntimeError("Invalid cleanup activity date")
+    for field in ("quantity", "unitPrice", "fee"):
+        value = activity.get(field)
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not isfinite(value) or value < 0
+                or (field == "quantity" and value == 0)):
+            raise RuntimeError(f"Invalid cleanup financial evidence: {field}")
+    comment = activity.get("comment")
+    if comment is not None and not isinstance(comment, str):
+        raise RuntimeError("Invalid cleanup comment")
+
+
+def inactive(activity):
+    """Conservatively exclude drafts/exclusions, including account tags."""
+    account = activity.get("account") or {}
+    tags = activity.get("tags", []) + account.get("tags", [])
+    return (activity.get("isDraft") is True or activity.get("isExcluded") is True
+            or account.get("isExcluded") is True
+            or any(tag.get("id") in ("0c077abd-eca2-4cbb-818c-6cefbf2d169a",
+                                     "f2e868af-8333-459f-b161-cbc6544c24bd")
+                   for tag in tags))
+
+
+def fetch_fresh(config, planned):
+    url = f"{config['ghost_host']}/api/v1/activities/{planned['id']}"
+    try:
+        response = requests.get(url, headers=headers(config["ghost_token"]), timeout=10)
+        if not 200 <= response.status_code < 300:
+            raise RuntimeError("unreadable activity")
+        fresh = response.json()
+        validate_financial_evidence(fresh)
+        if inactive(fresh) or not snapshot_matches(fresh, planned):
+            raise RuntimeError("changed or inactive activity")
+        return fresh
+    except (requests.RequestException, ValueError, RuntimeError, TypeError, AttributeError):
+        log.error("  Cannot verify unchanged activity %s; refusing pair", planned["id"])
+        return None
+
+
 def snapshot_matches(fresh, planned):
     """Refuse a stale plan before tagging the manual entry or deleting its pair."""
-    fields = ("id", "type", "date", "quantity", "unitPrice", "fee", "comment")
+    fields = ("id", "type", "date", "quantity", "unitPrice", "fee", "comment",
+              "tags", "account", "isDraft", "isExcluded")
     return (identity_of(fresh) == identity_of(planned)
             and all(fresh.get(field) == planned.get(field) for field in fields))
 
@@ -196,13 +255,20 @@ def main():
     # Reject incomplete profile context before planning any destructive cleanup.
     for activity in all_activities:
         if activity.get("type") in ("BUY", "SELL"):
-            identity_of(activity)
+            validate_financial_evidence(activity)
+
+    eligible_ids = [a["id"] for a in all_activities
+                    if a.get("type") in ("BUY", "SELL")]
+    if len(eligible_ids) != len(set(eligible_ids)):
+        raise RuntimeError("Repeated cleanup activity id; refusing ambiguous list")
 
     # Split IBKR-synced vs manual
     ibkr = []
     manual = []
     for a in all_activities:
         if a.get("type") not in ("BUY", "SELL"):
+            continue
+        if inactive(a):
             continue
         comment = a.get("comment") or ""
         if comment.startswith("IBKR#"):
@@ -213,52 +279,30 @@ def main():
     log.info("IBKR# entries: %d", len(ibkr))
     log.info("Manual entries (no IBKR#): %d", len(manual))
 
-    # For each IBKR# entry, find a matching manual entry
-    matched_pairs = []    # (ibkr_entry, manual_entry)
-    unmatched_ibkr = []   # IBKR# entries with no manual counterpart (genuinely new)
-    used_manual_ids = set()
-
+    # Require a unique one-to-one assignment; never guess between real trades.
+    matched_pairs = []
+    unmatched_ibkr = []
+    candidates = []
     for ib in ibkr:
-        ib_identity = identity_of(ib)
-        ib_type = ib.get("type")
-        ib_qty = ib.get("quantity")
-        ib_price = ib.get("unitPrice")
-        ib_date = parse_date(ib.get("date"))
-
-        best = None
-        best_delta = None
-
+        matches = []
         for m in manual:
-            if m["id"] in used_manual_ids:
+            if identity_of(m) != identity_of(ib) or m["type"] != ib["type"]:
                 continue
-            if identity_of(m) != ib_identity:
+            if any(m[field] != ib[field]
+                   for field in ("quantity", "unitPrice", "fee")):
                 continue
-            if m.get("type") != ib_type:
-                continue
-            if m.get("quantity") != ib_qty:
-                continue
-            if m.get("unitPrice") != ib_price:
-                continue
-
-            m_date = parse_date(m.get("date"))
-            if ib_date and m_date:
-                delta = abs(ib_date - m_date)
-                if delta > DATE_TOLERANCE:
-                    continue
-                if best is None or delta < best_delta:
-                    best = m
-                    best_delta = delta
-            else:
-                # No date to compare — still a candidate if no better match found
-                if best is None:
-                    best = m
-                    best_delta = timedelta(days=99)
-
-        if best:
-            matched_pairs.append((ib, best))
-            used_manual_ids.add(best["id"])
+            if abs(parse_date(ib["date"]) - parse_date(m["date"])) <= DATE_TOLERANCE:
+                matches.append(m)
+        candidates.append((ib, matches))
+    for ib, matches in candidates:
+        if (len(matches) == 1
+                and sum(any(m["id"] == matches[0]["id"] for m in other)
+                        for _, other in candidates) == 1):
+            matched_pairs.append((ib, matches[0]))
         else:
             unmatched_ibkr.append(ib)
+            if matches:
+                log.warning("Ambiguous cleanup pair for %s; kept unchanged", ib["id"])
 
     log.info("")
     log.info("=== RESULTS ===")
@@ -317,41 +361,30 @@ def main():
         log.info("Processing %s %s %sx@%s...",
                  symbol_of(ib), ib.get("type"), ib.get("quantity"), ib.get("unitPrice"))
 
-        # Fetch fresh copy of manual activity for PUT payload
-        url = f"{config['ghost_host']}/api/v1/activities/{m['id']}"
-        fresh = requests.get(url, headers=headers(config["ghost_token"]), timeout=10)
-        if fresh.status_code >= 400:
-            log.error("  Cannot fetch manual activity %s (%d)", m["id"], fresh.status_code)
-            errors += 1
-            continue
-        try:
-            m_full = fresh.json()
-        except ValueError:
-            log.error("  Cannot parse response for %s", m["id"])
+        m_full = fetch_fresh(config, m)
+        ib_full = fetch_fresh(config, ib) if m_full is not None else None
+        if m_full is None or ib_full is None:
             errors += 1
             continue
 
-        try:
-            unchanged = snapshot_matches(m_full, m)
-        except RuntimeError:
-            unchanged = False
-        if not unchanged:
-            log.error("  Manual activity %s changed or has incomplete identity; refusing pair", m["id"])
-            errors += 1
-            continue
+        # Replace both preimages with the verified fresh records before mutation.
+        snapshot[matched_pairs.index((ib, m))]["manual"] = m_full
+        snapshot[matched_pairs.index((ib, m))]["ibkr_to_delete"] = ib_full
+        log_file.write_text(json.dumps(snapshot, indent=2, default=str))
 
         ok = put_comment(config, m_full, new_comment, dry_run=False)
         if ok:
             patched += 1
         else:
             errors += 1
-            continue
+            break
 
         ok = delete_activity(config, ib["id"], dry_run=False)
         if ok:
             deleted += 1
         else:
             errors += 1
+            break
 
     log.info("")
     log.info("=== DONE ===")
