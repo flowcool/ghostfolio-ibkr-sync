@@ -336,3 +336,37 @@ def test_real_ghostfolio_inactive_tags_refuse_cleanup(tool, monkeypatch, caplog,
     context["tags"] = [{"id": tag}]
     run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
     assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("flag", ["isExcluded", "isDraft", "account", "tags"])
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("bad_record", ["missing-evidence", "duplicate-id"])
+def test_inactive_evidence_does_not_block_valid_active_pair(tool, monkeypatch, caplog,
+                                                          flag, apply, bad_record):
+    caplog.set_level("INFO")
+    synced, manual = activity(tool), activity(tool, "manual")
+    inactive = activity(tool, "inactive")
+    if bad_record == "missing-evidence":
+        inactive["assetProfile"] = None
+        for field in ("id", "accountId", "currency", "quantity", "unitPrice", "fee", "date"):
+            inactive.pop(field)
+    else:
+        inactive["id"] = synced["id"]
+    inactive[flag] = ({"isExcluded": True} if flag == "account" else
+                      [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}] if flag == "tags" else True)
+    writes = []
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: deepcopy(
+                            manual if url.endswith("manual") else synced)))
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    run_cleanup(tool, monkeypatch, [synced, inactive, manual], apply=apply)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 1") for r in caplog.records)
+    assert writes == (["PUT", "DELETE"] if apply else [])
+
+
+def test_repeated_active_id_still_aborts_before_writes(tool, monkeypatch):
+    synced, manual = activity(tool), activity(tool, "manual")
+    manual["id"] = synced["id"]
+    with pytest.raises(RuntimeError, match="Repeated cleanup activity id"):
+        run_cleanup(tool, monkeypatch, [synced, manual], apply=True)

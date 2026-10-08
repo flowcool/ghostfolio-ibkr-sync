@@ -248,11 +248,11 @@ def main():
     log.info("Total activities: %d", len(all_activities))
     # Reject incomplete profile context before planning any destructive cleanup.
     for activity in all_activities:
-        if activity.get("type") in ("DIVIDEND",):
+        if activity.get("type") in ("DIVIDEND",) and not inactive(activity):
             validate_financial_evidence(activity)
 
     eligible_ids = [a["id"] for a in all_activities
-                    if a.get("type") in ("DIVIDEND",)]
+                    if a.get("type") in ("DIVIDEND",) and not inactive(a)]
     if len(eligible_ids) != len(set(eligible_ids)):
         raise RuntimeError("Repeated cleanup activity id; refusing ambiguous list")
 
