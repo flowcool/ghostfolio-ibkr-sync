@@ -103,6 +103,68 @@ def test_comment_update_rejects_missing_source_without_http(tool):
         tool.put_comment({"ghost_host": "http://synthetic", "ghost_token": "fake"}, a, "tag", False)
 
 
+@pytest.mark.parametrize("field,value", [("accountId", "other-account"), ("currency", "EUR"),
+                                        ("dataSource", "MANUAL")])
+def test_duplicate_pairing_requires_same_financial_identity(tool, monkeypatch, caplog, field, value):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    if field == "dataSource":
+        manual["assetProfile"][field] = value
+    else:
+        manual[field] = value
+    run_cleanup(tool, monkeypatch, [activity(tool), manual])
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("field", ["accountId", "currency", "dataSource"])
+@pytest.mark.parametrize("value", [None, "", " "])
+def test_incomplete_identity_aborts_before_planning(tool, monkeypatch, caplog, field, value):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    if field == "dataSource":
+        manual["assetProfile"][field] = value
+    else:
+        manual[field] = value
+    with pytest.raises(RuntimeError, match="identity"):
+        run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert not any("Matched pairs" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("changed", ["accountId", "currency", "symbol", "dataSource", "quantity", "date", "comment"])
+def test_changed_fresh_manual_activity_never_reaches_mutation(tool, monkeypatch, changed):
+    manual = activity(tool, "manual")
+    fresh = deepcopy(manual)
+    if changed in ("symbol", "dataSource"):
+        fresh["assetProfile"][changed] = "OTHER"
+    elif changed == "quantity":
+        fresh[changed] = 2
+    else:
+        fresh[changed] = "changed"
+    monkeypatch.setattr(tool.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: fresh))
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert exc.value.code == 1
+    assert writes == []
+
+
+def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monkeypatch):
+    manual = activity(tool, "manual")
+    fresh = deepcopy(manual)
+    fresh["SymbolProfile"] = fresh.pop("assetProfile")
+    synced = activity(tool)
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: fresh if url.endswith("manual") else synced))
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert writes == ["PUT", "DELETE"]
+
+
 def test_excluded_financial_type_with_invalid_profile_does_not_block(tool, monkeypatch, caplog):
     caplog.set_level("INFO")
     excluded = {"id": "excluded", "type": "BUY" if tool is cleanup_dividends else "DIVIDEND",
@@ -127,7 +189,7 @@ def test_later_missing_source_aborts_before_any_pair_mutation(tool, monkeypatch,
     writes = []
     monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
     monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
-    with pytest.raises(RuntimeError, match="data source"):
+    with pytest.raises(RuntimeError, match="identity"):
         run_cleanup(tool, monkeypatch, acts, apply=True)
     assert writes == []
     assert not any("Matched pairs" in r.message for r in caplog.records)
@@ -148,7 +210,7 @@ def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkey
         second["assetProfile"] = None
     elif changed == "non-object":
         second = None
-    fresh = iter([deepcopy(acts[1]), second])
+    fresh = iter([deepcopy(acts[1]), deepcopy(acts[0]), second])
     def response(*args, **kwargs):
         obj = next(fresh)
         def json_body():
@@ -164,3 +226,183 @@ def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkey
         run_cleanup(tool, monkeypatch, acts, apply=True)
     assert exc.value.code == 1
     assert writes == [("PUT", "manual"), ("DELETE", "synced")]
+
+
+@pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), -1, True, "1"])
+def test_invalid_financial_evidence_aborts_before_any_write(tool, monkeypatch, field, bad):
+    acts = two_pairs(tool)
+    acts[-1][field] = bad
+    with pytest.raises(RuntimeError, match="financial evidence"):
+        run_cleanup(tool, monkeypatch, acts, apply=True)
+
+
+@pytest.mark.parametrize("field,bad", [("date", None), ("date", "bad"), ("id", ""), ("quantity", 0)])
+def test_incomplete_evidence_is_not_a_match(tool, monkeypatch, field, bad):
+    manual = activity(tool, "manual")
+    manual[field] = bad
+    with pytest.raises(RuntimeError):
+        run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+
+
+def test_fee_conflict_keeps_both_records(tool, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    synced = activity(tool)
+    synced["fee"] = 1
+    run_cleanup(tool, monkeypatch, [synced, activity(tool, "manual")], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_ambiguous_pair_is_never_chosen_by_order(tool, monkeypatch, caplog, reverse):
+    caplog.set_level("INFO")
+    acts = [activity(tool), activity(tool, "manual"), activity(tool, "manual-2")]
+    run_cleanup(tool, monkeypatch, acts[::-1] if reverse else acts, apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+def test_two_synced_candidates_cannot_claim_same_manual(tool, monkeypatch, caplog):
+    caplog.set_level("INFO")
+    other = activity(tool)
+    other["id"] = "synced-2"
+    run_cleanup(tool, monkeypatch, [activity(tool), other, activity(tool, "manual")], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("change", ["quantity", "fee", "id", "comment", "date", "tags"])
+def test_changed_synced_preimage_never_reaches_put_or_delete(tool, monkeypatch, change):
+    synced, manual = activity(tool), activity(tool, "manual")
+    changed = deepcopy(synced)
+    changed[change] = [{"id": "new-tag"}] if change == "tags" else (99 if change in ("quantity", "fee") else "changed")
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: manual if url.endswith("manual") else changed))
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+    assert exc.value.code == 1
+
+
+@pytest.mark.parametrize("which", ["manual", "synced"])
+@pytest.mark.parametrize("flag", ["isExcluded", "isDraft", "account", "tags"])
+def test_inactive_candidate_is_never_used_for_destructive_pair(tool, monkeypatch, caplog, which, flag):
+    caplog.set_level("INFO")
+    synced, manual = activity(tool), activity(tool, "manual")
+    a = manual if which == "manual" else synced
+    a[flag] = ({"isExcluded": True} if flag == "account" else
+               [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}] if flag == "tags" else True)
+    run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
+@pytest.mark.parametrize("stage", ["get", "put", "delete"])
+def test_request_failure_stops_cleanup_without_blind_retry(tool, monkeypatch, stage):
+    acts = two_pairs(tool)
+    by_id = {a["id"]: a for a in acts}
+    calls = []
+    def get(url, **kwargs):
+        if stage == "get":
+            raise tool.requests.Timeout("synthetic")
+        return SimpleNamespace(status_code=200, json=lambda: deepcopy(by_id[url.rsplit("/", 1)[1]]))
+    def put(*args, **kwargs):
+        calls.append("PUT")
+        if stage == "put":
+            raise tool.requests.Timeout("synthetic")
+        return SimpleNamespace(status_code=200)
+    def delete(*args, **kwargs):
+        calls.append("DELETE")
+        raise tool.requests.Timeout("synthetic")
+    monkeypatch.setattr(tool.requests, "get", get)
+    monkeypatch.setattr(tool.requests, "put", put)
+    monkeypatch.setattr(tool.requests, "delete", delete)
+    with pytest.raises(SystemExit) as exc:
+        run_cleanup(tool, monkeypatch, acts, apply=True)
+    assert exc.value.code == 1
+    assert calls == ([] if stage == "get" else ["PUT"] if stage == "put" else ["PUT", "DELETE"])
+
+
+def test_incomplete_listing_aborts_cleanup(tool, monkeypatch):
+    monkeypatch.setattr(tool.requests, "get", lambda *args, **kwargs:
+                        SimpleNamespace(raise_for_status=lambda: None,
+                                        json=lambda: {"activities": [activity(tool)], "count": 2}))
+    with pytest.raises(RuntimeError, match="Incomplete"):
+        tool.fetch_all_activities({"ghost_host": "http://synthetic", "ghost_token": "fake"})
+
+
+@pytest.mark.parametrize("flag", ["isExcluded", "isDraft", "account", "tags"])
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("bad_record", ["missing-evidence", "duplicate-id"])
+def test_inactive_evidence_does_not_block_valid_active_pair(tool, monkeypatch, caplog,
+                                                          flag, apply, bad_record):
+    caplog.set_level("INFO")
+    synced, manual = activity(tool), activity(tool, "manual")
+    inactive = activity(tool, "inactive")
+    if bad_record == "missing-evidence":
+        inactive["assetProfile"] = None
+        for field in ("id", "accountId", "currency", "quantity", "unitPrice", "fee", "date"):
+            inactive.pop(field)
+    else:
+        inactive["id"] = synced["id"]
+    inactive[flag] = ({"isExcluded": True} if flag == "account" else
+                      [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}] if flag == "tags" else True)
+    writes = []
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: deepcopy(
+                            manual if url.endswith("manual") else synced)))
+    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    run_cleanup(tool, monkeypatch, [synced, inactive, manual], apply=apply)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 1") for r in caplog.records)
+    assert writes == (["PUT", "DELETE"] if apply else [])
+
+
+def test_repeated_active_id_still_aborts_before_writes(tool, monkeypatch):
+    synced, manual = activity(tool), activity(tool, "manual")
+    manual["id"] = synced["id"]
+    with pytest.raises(RuntimeError, match="Repeated cleanup activity id"):
+        run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+
+
+@pytest.mark.parametrize("days,seconds", [(7, 0), (7, 1), (28, 0), (-28, 0), (35, 0), (36, 0)])
+@pytest.mark.parametrize("apply", [False, True])
+def test_dividend_date_window_keeps_wide_candidates_read_only(monkeypatch, tmp_path, caplog,
+                                                             days, seconds, apply):
+    from datetime import datetime, timedelta, timezone
+
+    tool = cleanup_dividends
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tool.requests.sessions.Session, "request",
+                        lambda *a, **k: pytest.fail("Unexpected HTTP call"))
+    caplog.set_level("INFO")
+    synced, manual = activity(tool), activity(tool, "manual")
+    manual["date"] = "2026-02-15T00:00:00Z"
+    synced["date"] = (datetime(2026, 2, 15, tzinfo=timezone.utc)
+                      + timedelta(days=days, seconds=seconds)).isoformat()
+    synced["comment"] = "dividend#US0378331005#" + synced["date"][:10]
+    writes = []
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: deepcopy(
+                            manual if url.endswith("manual") else synced)))
+
+    def put_comment(cfg, row, comment, dry_run):
+        writes.append(("PUT", row["id"]))
+        manual["comment"] = comment
+        return True
+
+    monkeypatch.setattr(tool, "put_comment", put_comment)
+    monkeypatch.setattr(tool, "delete_activity",
+                        lambda cfg, ident, **kwargs: writes.append(("DELETE", ident)) or True)
+    delta = abs(timedelta(days=days, seconds=seconds))
+    refused = apply and timedelta(days=7) < delta <= timedelta(days=35)
+    if refused:
+        with pytest.raises(SystemExit) as exc:
+            run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+        assert exc.value.code == 1
+        assert any("Refusing dividend cleanup pair" in r.message for r in caplog.records)
+    else:
+        run_cleanup(tool, monkeypatch, [synced, manual], apply=apply)
+    assert writes == ([("PUT", "manual"), ("DELETE", "synced")]
+                      if apply and delta <= timedelta(days=7) else [])
+    if not apply and delta <= timedelta(days=35):
+        assert any("Matched pairs" in r.message and r.message.endswith(": 1")
+                   for r in caplog.records)
+    if not writes:
+        assert manual["comment"] is None
