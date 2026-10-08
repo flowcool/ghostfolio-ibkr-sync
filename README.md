@@ -550,10 +550,61 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 - **Account-scoped queries** - use a separate Flex Query per sub-account. Several account/query pairs can run sequentially in one container; separate containers are recommended for operational isolation.
 - **Additive imports** - later IBKR corrections to already-imported trades or same-date dividends are not reconciled. Dividend proximity matching can suppress distinct payments within ±3 days; check unusual payment schedules and tax corrections manually.
 - **Commission currency** - commissions are booked in the activity currency; a different IBKR commission currency is not converted.
-- **Cleanup is not transactional** - cleanup requires complete financial evidence, equal fees, a unique one-to-one pair and unchanged fresh copies of both rows. Draft or excluded candidates are refused. PUT can succeed while DELETE fails; stop and inspect both rows and the safety log before any recovery. Rerunning does not recover a partially processed pair, and the snapshot is not a verified reinjection procedure.
+- **Cleanup is not transactional** - cleanup requires complete financial evidence, equal fees, a unique one-to-one pair and unchanged fresh copies of both rows. Draft or excluded candidates are refused. PUT can succeed while DELETE fails; stop and inspect both rows and the safety log before any recovery. A new apply writes a private YAML journal with exact preimages and known/unknown outcomes. Explicit journal recovery can finish an unchanged pair; it does not recreate deleted activities or repair changed records.
 - **Active position context** - drafts and excluded activities/accounts retain their import identifiers for deduplication, but cannot contribute holdings, manual matches or dividend proximity evidence. Holdings and manual reconciliation use active YAHOO profiles; other sources cannot back YAHOO sells. Excluded target accounts are refused. Future timestamps are deferred with exit 1 until a later run; this conservative instant check avoids server-local draft assignment even when import responses omit tags. Accepted imports use the actual server profile symbol; a canonicalized symbol can require an explicit mapping before sells under the original ticker are allowed.
 - **Batch guard limitations** - the gate checks net quantity, not chronological balances. Buy and sell phases are separate requests, so successful buys can remain if sells fail. A dry-run previews candidates without verifying server acceptance.
 - **No overlap protection** - avoid concurrent sync runs targeting the same Ghostfolio account; deduplication is based on a snapshot read at startup.
+
+## Inspecting an interrupted cleanup
+
+The cleanup tools are operator maintenance commands, outside the container image.
+Heuristic pair matching still requires a reviewed dry-run, verified backup and quiet
+portfolio writers. The recovery feature does not authorize financial repair by itself.
+
+For a separately authorized cleanup, select an explicit journal path:
+
+```bash
+python cleanup_duplicates.py --apply --journal cleanup-pairs.yaml
+# Dividend equivalent: python cleanup_dividends.py --apply --journal dividend-pairs.yaml
+```
+
+Apply stores a private keyed YAML journal before the first mutation. Each pair records
+both verified activity preimages, user/account identity, intended comment and PUT/DELETE
+states. Updates are written atomically and synced to disk; an exclusive companion lock
+prevents concurrent use of the same journal. Preserve both files with your backup.
+Credentials are not stored; keep the journal private because it contains portfolio data.
+
+After an interruption or error, inspect without writes:
+
+```bash
+python cleanup_duplicates.py --resume cleanup-pairs.yaml
+```
+
+Inspection checks every pair against fresh user-scoped API records. A timeout may have
+committed: the fresh retained comment and deletion target decide the next action, not
+a stale status flag. Missing or changed retained records, different owners, values,
+accounts, currencies, sources or tags are refused. A missing synced record counts as
+complete only if the retained manual record is verified with the intended comment.
+Legacy JSON snapshots do not contain the required outcome/ownership contract and are
+not accepted as recovery journals.
+
+For a separately authorized resume, quiesce other writers, retain the journal, and run:
+
+```bash
+python cleanup_duplicates.py --resume cleanup-pairs.yaml --apply
+```
+
+Dividend journals with date gaps above 7 days remain available for read-only
+inspection, including journals created before this safeguard. `--resume --apply`
+refuses them before any mutation; verify and reconcile those payments manually.
+
+Recovery revalidates immediately before mutation, skips a PUT already verified as
+committed, and skips a DELETE already verified as complete. An unchanged untouched
+pair can continue normally. Repeated successful recovery sends no further mutations.
+An unknown mutation stops the run for another inspection; there is no automatic
+compensation or reinjection. The API has no conditional writes or pair transaction,
+so other writers must remain stopped during apply/resume. A readonly inspection does
+not constitute a guarantee against later concurrent edits.
 
 ## Development
 
