@@ -98,6 +98,20 @@ def test_repeated_runs_and_closed_issues_never_duplicate_or_reopen():
     assert closed.writes == []
 
 
+def test_a_marker_written_with_another_spelling_acknowledges_the_release():
+    api = FakeAPI([{"number": 1, "body": watch.release_marker(PINS[0], "3.11.0")}])
+    assert watch.monitor(api, REPO, PINS[:1], fetch_pypi=fetch) == []
+    other = FakeAPI([{"number": 1, "body": watch.release_marker(PINS[1], "3.11")}])
+    assert len(watch.monitor(other, REPO, PINS[:1], fetch_pypi=fetch)) == 1   # another package's marker
+
+
+@pytest.mark.parametrize("data", [{"info": {}}, {"releases": None}, {"releases": []}, []])
+def test_a_pypi_response_without_a_releases_mapping_is_rejected(data):
+    with pytest.raises(RuntimeError, match="releases"):
+        watch.pypi_releases("pkg", fetch=lambda url: data)
+    assert watch.pypi_releases("pkg", fetch=lambda url: {"releases": {}}) == ([], [])
+
+
 def test_pull_requests_do_not_acknowledge_a_release():
     api = FakeAPI([{"body": watch.release_marker(PINS[0], "3.11"), "pull_request": {}}])
     assert len(watch.monitor(api, REPO, PINS[:1], fetch_pypi=fetch)) == 1
@@ -157,7 +171,8 @@ def test_invalid_repository_or_package_names_are_rejected():
 
 
 def test_pins_are_read_from_requirements_and_dockerfile(tmp_path):
-    (tmp_path / "requirements.txt").write_text("# comment\nRequests==2.34.2\n    # via x\npyyaml==6.0.3\n")
+    (tmp_path / "requirements.txt").write_text(
+        "# comment\nRequests == 2.34.2\n    # via x\n\npyyaml==6.0.3 ; python_version >= '3.8'  # yaml\n")
     (tmp_path / "Dockerfile").write_text("FROM python\nARG SUPERCRONIC_VERSION=v0.2.49\n")
     assert watch.read_pins(tmp_path) == [
         {"ecosystem": "pypi", "name": "requests", "version": "2.34.2"},
@@ -172,6 +187,8 @@ def test_real_repository_pins_are_readable():
 
 @pytest.mark.parametrize("requirements,dockerfile", [
     ("requests==2.34.2rc1\n", "ARG SUPERCRONIC_VERSION=v0.2.49\n"),
+    ("requests==2.34.2\npyyaml>=6\n", "ARG SUPERCRONIC_VERSION=v0.2.49\n"),
+    ("requests==2.34.2\n-r other.txt\n", "ARG SUPERCRONIC_VERSION=v0.2.49\n"),
     ("requests==2.34.2\n", "FROM python\n"),
     ("", "ARG SUPERCRONIC_VERSION=v0.2.49\n")])
 def test_unsupported_or_missing_pins_fail_loudly(tmp_path, requirements, dockerfile):

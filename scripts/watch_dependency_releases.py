@@ -26,7 +26,9 @@ MAX_NEW_ISSUES_PER_RUN = 10
 # Final releases only: pre-, post- and dev releases are not proposed for pins.
 STABLE_VERSION = re.compile(r"\d+(\.\d+){0,5}")
 PACKAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-PIN = re.compile(r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[^\s;#]+)")
+# An exact pin, optionally followed by an environment marker or a comment.
+PIN = re.compile(r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*(?P<version>[^\s;#]+)\s*([;#].*)?")
+MARKER = re.compile(r"<!-- dependency-release:(?P<ecosystem>[a-z]+):(?P<name>[^:\s]+):(?P<version>\d+(\.\d+)*) -->")
 SUPERCRONIC_PIN = re.compile(r"^ARG SUPERCRONIC_VERSION=v(?P<version>\S+)$", re.M)
 # Changelog links come from untrusted package metadata: keep plain https URLs
 # without markup characters, and only for changelog-like labels.
@@ -47,11 +49,16 @@ def read_pins(root=ROOT):
     """Return the watched pins: [{"ecosystem", "name", "version"}]."""
     pins = []
     for line in (root / "requirements.txt").read_text().splitlines():
-        match = PIN.match(line.strip())
-        if match:
-            if not STABLE_VERSION.fullmatch(match["version"]):
-                raise ValueError(f"Unsupported pin in requirements.txt: {match['name']}")
-            pins.append({"ecosystem": "pypi", "name": match["name"].lower(), "version": match["version"]})
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Anything but an exact pin would silently drop out of the watch.
+        match = PIN.fullmatch(line)
+        if not match:
+            raise ValueError(f"Unsupported requirement in requirements.txt: {line[:60]}")
+        if not STABLE_VERSION.fullmatch(match["version"]):
+            raise ValueError(f"Unsupported pin in requirements.txt: {match['name']}")
+        pins.append({"ecosystem": "pypi", "name": match["name"].lower(), "version": match["version"]})
     supercronic = SUPERCRONIC_PIN.search((root / "Dockerfile").read_text())
     if not supercronic or not STABLE_VERSION.fullmatch(supercronic["version"]):
         raise ValueError("SUPERCRONIC_VERSION pin not found in Dockerfile")
@@ -74,8 +81,10 @@ def fetch_json(url):
 def pypi_releases(name, fetch=fetch_json):
     """Stable, non-yanked releases of a PyPI project, plus its changelog links."""
     data = fetch(f"https://pypi.org/pypi/{quote(name, safe='')}/json")
+    if not isinstance(data, dict) or not isinstance(data.get("releases"), dict):
+        raise RuntimeError(f"PyPI response for {name} has no releases mapping")
     releases = []
-    for version, files in (data.get("releases") or {}).items():
+    for version, files in data["releases"].items():
         if not STABLE_VERSION.fullmatch(version) or not files or all(f.get("yanked") for f in files):
             continue
         releases.append({"version": version,
@@ -156,7 +165,10 @@ def monitor(api, repository, pins, fetch_pypi=pypi_releases, limit=MAX_NEW_ISSUE
     # Explicit state=all: closed notices stay acknowledged.
     bodies = [i.get("body") or "" for i in api.list_all(f"repos/{repository}/issues?state=all")
               if "pull_request" not in i]
-    pending = [p for p in pending if not any(release_marker(p[0], p[1]["version"]) in b for b in bodies)]
+    # Compared by version_key so a marker written as 2.35 also covers 2.35.0.
+    seen = {(m["ecosystem"], m["name"], version_key(m["version"])) for b in bodies for m in MARKER.finditer(b)}
+    pending = [p for p in pending
+               if (p[0]["ecosystem"], p[0]["name"], version_key(p[1]["version"])) not in seen]
     if not pending:
         print("Every new dependency release already has a review issue")
         return []
