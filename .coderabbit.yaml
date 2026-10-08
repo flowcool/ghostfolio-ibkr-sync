@@ -1,5 +1,28 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: en-US
+inheritance: true
 reviews:
+  profile: chill
+  poem: false
+  in_progress_fortune: false
+  review_status: true
   auto_review:
     enabled: true
     drafts: false
-  profile: "chill"
+  path_instructions:
+    - path: "**/*.py"
+      instructions: >-
+        Prioritize account isolation, idempotent imports and reconciliation,
+        stable trade identifiers, dividend/payment semantics and currency units.
+        Verify validation of HTTP and Flex XML responses before mutation.
+        Fail closed on incomplete or redacted activity data. Check that cleanup
+        cannot delete unrelated records and can recover safely after partial
+        failure. Flag tokens in URLs, exception messages, logs and artifacts.
+        Keep runtime dependencies minimal and preserve supported API contracts.
+    - path: "tests/**/*.py"
+      instructions: >-
+        Require synthetic financial data and mocked HTTP with no credentials
+        or live IBKR/Ghostfolio access. Cover repeated runs, account isolation,
+        partial failures and dry-run behavior when relevant to the change.
+chat:
+  art: false
