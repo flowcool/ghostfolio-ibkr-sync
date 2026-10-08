@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping make IBKR imports more reliable. Keep changes focused and preserve the small runtime dependency set (`requests` and `pyyaml`).
+Thanks for helping make IBKR imports more reliable. Keep changes focused and preserve the small runtime dependency set (`requests` and `pyyaml` for the sync; `apprise` only in the notification worker).
 
 ## Report a problem
 

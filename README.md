@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | Trades, dividend payments and withholding tax | Trade IDs, manual-entry matching and a holdings gate | Docker on amd64 / arm64, or plain Python |
 | ISIN → Yahoo Finance ticker mapping | Separate Ghostfolio accounts for IBKR sub-accounts | One-off runs, cron scheduling and a preview with `DRY_RUN=1` |
+| | Automatic Ghostfolio login from the security token | Optional failure alerts (ntfy, Telegram, email...) through Apprise |
 
 ```mermaid
 flowchart LR
@@ -34,11 +35,11 @@ flowchart LR
 
 ## Overview
 
-This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades.
+This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades. With `GHOST_ACCESS_TOKEN` it logs in to Ghostfolio by itself at every run, so there is no session token to renew, and with `APPRISE_URLS` it sends one alert when a run fails (see [Failure notifications](#failure-notifications-apprise)).
 
 ## Why this exists
 
-This fork of [obol89/ghostfolio-ibkr-sync](https://github.com/obol89/ghostfolio-ibkr-sync) parses IBKR XML directly, uses only `requests` and `pyyaml` as runtime libraries, and keeps symbol mapping under your control. It is intended for investors operating their own Ghostfolio instance who want repeatable daily imports and visible reconciliation warnings.
+This fork of [obol89/ghostfolio-ibkr-sync](https://github.com/obol89/ghostfolio-ibkr-sync) parses IBKR XML directly, uses only `requests` and `pyyaml` for the sync itself (Apprise is loaded only by a separate, optional notification worker), and keeps symbol mapping under your control. It is intended for investors operating their own Ghostfolio instance who want repeatable daily imports and visible reconciliation warnings.
 
 ## How it works
 
@@ -73,17 +74,35 @@ Tagged releases (see [Releases](https://github.com/flowcool/ghostfolio-ibkr-sync
 The running version is logged at container start and at the beginning of every sync:
 
 ```
-ghostfolio-ibkr-sync version v1.2.0
-2026-10-01 06:05:00 [INFO] Starting IBKR to Ghostfolio sync (version v1.2.0)
+ghostfolio-ibkr-sync version v2.2.0
+2026-10-09 06:05:00 [INFO] Starting IBKR to Ghostfolio sync (version v2.2.0)
 ```
 
 `:latest` reports `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
+
+### Upgrading to 2.2
+
+Nothing is required: an existing 2.1 configuration keeps working unchanged. Two optional
+additions are worth making:
+
+1. **Switch to `GHOST_ACCESS_TOKEN`.** Replace `GHOST_TOKEN` (a session token that expires after
+   a few months) with `GHOST_ACCESS_TOKEN` (your Ghostfolio security token); the sync then logs
+   in at every run. Set only one of the two: both together stop the run with exit 1. See
+   [Choose how the sync authenticates](#1-choose-how-the-sync-authenticates).
+2. **Turn on failure alerts** with `APPRISE_URLS` (and optionally `APPRISE_TIMEOUT`). See
+   [Failure notifications](#failure-notifications-apprise).
+
+Then pull the image and **recreate** the container (a restart keeps the old image), run once
+with `DRY_RUN=1`, and check the version in the start-up log. The image now also contains Apprise
+and its pinned dependencies; the sync never imports them. To roll back to 2.1, set
+`GHOST_TOKEN` again first: older images do not understand `GHOST_ACCESS_TOKEN`, and they ignore
+`APPRISE_*`.
 
 ## Prerequisites
 
 - A running self-hosted Ghostfolio instance, version **2.248.0 or newer**
 - An Interactive Brokers account with Flex Web Service enabled
-- Docker (for containerised runs) or Python 3.12+ with `requests` and `pyyaml` (CI and the container use Python 3.12)
+- Docker (for containerised runs) or Python 3.12+ with the pinned packages from `requirements.txt` (CI and the container use Python 3.12)
 
 The tool reads existing activities via `GET /api/v1/activities`, which landed in Ghostfolio 2.248.0. The `/api/v1/order` endpoints it replaced were deprecated in that same release and removed in 3.5.0, so on Ghostfolio 3.x this is the only endpoint that works.
 
@@ -515,6 +534,8 @@ services:
       GHOST_ACCOUNT_NAMES: "IBKR Individual"
       MAPPING_FILE: /app/mapping.yaml
       CRON: "0 6 * * *"
+      # Optional: one alert per failed run (see Failure notifications)
+      # APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic"]'
     volumes:
       - ./mapping.yaml:/app/mapping.yaml:ro
     networks:
@@ -700,7 +721,7 @@ not constitute a guarantee against later concurrent edits.
 
 ## Development
 
-The sync is a single file, `ibkr_to_ghostfolio.py`, with `requests` and `pyyaml` as its only runtime dependencies. Tests are offline (no network, no Ghostfolio, no IBKR): they exercise the pure decision logic with mocked HTTP.
+The sync is a single file, `ibkr_to_ghostfolio.py`, with `requests` and `pyyaml` as its only runtime dependencies; `apprise` (with a pinned dependency closure in `requirements.txt`) is imported only by the notification worker (`--notify-worker`). Tests are offline (no network, no Ghostfolio, no IBKR): they exercise the pure decision logic with mocked HTTP.
 
 ```bash
 python3 -m venv .venv
@@ -709,6 +730,8 @@ python3 -m venv .venv
 ```
 
 CI runs tests, an audit of the complete Python CI environment and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; use synthetic fixtures and mocked HTTP for regression checks. See [Contributing](CONTRIBUTING.md) for review and reporting guidance.
+
+Every runtime dependency is pinned. A daily workflow ([`dependency-release-watch.yml`](.github/workflows/dependency-release-watch.yml)) opens one `dependency-release` issue per new stable release of a pin (`requirements.txt` from PyPI, supercronic from GitHub): read the release notes, bump the pin in a PR if needed, then close the issue. Dependabot waits 14 days before proposing a pip update, except for security fixes.
 
 ## Credits and license
 
