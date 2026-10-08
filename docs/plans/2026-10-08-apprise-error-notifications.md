@@ -63,7 +63,8 @@ effects.
    a separate manifest, because the image, the CI `pip-audit` job, dependabot and
    the container check already cover that file; a second manifest would need each
    of them rewired. Only the worker process imports Apprise.
-   Pinned: `apprise==1.13.1` (2.0.1 was 5 days old and a major bump), `click`,
+   Pinned: `apprise==2.0.1` (operator choice over 1.13.1: same closure, worker
+   and tests verified against the 2.x API changes), `click`,
    `markdown==3.10.3`, `oauthlib==4.0.0` (3.3.1 carries PYSEC-2026-4114),
    `requests-oauthlib`; verified identical under Python 3.12 and 3.13, `pip check`
    clean, `pip-audit` clean.
