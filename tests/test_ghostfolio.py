@@ -108,8 +108,8 @@ def test_dry_run_never_posts(monkeypatch):
 
 
 def test_import_success_returns_all_activities(monkeypatch):
-    acts = [{"symbol": "KO"}, {"symbol": "AAPL"}]
-    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": acts}, 201))
+    acts = [import_candidate("IBKR#1"), import_candidate("IBKR#2")]
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [created(a) for a in acts]}, 201))
     assert m.ghost_import_activities(CFG, acts) == (acts, True)
 
 
@@ -128,9 +128,9 @@ def test_import_network_error_returns_false(monkeypatch):
 
 
 def test_import_short_accepted_count_is_not_a_failure(monkeypatch):
-    acts = [{"symbol": "KO"}, {"symbol": "AAPL"}]
-    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [{}]}, 201))
-    assert m.ghost_import_activities(CFG, acts) == (acts, True)
+    acts = [import_candidate("IBKR#1"), import_candidate("IBKR#2")]
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [created(acts[1])]}, 201))
+    assert m.ghost_import_activities(CFG, acts) == ([acts[1]], True)
 
 
 # --- unresolved-symbol drop-and-retry -------------------------------------
@@ -146,12 +146,11 @@ def test_parse_unresolved_symbol():
 
 
 def test_unresolved_symbol_is_dropped_and_batch_retried(monkeypatch):
-    acts = [{"symbol": "KO", "comment": "IBKR#1", "type": "BUY"},
-            {"symbol": "BADSYM", "comment": "IBKR#2", "type": "BUY"},
-            {"symbol": "AAPL", "comment": "IBKR#3", "type": "BUY"}]
+    acts = [import_candidate("IBKR#1"), {**import_candidate("IBKR#2"), "symbol": "BADSYM"},
+            {**import_candidate("IBKR#3"), "symbol": "AAPL"}]
     sent = sequence_post(monkeypatch, [
         Resp(_unresolved_400("BADSYM", index=1), 400),
-        Resp({"activities": [{}, {}]}, 201),
+        Resp({"activities": [created(acts[0]), created(acts[2])]}, 201),
     ])
     imported, ok = m.ghost_import_activities(CFG, acts)
     assert [a["symbol"] for a in imported] == ["KO", "AAPL"]                 # BADSYM dropped
@@ -248,3 +247,104 @@ def test_noninvestment_activity_does_not_require_profile(monkeypatch):
     ids, comments, pos = m.ghost_get_existing_orders(CFG)
     assert ids == comments == set()
     assert all(not values for values in pos.values())
+
+
+@pytest.mark.parametrize("quantity", [float("inf"), float("nan"), "bad", -1])
+def test_invalid_existing_holdings_fail_closed(monkeypatch, quantity):
+    serve(monkeypatch, {"activities": [activity(quantity=quantity)], "count": 1})
+    with pytest.raises(RuntimeError, match="holding quantity"):
+        m.ghost_get_existing_orders(CFG)
+
+
+def import_candidate(comment="IBKR#one"):
+    return {"accountId": "synthetic", "comment": comment, "symbol": "KO", "type": "BUY",
+            "quantity": 10, "unitPrice": 60, "fee": 1, "currency": "USD", "dataSource": "YAHOO",
+            "date": "2026-08-01T00:00:00Z"}
+
+
+def created(candidate):
+    return {**candidate, "id": "created-" + candidate["comment"],
+            "assetProfile": {"symbol": candidate["symbol"], "dataSource": candidate["dataSource"]}}
+
+
+@pytest.mark.parametrize("body", [None, {}, {"activities": [{}]},
+                                     {"activities": [import_candidate("unknown")]},
+                                     {"activities": [import_candidate(), import_candidate()]},
+                                     {"activities": [{**import_candidate(), "quantity": 99}]},
+                                     {"activities": [{**import_candidate(), "error": "duplicate"}]}])
+def test_unknown_acceptance_is_not_assumed_and_blocks_target(monkeypatch, body):
+    cfg = {**CFG}
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp(body, 201))
+    assert m.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
+    assert cfg["_uncertain_import_accounts"] == {"synthetic"}
+
+
+def test_server_empty_created_list_changes_no_bookkeeping(monkeypatch):
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": []}, 201))
+    assert m.ghost_import_activities({**CFG}, [import_candidate()]) == ([], True)
+
+
+def test_created_rows_map_to_original_candidates_despite_enriched_profile(monkeypatch):
+    candidate = import_candidate()
+    server_row = {**created(candidate), "date": "2026-08-01T00:00:00.000Z",
+                  "assetProfile": {"symbol": "CANONICAL", "dataSource": "YAHOO"}}
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [server_row]}, 201))
+    assert m.ghost_import_activities({**CFG}, [candidate]) == ([candidate], True)
+
+
+@pytest.mark.parametrize("field,value", [("id", None), ("id", ""), ("date", None), ("date", "bad"),
+                                        ("date", "2026-08-02T00:00:00Z"),
+                                        ("date", "2026-08-01T00:00:00"),
+                                        ("assetProfile", None),
+                                        ("assetProfile", {"symbol": "KO", "dataSource": "MANUAL"}),
+                                        ("assetProfile", {"symbol": "", "dataSource": "YAHOO"})])
+def test_created_identity_date_and_source_required(monkeypatch, field, value):
+    candidate = import_candidate()
+    row = created(candidate)
+    row[field] = value
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG}
+    assert m.ghost_import_activities(cfg, [candidate]) == ([], False)
+    assert cfg["_uncertain_import_accounts"] == {"synthetic"}
+
+
+@pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
+@pytest.mark.parametrize("value", [True, False, None, float("nan"), float("inf"), "1"])
+def test_response_financial_evidence_is_numeric_finite_and_not_boolean(field, value):
+    candidate = {**import_candidate(), field: 1}
+    row = {**created(candidate), field: value}
+    with pytest.raises(RuntimeError, match="financial evidence"):
+        m.accepted_import_subset([candidate], {"activities": [row]})
+
+
+def test_repeated_created_id_does_not_prove_two_created_buys():
+    first, second = import_candidate("IBKR#1"), import_candidate("IBKR#2")
+    rows = [created(first), {**created(second), "id": created(first)["id"]}]
+    with pytest.raises(RuntimeError, match="created identity"):
+        m.accepted_import_subset([first, second], {"activities": rows})
+
+
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+def test_created_response_accepts_current_and_legacy_profiles(monkeypatch, profile_key):
+    candidate = import_candidate()
+    row = created(candidate)
+    if profile_key == "SymbolProfile":
+        row[profile_key] = row.pop("assetProfile")
+    else:
+        row["SymbolProfile"] = {"symbol": "STALE", "dataSource": "MANUAL"}
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert m.ghost_import_activities(cfg, [candidate]) == ([candidate], True)
+    assert not cfg.get("_uncertain_import_accounts")
+
+
+@pytest.mark.parametrize("profile", [None, {}, [], {"symbol": "", "dataSource": "YAHOO"},
+                                     {"symbol": "KO", "dataSource": "MANUAL"}])
+def test_created_response_invalid_current_profile_cannot_use_legacy(monkeypatch, profile):
+    candidate = import_candidate()
+    row = {**created(candidate), "assetProfile": profile,
+           "SymbolProfile": {"symbol": "KO", "dataSource": "YAHOO"}}
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert m.ghost_import_activities(cfg, [candidate]) == ([], False)
+    assert cfg["_uncertain_import_accounts"] == {"synthetic"}

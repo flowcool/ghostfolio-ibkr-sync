@@ -9,6 +9,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
+from math import isfinite
 from urllib.parse import quote, quote_plus
 
 import requests
@@ -442,7 +443,9 @@ def ghost_get_existing_orders(config):
                     (order.get("date") or "")[:10])
 
         if order.get("type") in ("BUY", "SELL"):
-            qty = _parse_float(order.get("quantity")) or 0.0
+            qty = _parse_float(order.get("quantity"))
+            if qty is None or not isfinite(qty) or qty < 0:
+                raise RuntimeError("Ghostfolio has invalid holding quantity; refusing sync")
             if order["type"] == "SELL":
                 qty = -qty
             account_id = order.get("accountId") or ""
@@ -488,11 +491,69 @@ def parse_unresolved_symbol(body, text=""):
     return match.group(1) if match else None
 
 
+def accepted_import_subset(submitted, body):
+    """Map server-created rows to unique submitted identities, never sent counts."""
+    if not isinstance(body, dict) or not isinstance(body.get("activities"), list):
+        raise RuntimeError("Import response has no accepted activity list")
+    by_key = {}
+    for activity in submitted:
+        key = (activity.get("accountId"), activity.get("comment"))
+        if any(not isinstance(v, str) or not v for v in key) or key in by_key:
+            raise RuntimeError("Ambiguous submitted import identity")
+        by_key[key] = activity
+    accepted = []
+    seen = set()
+    created_ids = set()
+    for row in body["activities"]:
+        if not isinstance(row, dict) or row.get("error"):
+            raise RuntimeError("Invalid accepted import activity")
+        key = (row.get("accountId"), row.get("comment"))
+        if any(not isinstance(v, str) or not v for v in key) or key not in by_key or key in seen:
+            raise RuntimeError("Unmatched or repeated accepted import identity")
+        original = by_key[key]
+        # Preserve listing compatibility: current key wins, even if invalid.
+        profile = (row["assetProfile"] if "assetProfile" in row
+                   else row.get("SymbolProfile"))
+        if (not isinstance(row.get("id"), str) or not row["id"].strip()
+                or row["id"] in created_ids
+                or not isinstance(profile, dict)
+                or not isinstance(profile.get("symbol"), str) or not profile["symbol"].strip()
+                or profile.get("dataSource") != original.get("dataSource")):
+            raise RuntimeError("Accepted activity lacks created identity or matching data source")
+        try:
+            returned_date = datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
+            submitted_date = datetime.fromisoformat(original["date"].replace("Z", "+00:00"))
+        except (KeyError, AttributeError, TypeError, ValueError):
+            raise RuntimeError("Accepted activity lacks a valid date") from None
+        if (returned_date.tzinfo is None or submitted_date.tzinfo is None
+                or returned_date != submitted_date):
+            raise RuntimeError("Accepted activity has a different date")
+        for field in ("quantity", "unitPrice", "fee"):
+            for value in (row.get(field), original.get(field)):
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not isfinite(value) or value < 0):
+                    raise RuntimeError("Accepted activity has invalid financial evidence")
+        for field in ("type", "quantity", "unitPrice", "fee", "currency"):
+            if row.get(field) != original.get(field):
+                raise RuntimeError("Accepted activity differs from submitted financial evidence")
+        seen.add(key)
+        created_ids.add(row["id"])
+        accepted.append(original)
+    return accepted
+
+
+def mark_import_uncertain(config, activities):
+    """A POST may have written records; block later queries to these accounts."""
+    config.setdefault("_uncertain_import_accounts", set()).update(
+        a["accountId"] for a in activities if a.get("accountId"))
+
+
 def ghost_import_activities(config, activities):
     """Import activities into Ghostfolio.  Returns (imported, ok).
 
     imported — the activities Ghostfolio accepted, for the caller's dedup
-               bookkeeping; a strict subset when some symbols were dropped.
+               bookkeeping; only rows identified in the server response.
+               Dry-run returns the proposed rows for simulation only.
     ok       — True for a clean run, False when the run is degraded (a symbol
                was dropped) or failed, so the caller exits non-zero.
 
@@ -531,6 +592,7 @@ def ghost_import_activities(config, activities):
                                  json={"activities": remaining}, timeout=60)
         except requests.RequestException as exc:
             log.error("Import request failed: %s", exc)
+            mark_import_uncertain(config, remaining)
             return [], False
 
         try:
@@ -538,24 +600,23 @@ def ghost_import_activities(config, activities):
         except ValueError:
             body = None
 
-        if resp.status_code < 400:
-            accepted = None
-            if isinstance(body, dict) and isinstance(body.get("activities"), list):
-                accepted = len(body["activities"])
-            if accepted is not None and accepted < len(remaining):
-                log.info("Ghostfolio accepted %d of %d activities (the rest were detected as duplicates)",
-                         accepted, len(remaining))
-            else:
-                log.info("Successfully imported %d activities", len(remaining))
+        if 200 <= resp.status_code < 300:
+            try:
+                imported = accepted_import_subset(remaining, body)
+            except RuntimeError as exc:
+                log.error("Cannot establish accepted import outcome: %s; inspect Ghostfolio before retry", exc)
+                mark_import_uncertain(config, remaining)
+                return [], False
+            log.info("Ghostfolio created %d of %d submitted activities", len(imported), len(remaining))
             if dropped_symbols:
                 log.warning("Imported without %d unresolved symbol(s): %s — add a mapping entry "
                             "(symbol_mapping) so they are recognised next run",
                             len(dropped_symbols), ", ".join(dropped_symbols))
-                return remaining, False
-            return remaining, True
+            return imported, not dropped_symbols
 
         symbol = parse_unresolved_symbol(body, resp.text)
         if symbol is None:
+            mark_import_uncertain(config, remaining)
             log.error("Import failed (%d): %s", resp.status_code, resp.text)
             log.error("Check your mapping file - a symbol may not be recognised by Ghostfolio")
             return [], False
@@ -699,18 +760,14 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
         return None
     qty = abs(qty)
 
-    try:
-        raw_commission = float(commission)
-        if raw_commission > 0:
-            log.warning("Trade %s: positive ibCommission %.4g (rebate) — clamped to 0, not recorded",
-                        trade_id, raw_commission)
-        # Negative ibCommission = cost (normal). Positive = rebate; clamp to 0
-        # since Ghostfolio fee cannot be negative. IBKR sign convention: outflows
-        # are negative, inflows (rebates) are positive.
-        fee = max(0.0, -raw_commission)
-    except ValueError:
-        log.warning("Invalid ibCommission '%s' for trade %s, defaulting fee to 0", commission, trade_id)
-        fee = 0.0
+    raw_commission = _parse_float(commission)
+    if raw_commission is None or not isfinite(raw_commission):
+        log.warning("Invalid ibCommission for trade %s; skipping trade", trade_id)
+        return None
+    if raw_commission > 0:
+        log.warning("Trade %s: positive ibCommission %.4g (rebate) — clamped to 0, not recorded",
+                    trade_id, raw_commission)
+    fee = max(0.0, -raw_commission)
 
     unit_price = _parse_float(trade_price)
     if unit_price is None:
@@ -1007,6 +1064,7 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
         log.info("Sells not imported: %d security(ies) with no Ghostfolio position, %d sell(s) "
                  "already entered manually — LOG_LEVEL=DEBUG for the list",
                  closed_elsewhere, len(manual_recorded))
+    existing_trade_ids.update(manual_recorded | manual_buys)
     return [t for t in trades
             if t.get("tradeID", "") not in manual_recorded | manual_buys | ambiguous
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
@@ -1054,6 +1112,10 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     if ghost_account_id is None:
         return {}, False
 
+    if ghost_account_id in config.get("_uncertain_import_accounts", set()):
+        log.error("Account %s has an uncertain earlier import outcome; refusing further writes", ghost_account_id)
+        return {}, False
+
     # Parse trades and dividends
     trades = parse_trades(xml_text)
     dividends = parse_cash_dividends(xml_text)
@@ -1069,35 +1131,61 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # CASH (FX conversions) and OPT are never imported; drop them before any gate
     trades = [t for t in trades if t.get("assetCategory", "") not in SKIP_ASSET_CATEGORIES]
 
-    # Trade gate: Ghostfolio holdings + not-yet-imported trades must not go negative
-    trades = filter_trades_by_holdings(trades, positions, ghost_account_id, mapping,
-                                       existing_trade_ids)
-
-    # Convert and filter trades
+    # Prepare actual import candidates before calculating their position impact.
     unmapped = {}
-    activities = []
+    prepared_trades = []
     skipped_dup = 0
     skipped_other = 0
 
+    unique = {}
+    conflicts = set()
     for trade in trades:
+        tid = trade.get("tradeID", "")
+        if tid and tid in unique:
+            skipped_dup += 1
+            if trade != unique[tid]:
+                conflicts.add(tid)
+        else:
+            unique[tid] = trade
+    if conflicts:
+        log.error("Conflicting repeated trade IDs excluded: %s", ", ".join(sorted(conflicts)))
+        ok = False
+
+    for trade in unique.values():
         trade_id = trade.get("tradeID", "")
         if not trade_id:
             log.warning("Skipping trade for %s (%s) — missing tradeID, cannot deduplicate safely",
                         trade.get("symbol") or trade.get("isin") or "unknown",
                         trade.get("dateTime", ""))
             skipped_other += 1
+            ok = False
+            continue
+        if trade_id in conflicts:
+            skipped_other += 1
             continue
         if trade_id in existing_trade_ids:
             skipped_dup += 1
             continue
 
-        activity = convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped)
-        if activity:
-            activities.append(activity)
-        else:
-            asset_cat = trade.get("assetCategory", "")
-            if asset_cat not in SKIP_ASSET_CATEGORIES:
-                skipped_other += 1
+        trade_unmapped = {}
+        activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
+        if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+            log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
+            skipped_other += 1
+            ok = False
+            continue
+        # The gate must use the same signed quantity the converted BUY/SELL will
+        # add to Ghostfolio, while retaining raw fields for manual-entry matching.
+        prepared_trades.append({**trade,
+                                "quantity": (-1 if activity["type"] == "SELL" else 1) * activity["quantity"],
+                                "_activity": activity, "_unmapped": trade_unmapped})
+
+    trades = filter_trades_by_holdings(prepared_trades, positions, ghost_account_id, mapping,
+                                      existing_trade_ids)
+    activities = []
+    for trade in trades:
+        activities.append(trade["_activity"])
+        unmapped.update(trade["_unmapped"])
 
     log.info("New trade activities: %d, duplicates skipped: %d, other skipped: %d",
              len(activities), skipped_dup, skipped_other)
@@ -1132,18 +1220,33 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     activities.extend(div_activities)
 
-    # Import all activities. Bookkeeping runs over the activities actually
-    # imported, never the ones dropped as unresolved, so a dropped symbol is not
-    # recorded as synced.
-    if activities:
-        imported, import_ok = ghost_import_activities(config, activities)
+    # Create buys/dividends first. A server-skipped BUY cannot back a later SELL,
+    # even in this account's batch. Dry-run uses proposed buys for simulation.
+    phases = [[a for a in activities if a["type"] != "SELL"],
+              [a for a in activities if a["type"] == "SELL"]]
+    for phase in phases:
+        if not phase:
+            continue
+        if ghost_account_id in config.get("_uncertain_import_accounts", set()):
+            ok = False
+            break
+        if phase[0]["type"] == "SELL":
+            totals = defaultdict(float)
+            for a in phase:
+                totals[a["symbol"]] += a["quantity"]
+            rejected = {symbol for symbol, qty in totals.items()
+                        if positions["qty"].get((ghost_account_id, symbol), 0) - qty < -0.001}
+            if rejected:
+                log.warning("Sells excluded after accepted-buy check: %s", ", ".join(sorted(rejected)))
+                phase = [a for a in phase if a["symbol"] not in rejected]
+                ok = False
+        if not phase:
+            continue
+        imported, import_ok = ghost_import_activities(config, phase)
         for activity in imported:
             comment = activity["comment"]
             if comment.startswith("IBKR#"):
-                tid = comment.split("#", 1)[1]
-                if tid:
-                    existing_trade_ids.add(tid)
-                # Keep holdings current for a later account mapped to the same Ghostfolio account
+                existing_trade_ids.add(comment.split("#", 1)[1])
                 sign = -1.0 if activity["type"] == "SELL" else 1.0
                 positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
             elif comment.startswith("dividend#"):
