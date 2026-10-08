@@ -7,7 +7,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 | Fait | Valeur |
 |---|---|
 | Fichier principal | `ibkr_to_ghostfolio.py` (~1146 lignes) — mono-fichier par design |
-| Dépendances | `requests`, `pyyaml` — garder minimaliste |
+| Dépendances | `requests`, `pyyaml` — garder minimaliste ; `apprise` (+ clôture pinnée) importé uniquement par le worker de notification (`--notify-worker`) |
 | Runtime | `python:3.12-slim` + supercronic, cron `5 6 * * *` |
 | Image | `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` |
 | Déployé sur | UGreen NAS (192.168.2.117), stack ghostfolio Portainer |
