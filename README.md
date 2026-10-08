@@ -476,7 +476,8 @@ worker still running at the deadline is killed. This adds at most `APPRISE_TIMEO
 plus Apprise's import time inside it, to a failed run. There is **no retry**: after a timeout
 the notification may or may not have arrived (`Failure notification timed out (it may still
 arrive; not retried)`). Delivery problems (`timeout`, `failed`, `invalid_destination`,
-`unavailable` when Apprise cannot be imported, `payload_too_large`) are logged as warnings
+`unavailable` when Apprise cannot be imported, `payload_too_large`, `spawn_failed`, which
+includes a script piped on standard input as in `python - < ibkr_to_ghostfolio.py`) are logged as warnings
 and never change the run's exit code. Apprise and its pinned dependencies ship in the image
 and are only imported by the worker.
 

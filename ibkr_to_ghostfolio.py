@@ -1459,9 +1459,10 @@ APPRISE_TIMEOUT_MAX = 30
 NOTIFY_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR",
                         "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
                         "http_proxy", "https_proxy", "no_proxy")
-# Worker exit code -> delivery status reported by send_notification
-NOTIFY_EXIT_STATUS = {0: "sent", 2: "invalid_payload", 3: "unavailable", 4: "failed",
-                      5: "invalid_destination"}
+# Worker exit code -> delivery status reported by send_notification.  Kept clear
+# of the interpreter's own codes (1 uncaught error, 2 cannot open the script).
+NOTIFY_EXIT_STATUS = {0: "sent", 10: "invalid_payload", 11: "unavailable", 12: "failed",
+                      13: "invalid_destination"}
 
 
 def load_notification_config():
@@ -1511,19 +1512,19 @@ def notify_worker():
             or not all(isinstance(u, str) for u in payload["urls"])
             or not isinstance(payload.get("title"), str)
             or not isinstance(payload.get("body"), str)):
-        return 2
+        return 10
     try:
         import apprise
     except ImportError:
-        return 3
+        return 11
     notifier = apprise.Apprise()
     if not all(notifier.add(url) for url in payload["urls"]):
-        return 5
+        return 13
     try:
         sent = notifier.notify(title=payload["title"], body=payload["body"])
     except Exception:
-        return 4
-    return 0 if sent else 4
+        return 12
+    return 0 if sent else 12
 
 
 def _notify_worker_argv():
@@ -1554,6 +1555,9 @@ def send_notification(settings, title, body):
     payload = json.dumps({"urls": settings["urls"], "title": title, "body": body}).encode()
     if len(payload) > NOTIFY_PAYLOAD_MAX:
         return "payload_too_large"
+    # The worker re-runs this file: impossible when the script came from stdin
+    if not os.path.isfile(os.path.abspath(__file__)):
+        return "spawn_failed"
     env = {k: os.environ[k] for k in NOTIFY_ENV_ALLOWLIST if k in os.environ}
     try:
         proc = subprocess.Popen(_notify_worker_argv(), stdin=subprocess.PIPE,

@@ -99,8 +99,8 @@ def fake_apprise(add=True, notify=True):
 GOOD = {"urls": URLS, "title": "t", "body": "b"}
 
 
-@pytest.mark.parametrize("add,notify,code", [(True, True, 0), (True, False, 4), (False, True, 5),
-                                             (True, RuntimeError(URL_SECRET), 4)])
+@pytest.mark.parametrize("add,notify,code", [(True, True, 0), (True, False, 12), (False, True, 13),
+                                             (True, RuntimeError(URL_SECRET), 12)])
 def test_worker_exit_codes(monkeypatch, add, notify, code):
     fake = fake_apprise(add, notify)
     assert run_worker(monkeypatch, GOOD, fake) == code
@@ -108,7 +108,7 @@ def test_worker_exit_codes(monkeypatch, add, notify, code):
 
 
 def test_worker_reports_missing_dependency(monkeypatch):
-    assert run_worker(monkeypatch, GOOD, None) == 3     # sys.modules None -> ImportError
+    assert run_worker(monkeypatch, GOOD, None) == 11    # sys.modules None -> ImportError
 
 
 @pytest.mark.parametrize("payload", [
@@ -117,14 +117,14 @@ def test_worker_reports_missing_dependency(monkeypatch):
     {"urls": URLS, "body": "b"}, {"urls": URLS, "title": "t", "body": 3},
     b"{" + b" " * m.NOTIFY_PAYLOAD_MAX + b"}"])
 def test_worker_rejects_malformed_or_oversized_payloads_before_importing_apprise(monkeypatch, payload):
-    assert run_worker(monkeypatch, payload, fake_apprise()) == 2
+    assert run_worker(monkeypatch, payload, fake_apprise()) == 10
 
 
 def test_worker_mode_never_runs_the_sync(tmp_path):
     proc = subprocess.run([sys.executable, "-I", m.__file__, m.NOTIFY_WORKER_FLAG],
                           input=b"not json", capture_output=True, timeout=30,
                           env={"IBKR_TOKEN": "x"})
-    assert proc.returncode == 2
+    assert proc.returncode == 10
     assert b"Starting IBKR" not in proc.stdout + proc.stderr
 
 
@@ -193,8 +193,9 @@ def test_worker_gets_urls_on_stdin_and_only_allowlisted_environment(monkeypatch,
     assert URL_SECRET not in " ".join(seen["argv"])
 
 
-@pytest.mark.parametrize("exit_code,status", [(0, "sent"), (2, "invalid_payload"), (3, "unavailable"),
-                                              (4, "failed"), (5, "invalid_destination"), (9, "failed")])
+@pytest.mark.parametrize("exit_code,status", [(0, "sent"), (10, "invalid_payload"), (11, "unavailable"),
+                                              (12, "failed"), (13, "invalid_destination"),
+                                              (1, "failed"), (2, "failed"), (9, "failed")])
 def test_worker_exit_code_maps_to_a_fixed_status(monkeypatch, tmp_path, exit_code, status):
     use_worker(monkeypatch, tmp_path, f"import sys\nsys.stdin.read()\nsys.exit({exit_code})\n")
     assert m.send_notification({"urls": URLS, "timeout": 10}, "t", "b") == status
@@ -235,3 +236,21 @@ def test_real_worker_with_real_apprise_reports_an_unreachable_destination(monkey
     # json:// to a closed local port: real import, setup and send, no network egress
     status = m.send_notification({"urls": ["json://127.0.0.1:9/hook"], "timeout": 20}, "t", "b")
     assert status == "failed"
+
+
+def test_script_read_from_stdin_cannot_spawn_a_worker(monkeypatch):
+    # `python - < ibkr_to_ghostfolio.py` sets __file__ to "<stdin>"
+    monkeypatch.setattr(m, "__file__", "<stdin>")
+    monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn"))
+    assert m.send_notification({"urls": URLS, "timeout": 10}, "t", "b") == "spawn_failed"
+
+
+def test_failed_run_piped_on_stdin_reports_spawn_failed(tmp_path):
+    env = {"PATH": "/usr/bin:/bin", "IBKR_ACCOUNT_IDS": "U1", "IBKR_QUERY_IDS": "q",
+           "GHOST_TOKEN": "g", "GHOST_HOST": "http://g", "MAPPING_FILE": "",
+           "APPRISE_URLS": json.dumps(URLS)}                  # IBKR_TOKEN missing -> exit 1
+    with open(m.__file__, "rb") as script:
+        proc = subprocess.run([sys.executable, "-"], stdin=script, capture_output=True,
+                              timeout=60, env=env, cwd=tmp_path)
+    assert proc.returncode == 1
+    assert b"Failure notification not delivered: spawn_failed" in proc.stderr
