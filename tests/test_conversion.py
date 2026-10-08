@@ -75,9 +75,9 @@ def test_invalid_trade_is_skipped(override):
     assert m.convert_trade_to_activity(trade(**override), "acc", {}, {}) is None
 
 
-def test_invalid_commission_defaults_fee_to_zero():
-    a = m.convert_trade_to_activity(trade(ibCommission="n/a"), "acc", {}, {})
-    assert a["fee"] == 0.0
+@pytest.mark.parametrize("commission", ["n/a", "nan", "inf", "-inf", None])
+def test_invalid_commission_excludes_trade(commission):
+    assert m.convert_trade_to_activity(trade(ibCommission=commission), "acc", {}, {}) is None
 
 
 # --- dividends ------------------------------------------------------------
