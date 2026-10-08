@@ -333,6 +333,41 @@ def ghost_headers(token):
     }
 
 
+def activity_date_is_current(activity):
+    """Conservatively refuse future instants (server drafts use local end of day)."""
+    try:
+        instant = datetime.fromisoformat(activity["date"].replace("Z", "+00:00"))
+        return instant.tzinfo is not None and instant <= datetime.now(timezone.utc)
+    except (KeyError, TypeError, AttributeError, ValueError):
+        return False
+
+
+def activity_is_active(activity):
+    """Follow Ghostfolio draft/exclusion tags; refuse malformed active context."""
+    if not isinstance(activity, dict):
+        raise RuntimeError("Invalid activity eligibility context")
+    account = activity.get("account")
+    if account is None:
+        account = {}
+    if not isinstance(account, dict):
+        raise RuntimeError("Invalid account eligibility context")
+    for context in (activity, account):
+        for flag in ("isDraft", "isExcluded"):
+            if flag in context and not isinstance(context[flag], bool):
+                raise RuntimeError("Invalid activity eligibility flag")
+        tags = context.get("tags", [])
+        if (not isinstance(tags, list)
+                or any(not isinstance(tag, dict) or not isinstance(tag.get("id"), str)
+                       or not tag["id"].strip() for tag in tags)):
+            raise RuntimeError("Invalid activity eligibility tags")
+    inactive_tags = {"0c077abd-eca2-4cbb-818c-6cefbf2d169a",
+                     "f2e868af-8333-459f-b161-cbc6544c24bd"}
+    return not (activity.get("isDraft") or activity.get("isExcluded")
+                or account.get("isDraft") or account.get("isExcluded")
+                or any(tag["id"] in inactive_tags
+                       for context in (activity, account) for tag in context.get("tags", [])))
+
+
 def ghost_get_accounts(config):
     """Fetch all accounts from Ghostfolio."""
     url = f"{config['ghost_host']}/api/v1/account"
@@ -351,6 +386,8 @@ def ghost_find_account_id(config, account_name):
     accounts = data.get("accounts", data) if isinstance(data, dict) else data
     for acc in accounts:
         if acc.get("name") == account_name:
+            if not activity_is_active({"account": acc}):
+                raise RuntimeError("Ghostfolio target account is excluded; refusing sync")
             return acc["id"]
     log.error("Ghostfolio account '%s' not found. Available: %s",
               account_name, [a["name"] for a in accounts])
@@ -436,6 +473,14 @@ def ghost_get_existing_orders(config):
         elif comment.startswith("dividend#"):
             dividend_comments.add((order.get("accountId") or "", comment))
 
+        active = activity_is_active(order)
+        if order.get("type") in ("BUY", "SELL", "DIVIDEND"):
+            source = profile.get("dataSource")
+            if not isinstance(source, str) or not source.strip():
+                raise RuntimeError("Ghostfolio activity has missing data source; refusing sync")
+            if not active or source != "YAHOO":
+                continue
+
         if order.get("type") == "DIVIDEND":
             symbol = profile["symbol"]
             if symbol:
@@ -511,6 +556,8 @@ def accepted_import_subset(submitted, body):
         if any(not isinstance(v, str) or not v for v in key) or key not in by_key or key in seen:
             raise RuntimeError("Unmatched or repeated accepted import identity")
         original = by_key[key]
+        if not activity_is_active(row) or not activity_date_is_current(row):
+            raise RuntimeError("Created activity is inactive; cannot update active holdings")
         # Preserve listing compatibility: current key wins, even if invalid.
         profile = (row["assetProfile"] if "assetProfile" in row
                    else row.get("SymbolProfile"))
@@ -538,7 +585,7 @@ def accepted_import_subset(submitted, body):
                 raise RuntimeError("Accepted activity differs from submitted financial evidence")
         seen.add(key)
         created_ids.add(row["id"])
-        accepted.append(original)
+        accepted.append({**original, "symbol": profile["symbol"]})
     return accepted
 
 
@@ -1106,7 +1153,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # Find the Ghostfolio account
     try:
         ghost_account_id = ghost_find_account_id(config, ghost_account_name)
-    except requests.RequestException as exc:
+    except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to look up Ghostfolio account '%s': %s", ghost_account_name, exc)
         return {}, False
     if ghost_account_id is None:
@@ -1139,9 +1186,12 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     unique = {}
     conflicts = set()
-    for trade in trades:
+    for index, trade in enumerate(trades):
         tid = trade.get("tradeID", "")
-        if tid and tid in unique:
+        if not tid:
+            # Keep each unidentified row so rejection diagnostics remain complete.
+            unique[("missing", index)] = trade
+        elif tid in unique:
             skipped_dup += 1
             if trade != unique[tid]:
                 conflicts.add(tid)
@@ -1169,7 +1219,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
         trade_unmapped = {}
         activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
-        if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+        if activity is None or not activity_date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
             ok = False
@@ -1198,6 +1248,10 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # buy in the 365-day window (long-held, partly sold) still gets its dividends
     for div in dividends:
         activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
+        if activity and not activity_date_is_current(activity):
+            log.error("Future or invalid dividend date; deferred until a later run")
+            ok = False
+            continue
         if activity:
             date_part = activity["comment"].rsplit("#", 1)[-1]
             old_comment = f"dividend#{activity['symbol']}#{date_part}"

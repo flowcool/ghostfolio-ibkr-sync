@@ -23,7 +23,7 @@ class Resp:
 def activity(profile_key="assetProfile", **kw):
     """Build a valid current or legacy activity fixture with field overrides."""
     a = {"type": "BUY", "quantity": 10, "comment": None, "accountId": "acc", "date": "2026-08-01T00:00:00.000Z",
-         profile_key: {"symbol": "KO", "isin": "US1912161007"}}
+         profile_key: {"symbol": "KO", "isin": "US1912161007", "dataSource": "YAHOO"}}
     a.update(kw)
     return a
 
@@ -289,7 +289,7 @@ def test_created_rows_map_to_original_candidates_despite_enriched_profile(monkey
     server_row = {**created(candidate), "date": "2026-08-01T00:00:00.000Z",
                   "assetProfile": {"symbol": "CANONICAL", "dataSource": "YAHOO"}}
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [server_row]}, 201))
-    assert m.ghost_import_activities({**CFG}, [candidate]) == ([candidate], True)
+    assert m.ghost_import_activities({**CFG}, [candidate]) == ([{**candidate, "symbol": "CANONICAL"}], True)
 
 
 @pytest.mark.parametrize("field,value", [("id", None), ("id", ""), ("date", None), ("date", "bad"),
@@ -322,6 +322,69 @@ def test_repeated_created_id_does_not_prove_two_created_buys():
     rows = [created(first), {**created(second), "id": created(first)["id"]}]
     with pytest.raises(RuntimeError, match="created identity"):
         m.accepted_import_subset([first, second], {"activities": rows})
+
+
+@pytest.mark.parametrize("scope", ["activity", "account"])
+@pytest.mark.parametrize("flag", ["draft-tag", "exclude-tag", "isDraft", "isExcluded"])
+def test_inactive_ids_kept_but_no_position_manual_or_dividend_evidence(monkeypatch, scope, flag):
+    rows = [activity(comment="IBKR#B"), activity(),
+            activity(type="DIVIDEND", comment="dividend#KO#2026-08-01")]
+    for row in rows:
+        context = row if scope == "activity" else row.setdefault("account", {})
+        if flag.endswith("tag"):
+            context["tags"] = [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a" if flag == "draft-tag"
+                                else "f2e868af-8333-459f-b161-cbc6544c24bd"}]
+        else:
+            context[flag] = True
+    serve(monkeypatch, {"activities": rows, "count": len(rows)})
+    ids, comments, pos = m.ghost_get_existing_orders(CFG)
+    assert ids == {"B"} and comments == {("acc", "dividend#KO#2026-08-01")}
+    assert all(not values for values in pos.values())
+
+
+def test_other_source_cannot_back_yahoo_holding_or_manual_match(monkeypatch):
+    row = activity()
+    row["assetProfile"]["dataSource"] = "MANUAL"
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    _, _, pos = m.ghost_get_existing_orders(CFG)
+    assert all(not values for values in pos.values())
+
+
+@pytest.mark.parametrize("bad", [None, "bad", [{"id": None}], [None]])
+def test_malformed_eligibility_tags_fail_closed(monkeypatch, bad):
+    row = activity(tags=bad)
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    with pytest.raises(RuntimeError, match="eligibility"):
+        m.ghost_get_existing_orders(CFG)
+
+
+def test_missing_source_refuses_position_context(monkeypatch):
+    row = activity()
+    del row["assetProfile"]["dataSource"]
+    serve(monkeypatch, {"activities": [row], "count": 1})
+    with pytest.raises(RuntimeError, match="data source"):
+        m.ghost_get_existing_orders(CFG)
+
+
+def test_excluded_empty_target_account_is_not_syncable(monkeypatch):
+    serve(monkeypatch, {"accounts": [{"id": "excluded", "name": "IBKR",
+                                     "tags": [{"id": "f2e868af-8333-459f-b161-cbc6544c24bd"}]}]})
+    with pytest.raises(RuntimeError, match="excluded"):
+        m.ghost_find_account_id(CFG, "IBKR")
+
+
+def test_created_inactive_row_does_not_contribute_active_holding():
+    candidate = import_candidate()
+    row = {**created(candidate), "tags": [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}]}
+    with pytest.raises(RuntimeError, match="inactive"):
+        m.accepted_import_subset([candidate], {"activities": [row]})
+
+
+
+def test_exact_import_shape_without_tags_does_not_hide_future_draft():
+    candidate = {**import_candidate(), "date": "2099-08-01T00:00:00Z"}
+    with pytest.raises(RuntimeError, match="inactive"):
+        m.accepted_import_subset([candidate], {"activities": [created(candidate)]})
 
 
 @pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
