@@ -5,6 +5,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    # Propose a release only once it is 14 days old (supply-chain buffer).
+    # Security updates are not delayed by the cooldown.
+    cooldown:
+      default-days: 14
+    # Apprise majors need a manual compatibility check of the notification
+    # worker before they are proposed. A Dependabot alert still shows if a fix
+    # ships only in a new major; apply that bump by hand.
+    ignore:
+      - dependency-name: "apprise"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
