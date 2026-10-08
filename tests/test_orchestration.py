@@ -383,11 +383,9 @@ def test_main_invalid_mapping_stops_the_run(env, tmp_path):
     assert calls == []
 
 
-def test_main_configuration_error_exits_one(env):
+def test_main_configuration_error_returns_one_without_system_exit(env):
     env.delenv("IBKR_TOKEN")
-    with pytest.raises(SystemExit) as e:
-        m.main()
-    assert e.value.code == 1
+    assert m.main() == 1
 
 
 # --- load_config --------------------------------------------------------------
