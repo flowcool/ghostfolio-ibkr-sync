@@ -4,7 +4,7 @@ name: PR release labels
 # notes (.github/release.yml) are grouped. Never a required check, never fails.
 on:
   pull_request:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, labeled]
 
 permissions:
   contents: read
@@ -19,6 +19,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Label from title
         run: python3 scripts/label_pr_release.py
         env:

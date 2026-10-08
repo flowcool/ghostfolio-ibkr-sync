@@ -20,6 +20,11 @@ def test_bang_marks_breaking_change():
     assert labels.labels_for_title("refactor(api)!: rename flag") == {"maintenance", "breaking-change"}
 
 
+def test_type_is_case_insensitive():
+    assert labels.labels_for_title("Feat!: drop JSON resume") == {"feature", "breaking-change"}
+    assert labels.labels_for_title("FIX: x") == {"fix"}
+
+
 def test_non_conventional_title_gets_nothing():
     assert labels.labels_for_title("Update stuff") == set()
     assert labels.labels_for_title("") == set()

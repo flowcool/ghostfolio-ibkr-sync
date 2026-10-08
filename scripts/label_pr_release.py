@@ -1,6 +1,7 @@
 """Label a pull request for release notes from its conventional title.
 
-Advisory only: never fails the PR. Warns when a breaking or compat PR has no
+Advisory only: never fails the PR. Labels are only added, never removed: after
+a retitle, remove a stale label by hand. Warns when a breaking or compat PR has no
 filled "Release impact" section.
 """
 
@@ -11,7 +12,7 @@ import sys
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-TITLE = re.compile(r"^(?P<type>[a-z]+)(\([^)]*\))?(?P<bang>!)?:\s")
+TITLE = re.compile(r"^(?P<type>[A-Za-z]+)(\([^)]*\))?(?P<bang>!)?:\s")
 TYPE_LABELS = {
     "feat": "feature",
     "fix": "fix",
@@ -42,8 +43,8 @@ def labels_for_title(title):
     if not match:
         return set()
     labels = set()
-    if match.group("type") in TYPE_LABELS:
-        labels.add(TYPE_LABELS[match.group("type")])
+    if match.group("type").lower() in TYPE_LABELS:
+        labels.add(TYPE_LABELS[match.group("type").lower()])
     if match.group("bang"):
         labels.add("breaking-change")
     return labels
@@ -96,6 +97,8 @@ def main():
     except HTTPError as error:
         # Fork and Dependabot PRs get a read-only token; labeling is best effort.
         print(f"::warning::could not label PR (HTTP {error.code}); add labels by hand")
+    except (OSError, ValueError) as error:  # network, TLS, timeout, bad JSON
+        print(f"::warning::could not label PR ({type(error).__name__}); add labels by hand")
     if (current | wanted) & IMPACT_LABELS and not impact_section_filled(pr.get("body")):
         print("::warning::breaking-change/compat PR needs a filled 'Release impact' section "
               "(bump, migration, rollback) before release notes are written")
