@@ -103,6 +103,22 @@ jobs:
         with:
           fetch-depth: 0  # git describe needs tags and history
 
+      # A tag that is not vMAJOR.MINOR.PATCH, or not on main, would publish
+      # misleading image tags. Fail before login and push.
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Tag '$TAG' must look like vMAJOR.MINOR.PATCH (e.g. v2.1.1)"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag '$TAG' points to a commit that is not on main"
+            exit 1
+          fi
+
       - name: Compute version
         id: version
         run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
