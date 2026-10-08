@@ -59,7 +59,8 @@ gh release create vX.Y.Z --verify-tag --latest \
 ```
 
 The tag push builds and publishes `:X.Y.Z` and `:X.Y`; `:latest` stays
-main-only. Afterwards, check that the published release shows the head text and
+main-only. The build refuses a tag that is not exactly `vX.Y.Z` or whose commit
+is not on `main` (fix: delete the tag locally and on origin, then re-tag). Afterwards, check that the published release shows the head text and
 the generated list, and fill in "Published artifacts".
 
 ## Reviewer
