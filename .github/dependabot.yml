@@ -1,19 +1,37 @@
 version: 2
 updates:
+  # Grouped so interdependent updates (e.g. requests + PyYAML) are tested and
+  # reviewed together. Major versions stay separate PRs. A 3-day cooldown skips
+  # just-published versions; security updates ignore the cooldown.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    cooldown:
+      default-days: 3
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    cooldown:
+      default-days: 3
