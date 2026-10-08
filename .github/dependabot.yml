@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    # Propose a release only once it is 14 days old: the dependency release
+    # watch opens a review issue on day one, the bump PR follows once reviewed
+    # and settled. Security updates are not delayed by the cooldown.
+    cooldown:
+      default-days: 14
 
   - package-ecosystem: "github-actions"
     directory: "/"
