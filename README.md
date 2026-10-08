@@ -312,7 +312,7 @@ All configuration is done via environment variables:
 | `CRON` | No | Cron schedule for recurring runs (Docker only) | `0 6 * * *` |
 | `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
-| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs to notify when a run fails (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfy://ntfy.sh/my-topic"]` |
+| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs to notify when a run fails (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
 | `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
 | `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without POSTing/PUTting to Ghostfolio | `1` |
 
@@ -459,7 +459,7 @@ URLs, each up to 2048 characters; put one URL per entry, as an entry holding sev
 space- or comma-separated URLs counts each one toward the limit of 10):
 
 ```yaml
-      APPRISE_URLS: '["ntfy://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]'
+      APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]'
       APPRISE_TIMEOUT: "10"
 ```
 
@@ -587,7 +587,7 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
-With [failure notifications](#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed; its delivery never changes the exit code.
+With [failure notifications](#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run (`DRY_RUN`), which never notifies; its delivery never changes the exit code.
 
 Unmapped ISINs are **not** a failure - they are reported at the end of the run as a prompt to update your mapping file, and the run still exits 0. Activities that Ghostfolio itself detects as duplicates are not a failure either. The tool logs `Ghostfolio created X of Y` and counts only submitted rows matched to the server-created activity list as imported. An unknown or unverifiable import outcome fails the account and blocks subsequent imports and processing of later queries targeting that account for the rest of the run.
 
