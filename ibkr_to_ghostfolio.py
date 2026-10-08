@@ -1401,21 +1401,56 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     return unmapped, ok
 
 
-def main():
-    """Main entry point.  Returns a process exit code (0 = clean, 1 = failure)."""
-    log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
+# ---------------------------------------------------------------------------
+# Run outcome
+# ---------------------------------------------------------------------------
 
+# Allowed failure reasons per stage.  An outcome holds only these fixed codes,
+# counts and 1-based account ordinals - never an error text, URL, identifier or
+# amount - so it can be summarised outside the logs.
+OUTCOME_REASONS = {
+    "config": ("invalid_configuration",),
+    "mapping": ("invalid_mapping",),
+    "ghost_auth": ("login_failed",),
+    "ghost_startup": ("activities_unavailable",),
+    "account": ("account_failed", "unexpected_error"),
+    "unexpected": ("unhandled_error",),
+}
+MAX_OUTCOME_FAILURES = 20
+
+
+def new_run_outcome():
+    """Return an empty run-local outcome."""
+    return {"failures": [], "dropped": 0, "accounts_total": 0, "accounts_failed": 0}
+
+
+def record_failure(outcome, stage, reason, ordinal=None):
+    """Record one failure; unknown codes collapse to unexpected/unhandled_error."""
+    if reason not in OUTCOME_REASONS.get(stage, ()):
+        stage, reason = "unexpected", "unhandled_error"
+    if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1:
+        ordinal = None
+    if len(outcome["failures"]) >= MAX_OUTCOME_FAILURES:
+        outcome["dropped"] += 1
+        return
+    outcome["failures"].append({"stage": stage, "reason": reason, "ordinal": ordinal})
+
+
+def run_sync(outcome):
+    """Run one sync.  Returns the exit code; every exit 1 is recorded in outcome."""
     try:
         config = load_config()
     except RuntimeError as exc:
         log.error("Configuration error: %s", exc)
-        sys.exit(1)
+        record_failure(outcome, "config", "invalid_configuration")
+        return 1
     if config["dry_run"]:
         log.info("DRY RUN enabled (DRY_RUN) — no writes will be sent to Ghostfolio")
     try:
         mapping = load_mapping(config["mapping_file"])
     except RuntimeError as exc:
         log.error("%s", exc)
+        record_failure(outcome, "mapping", "invalid_mapping")
         return 1
     log.info("Loaded %d symbol mappings", len(mapping))
 
@@ -1428,6 +1463,7 @@ def main():
                 config["ghost_host"], config.pop("ghost_access_token"))
         except RuntimeError as exc:
             log.error("%s", exc)
+            record_failure(outcome, "ghost_auth", "login_failed")
             return 1
         log.info("Authenticated to Ghostfolio with GHOST_ACCESS_TOKEN")
 
@@ -1446,25 +1482,30 @@ def main():
         existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
     except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
+        record_failure(outcome, "ghost_startup", "activities_unavailable")
         return 1
     log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
              len(existing_trade_ids), len(existing_dividend_comments))
 
     all_unmapped = {}
     failed_accounts = []
+    outcome["accounts_total"] = len(account_ids)
 
-    for ibkr_id, qid, gf_name in zip(account_ids, query_ids, account_names):
+    for ordinal, (ibkr_id, qid, gf_name) in enumerate(zip(account_ids, query_ids, account_names), 1):
         # process_account handles the failures it expects; an unforeseen error in one
         # account must cost that account, not the accounts still to be processed
+        reason = "account_failed"
         try:
             unmapped, ok = process_account(config, ibkr_id, qid, gf_name, mapping,
                                            existing_trade_ids, existing_dividend_comments, positions)
         except Exception:
             log.exception("Unexpected error while processing IBKR account %s", ibkr_id)
-            unmapped, ok = {}, False
+            unmapped, ok, reason = {}, False, "unexpected_error"
         all_unmapped.update(unmapped)
         if not ok:
             failed_accounts.append(ibkr_id)
+            outcome["accounts_failed"] += 1
+            record_failure(outcome, "account", reason, ordinal)
 
     # Log unmapped ISINs: one self-contained line per ISIN so each survives line-based log viewers.
     # Trades are reported only on their import run (deduped before conversion);
@@ -1487,9 +1528,22 @@ def main():
     return 0
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point.  Returns a process exit code (0 = clean, 1 = failure).
+
+    SystemExit and KeyboardInterrupt propagate untouched: an interrupted run is
+    not a completed run.
+    """
+    log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
+    outcome = new_run_outcome()
     try:
-        sys.exit(main())
+        code = run_sync(outcome)
     except Exception:
         log.exception("Sync failed with an unhandled error")
-        sys.exit(1)
+        record_failure(outcome, "unexpected", "unhandled_error")
+        code = 1
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
