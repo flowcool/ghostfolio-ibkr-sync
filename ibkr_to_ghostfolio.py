@@ -1184,9 +1184,12 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     unique = {}
     conflicts = set()
-    for trade in trades:
+    for index, trade in enumerate(trades):
         tid = trade.get("tradeID", "")
-        if tid and tid in unique:
+        if not tid:
+            # Keep each unidentified row so rejection diagnostics remain complete.
+            unique[("missing", index)] = trade
+        elif tid in unique:
             skipped_dup += 1
             if trade != unique[tid]:
                 conflicts.add(tid)

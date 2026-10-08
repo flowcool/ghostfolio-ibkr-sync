@@ -5,6 +5,8 @@ import pytest
 
 import ibkr_to_ghostfolio as m
 
+original_import = m.ghost_import_activities
+
 ISIN_KO = "US1912161007"
 ISIN_PEP = "US7134481081"
 ACC = "gf-acc"
@@ -164,6 +166,19 @@ def test_trade_without_id_is_skipped_and_warned(monkeypatch, caplog):
     w.run()
     assert w.activities == []
     assert any("missing tradeID" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("second", [{}, {"symbol": "PEP", "isin": ISIN_PEP}])
+def test_every_trade_without_id_is_counted_and_warned(monkeypatch, caplog, second):
+    caplog.set_level("INFO")
+    w = World(monkeypatch, report(trade_xml("") + trade_xml("", **second)
+                                 + trade_xml("T1") + trade_xml("T1")))
+    assert w.run()[1] is False
+    assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
+    assert w.ids == {"T1"}
+    assert len([r for r in caplog.records if "missing tradeID" in r.message]) == 2
+    assert any("New trade activities: 1, duplicates skipped: 1, other skipped: 2"
+               in r.message for r in caplog.records)
 
 
 def test_already_imported_trade_is_not_reimported(monkeypatch, caplog):
@@ -704,9 +719,6 @@ def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch)
     cash_count = len(w.cash_calls)
     assert m.process_account(cfg, "U2", "q2", "IBKR", {}, set(), set(), positions())[1] is False
     assert len(calls) == 1 and len(w.cash_calls) == cash_count
-
-
-original_import = m.ghost_import_activities
 
 
 @pytest.mark.parametrize("change", ["source", "date", "missing-id"])
