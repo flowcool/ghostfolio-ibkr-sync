@@ -312,6 +312,8 @@ All configuration is done via environment variables:
 | `CRON` | No | Cron schedule for recurring runs (Docker only) | `0 6 * * *` |
 | `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
+| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs to notify when a run fails (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
+| `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
 | `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without POSTing/PUTting to Ghostfolio | `1` |
 
 ## Mapping File
@@ -448,6 +450,51 @@ docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBU
 
 Look for lines starting with `[DRY RUN]`; when there is nothing to import the log simply says `No new activities to import`. Replace `your-ghostfolio-network` with the Docker network shared with Ghostfolio. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
 
+## Failure notifications (Apprise)
+
+Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends one
+notification through [Apprise](https://github.com/caronc/apprise/wiki), which supports
+ntfy, Gotify, Telegram, Discord, Slack, email and many more. Give it a JSON list (up to 10
+URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
+space- or comma-separated URLs counts each one toward the limit of 10):
+
+```yaml
+      APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]'
+      APPRISE_TIMEOUT: "10"
+```
+
+**What is sent:** a fixed title, the UTC time, how many accounts failed out of how many, and
+one line per failure with a fixed stage and reason code (for example
+`account: account_failed (account #2)`, where `#2` is the position in `IBKR_ACCOUNT_IDS`).
+Never error messages, account IDs or names, symbols, amounts, URLs or tokens: read the
+container log for details. Up to 20 failure lines, then `and N more`.
+`ghost_startup: token_rejected` means Ghostfolio refused the token (HTTP 401/403): with the
+legacy `GHOST_TOKEN` this is how an expired session token shows up (see
+[Token expiry](#token-expiry)).
+
+**When nothing is sent:** successful runs, runs that only logged warnings (for example
+unmapped ISINs), dry runs (`DRY_RUN` is honoured even when the rest of the configuration is
+invalid), runs stopped by a signal, and when `APPRISE_URLS` is blank or `[]`. If
+`APPRISE_URLS` or `APPRISE_TIMEOUT` is invalid, the run logs
+`APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled` and syncs as usual.
+
+**Delivery:** Apprise runs in a separate short-lived worker process with only network
+settings in its environment (`PATH`, locale, CA bundle and proxy variables; never the IBKR or
+Ghostfolio credentials), the URLs passed on its standard input, and its output discarded, so a
+misbehaving plugin cannot print your destination credentials into the log. One deadline,
+`APPRISE_TIMEOUT`, covers the whole worker (Python start, Apprise import, sending, exit); a
+worker still running at the deadline is killed. This adds at most `APPRISE_TIMEOUT` seconds,
+plus Apprise's import time inside it, to a failed run. There is **no retry**: after a timeout
+the notification may or may not have arrived (`Failure notification timed out (it may still
+arrive; not retried)`). Delivery problems (`timeout`, `failed`, `invalid_destination`,
+`unavailable` when Apprise cannot be imported, `payload_too_large`, `spawn_failed`, which
+includes a script piped on standard input as in `python - < ibkr_to_ghostfolio.py`) are logged as warnings
+and never change the run's exit code. Apprise and its pinned dependencies ship in the image
+and are only imported by the worker.
+
+**Rollback:** remove `APPRISE_URLS` (or set it to `[]`) and recreate the container; the sync
+behaves exactly as without the feature. Older images ignore the variable.
+
 ## Docker Compose / Portainer
 
 For scheduled runs with multiple sub-accounts, run a separate container per account with staggered cron times. The `CRON` environment variable uses [supercronic](https://github.com/aptible/supercronic) internally.
@@ -540,6 +587,8 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
+With [failure notifications](#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run (`DRY_RUN`), which never notifies; its delivery never changes the exit code.
+
 Unmapped ISINs are **not** a failure - they are reported at the end of the run as a prompt to update your mapping file, and the run still exits 0. Activities that Ghostfolio itself detects as duplicates are not a failure either. The tool logs `Ghostfolio created X of Y` and counts only submitted rows matched to the server-created activity list as imported. An unknown or unverifiable import outcome fails the account and blocks subsequent imports and processing of later queries targeting that account for the rest of the run.
 
 ### Portfolio values are wrong after sync
@@ -558,7 +607,7 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
-With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`.
+With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
 
 ### "Ghostfolio login failed: ..."
 
