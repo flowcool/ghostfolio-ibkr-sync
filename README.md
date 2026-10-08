@@ -130,6 +130,10 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
    > pair against the statement and take a verified backup before `--apply`;
    > dry-run output alone is not proof that deletion is safe. These tools are
    > not included in the Docker image.
+   > Dividend cleanup lists candidates up to 35 days apart in dry-run, but
+   > `--apply` keeps both records unchanged when their dates differ by more than
+   > 7 days and exits 1. Verify distant ex-date/payment-date pairs manually;
+   > there is no bypass flag. A shorter date gap still does not prove event identity.
 
 4. Select the following sections and fields:
 
