@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Sync Interactive Brokers trades and dividends to a self-hosted Ghostfolio instance."""
 
+import json
 import logging
 import os
 import re
+import signal
+import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -1436,6 +1439,138 @@ def record_failure(outcome, stage, reason, ordinal=None):
     outcome["failures"].append({"stage": stage, "reason": reason, "ordinal": ordinal})
 
 
+# ---------------------------------------------------------------------------
+# Failure notifications (Apprise, isolated worker process)
+# ---------------------------------------------------------------------------
+
+NOTIFY_WORKER_FLAG = "--notify-worker"
+NOTIFY_PAYLOAD_MAX = 32 * 1024
+APPRISE_URLS_MAX = 10
+APPRISE_URL_MAX_LEN = 2048
+APPRISE_TIMEOUT_DEFAULT = 10
+APPRISE_TIMEOUT_MAX = 30
+# The worker inherits only what Apprise needs to reach a destination: never the
+# IBKR or Ghostfolio credentials.
+NOTIFY_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                        "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+                        "http_proxy", "https_proxy", "no_proxy")
+# Worker exit code -> delivery status reported by send_notification.  Kept clear
+# of the interpreter's own codes (1 uncaught error, 2 cannot open the script).
+NOTIFY_EXIT_STATUS = {0: "sent", 10: "invalid_payload", 11: "unavailable", 12: "failed",
+                      13: "invalid_destination"}
+
+
+def load_notification_config():
+    """Parse APPRISE_URLS and APPRISE_TIMEOUT; None means notifications are off.
+
+    APPRISE_URLS is a JSON list of Apprise URL strings (blank or [] = off);
+    APPRISE_TIMEOUT an integer number of seconds, 1..30 (default 10).  Never
+    raises: invalid settings only disable delivery, with a fixed warning since
+    the values carry destination credentials.
+    """
+    raw = os.environ.get("APPRISE_URLS", "")
+    if not raw.strip():
+        return None
+    try:
+        urls = json.loads(raw) if len(raw) <= NOTIFY_PAYLOAD_MAX else None
+    except ValueError:
+        urls = None
+    raw_timeout = os.environ.get("APPRISE_TIMEOUT", "").strip()
+    timeout = APPRISE_TIMEOUT_DEFAULT
+    if raw_timeout:
+        timeout = int(raw_timeout) if re.fullmatch(r"[0-9]{1,2}", raw_timeout) else 0
+    if (not isinstance(urls, list) or len(urls) > APPRISE_URLS_MAX
+            or not all(isinstance(u, str) and u.strip() and len(u) <= APPRISE_URL_MAX_LEN
+                       for u in urls)
+            or not 1 <= timeout <= APPRISE_TIMEOUT_MAX):
+        log.warning("APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled")
+        return None
+    if not urls:
+        return None
+    return {"urls": urls, "timeout": timeout}
+
+
+def notify_worker():
+    """Worker process entry: deliver one notification read from stdin.
+
+    Never runs the sync.  Apprise is imported here only, so the sync never
+    loads it.  Exit codes: see NOTIFY_EXIT_STATUS.
+    """
+    logging.disable(logging.CRITICAL)
+    raw = sys.stdin.buffer.read(NOTIFY_PAYLOAD_MAX + 1)
+    try:
+        payload = json.loads(raw) if len(raw) <= NOTIFY_PAYLOAD_MAX else None
+    except ValueError:
+        payload = None
+    if (not isinstance(payload, dict)
+            or not isinstance(payload.get("urls"), list) or not payload["urls"]
+            or not all(isinstance(u, str) for u in payload["urls"])
+            or not isinstance(payload.get("title"), str)
+            or not isinstance(payload.get("body"), str)):
+        return 10
+    try:
+        import apprise
+    except ImportError:
+        return 11
+    notifier = apprise.Apprise()
+    if not all(notifier.add(url) for url in payload["urls"]):
+        return 13
+    try:
+        sent = notifier.notify(title=payload["title"], body=payload["body"])
+    except Exception:
+        return 12
+    return 0 if sent else 12
+
+
+def _notify_worker_argv():
+    # -I: ignore PYTHON* variables, user site-packages and the current directory
+    return [sys.executable, "-I", os.path.abspath(__file__), NOTIFY_WORKER_FLAG]
+
+
+def _stop_worker(proc):
+    """Kill the worker (and anything it started) if still running, then reap it."""
+    if proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            proc.kill()
+    proc.wait()
+
+
+def send_notification(settings, title, body):
+    """Deliver one notification through an isolated Apprise worker.
+
+    Apprise plugins can block past any library timeout and can print their
+    destination URL.  So the URLs travel on stdin, the worker gets an
+    allowlisted environment and no output channel, and one deadline covers its
+    whole life (import, setup, send, exit); on expiry it is killed and reaped.
+    No retry: a timed-out send may still have been delivered.  Returns a fixed
+    status string; SystemExit/KeyboardInterrupt propagate after the kill.
+    """
+    payload = json.dumps({"urls": settings["urls"], "title": title, "body": body}).encode()
+    if len(payload) > NOTIFY_PAYLOAD_MAX:
+        return "payload_too_large"
+    # The worker re-runs this file: impossible when the script came from stdin
+    if not os.path.isfile(os.path.abspath(__file__)):
+        return "spawn_failed"
+    env = {k: os.environ[k] for k in NOTIFY_ENV_ALLOWLIST if k in os.environ}
+    try:
+        proc = subprocess.Popen(_notify_worker_argv(), stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=env, close_fds=True, start_new_session=True)
+    except (OSError, ValueError):
+        return "spawn_failed"
+    try:
+        proc.communicate(payload, timeout=settings["timeout"])
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except Exception:
+        return "failed"
+    finally:
+        _stop_worker(proc)
+    return NOTIFY_EXIT_STATUS.get(proc.returncode, "failed")
+
+
 def run_sync(outcome):
     """Run one sync.  Returns the exit code; every exit 1 is recorded in outcome."""
     try:
@@ -1546,4 +1681,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == [NOTIFY_WORKER_FLAG]:
+        sys.exit(notify_worker())
     sys.exit(main())
