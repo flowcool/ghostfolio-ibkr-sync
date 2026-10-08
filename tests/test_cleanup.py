@@ -20,7 +20,7 @@ def tool(request, monkeypatch, tmp_path):
 def activity(tool, ident="synced", symbol="AAPL", profile_key="assetProfile"):
     dividend = tool is cleanup_dividends
     return {
-        "id": ident, "accountId": "synthetic-account", "currency": "USD",
+        "id": ident, "userId": "synthetic-owner", "accountId": "synthetic-account", "currency": "USD",
         "type": "DIVIDEND" if dividend else "BUY", "quantity": 1,
         "unitPrice": 10, "fee": 0, "date": "2026-10-01T00:00:00Z",
         "comment": ("dividend#US0378331005#2026-10-01" if dividend else "IBKR#synthetic")
@@ -159,10 +159,31 @@ def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monk
     monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
                         SimpleNamespace(status_code=200, json=lambda: fresh if url.endswith("manual") else synced))
     writes = []
-    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
-    monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
+    def put(cfg, a, comment, **kwargs):
+        fresh["comment"] = comment
+        writes.append("PUT")
+        return True
+    def delete(cfg, ident, **kwargs):
+        writes.append("DELETE")
+        return True
+    monkeypatch.setattr(tool, "put_comment", put)
+    monkeypatch.setattr(tool, "delete_activity", delete)
     run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
     assert writes == ["PUT", "DELETE"]
+
+
+@pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
+@pytest.mark.parametrize("apply", [False, True])
+def test_financial_noise_is_unmatched_in_preview_and_apply(tool, monkeypatch, caplog, field, apply):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    manual[field] += 1e-10
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *a, **kw: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *a, **kw: writes.append("DELETE") or True)
+    run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=apply)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+    assert writes == []
 
 
 def test_excluded_financial_type_with_invalid_profile_does_not_block(tool, monkeypatch, caplog):
@@ -197,7 +218,7 @@ def test_later_missing_source_aborts_before_any_pair_mutation(tool, monkeypatch,
 
 @pytest.mark.parametrize("changed", ["missing-source", "changed-source", "changed-symbol", "invalid-profile",
                                    "non-object", "invalid-json"])
-def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkeypatch, changed):
+def test_later_invalid_fresh_profile_aborts_before_first_pair(tool, monkeypatch, changed):
     acts = two_pairs(tool)
     second = deepcopy(acts[-1])
     if changed == "missing-source":
@@ -225,7 +246,7 @@ def test_later_invalid_fresh_profile_is_controlled_after_first_pair(tool, monkey
     with pytest.raises(SystemExit) as exc:
         run_cleanup(tool, monkeypatch, acts, apply=True)
     assert exc.value.code == 1
-    assert writes == [("PUT", "manual"), ("DELETE", "synced")]
+    assert writes == []
 
 
 @pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
@@ -306,6 +327,8 @@ def test_request_failure_stops_cleanup_without_blind_retry(tool, monkeypatch, st
         calls.append("PUT")
         if stage == "put":
             raise tool.requests.Timeout("synthetic")
+        ident = args[0].rsplit("/", 1)[1]
+        by_id[ident]["comment"] = kwargs["json"]["comment"]
         return SimpleNamespace(status_code=200)
     def delete(*args, **kwargs):
         calls.append("DELETE")
@@ -358,7 +381,11 @@ def test_inactive_evidence_does_not_block_valid_active_pair(tool, monkeypatch, c
     monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
                         SimpleNamespace(status_code=200, json=lambda: deepcopy(
                             manual if url.endswith("manual") else synced)))
-    monkeypatch.setattr(tool, "put_comment", lambda *args, **kwargs: writes.append("PUT") or True)
+    def put_comment(cfg, row, comment, dry_run):
+        writes.append("PUT")
+        manual["comment"] = comment
+        return True
+    monkeypatch.setattr(tool, "put_comment", put_comment)
     monkeypatch.setattr(tool, "delete_activity", lambda *args, **kwargs: writes.append("DELETE") or True)
     run_cleanup(tool, monkeypatch, [synced, inactive, manual], apply=apply)
     assert any("Matched pairs" in r.message and r.message.endswith(": 1") for r in caplog.records)
