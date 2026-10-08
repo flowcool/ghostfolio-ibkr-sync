@@ -327,6 +327,17 @@ def test_incomplete_listing_aborts_cleanup(tool, monkeypatch):
         tool.fetch_all_activities({"ghost_host": "http://synthetic", "ghost_token": "fake"})
 
 
+@pytest.mark.parametrize("scope", ["activity", "account"])
+@pytest.mark.parametrize("tag", ["0c077abd-eca2-4cbb-818c-6cefbf2d169a", "f2e868af-8333-459f-b161-cbc6544c24bd"])
+def test_real_ghostfolio_inactive_tags_refuse_cleanup(tool, monkeypatch, caplog, scope, tag):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    context = manual if scope == "activity" else manual.setdefault("account", {})
+    context["tags"] = [{"id": tag}]
+    run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=True)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+
+
 @pytest.mark.parametrize("flag", ["isExcluded", "isDraft", "account", "tags"])
 @pytest.mark.parametrize("apply", [False, True])
 @pytest.mark.parametrize("bad_record", ["missing-evidence", "duplicate-id"])

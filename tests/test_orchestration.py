@@ -5,6 +5,8 @@ import pytest
 
 import ibkr_to_ghostfolio as m
 
+original_import = m.ghost_import_activities
+
 ISIN_KO = "US1912161007"
 ISIN_PEP = "US7134481081"
 ACC = "gf-acc"
@@ -164,6 +166,19 @@ def test_trade_without_id_is_skipped_and_warned(monkeypatch, caplog):
     w.run()
     assert w.activities == []
     assert any("missing tradeID" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("second", [{}, {"symbol": "PEP", "isin": ISIN_PEP}])
+def test_every_trade_without_id_is_counted_and_warned(monkeypatch, caplog, second):
+    caplog.set_level("INFO")
+    w = World(monkeypatch, report(trade_xml("") + trade_xml("", **second)
+                                 + trade_xml("T1") + trade_xml("T1")))
+    assert w.run()[1] is False
+    assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
+    assert w.ids == {"T1"}
+    assert len([r for r in caplog.records if "missing tradeID" in r.message]) == 2
+    assert any("New trade activities: 1, duplicates skipped: 1, other skipped: 2"
+               in r.message for r in caplog.records)
 
 
 def test_already_imported_trade_is_not_reimported(monkeypatch, caplog):
@@ -592,7 +607,7 @@ def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(mo
     def row(kind, qty, date, symbol="KO", comment=None, account=ACC):
         """Build an account activity using the profile format under test."""
         return {"type": kind, "quantity": qty, "date": date, "comment": comment,
-                "accountId": account, profile_key: {"symbol": symbol, "isin": ISIN_KO}}
+                "accountId": account, profile_key: {"symbol": symbol, "isin": ISIN_KO, "dataSource": "YAHOO"}}
 
     rows = [row("BUY", 20, "2026-01-01", comment="IBKR#OLD"),
             row("BUY", 10, "2026-08-01"),
@@ -706,9 +721,6 @@ def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch)
     assert len(calls) == 1 and len(w.cash_calls) == cash_count
 
 
-original_import = m.ghost_import_activities
-
-
 @pytest.mark.parametrize("change", ["source", "date", "missing-id"])
 def test_wrong_accepted_identity_cannot_back_sale(monkeypatch, change):
     from types import SimpleNamespace
@@ -730,3 +742,51 @@ def test_wrong_accepted_identity_cannot_back_sale(monkeypatch, change):
     cfg = {**CFG}
     assert m.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
     assert len(calls) == 1 and all(a["type"] == "BUY" for a in calls[0])
+
+
+@pytest.mark.parametrize("inactive", ["draft", "excluded", "other-source"])
+def test_inactive_existing_buy_cannot_authorize_active_sell(monkeypatch, inactive):
+    from types import SimpleNamespace
+    row = {"type": "BUY", "quantity": 10, "comment": "IBKR#OLD", "accountId": ACC,
+           "date": "2026-08-01T00:00:00Z", "assetProfile": {"symbol": "KO", "dataSource": "YAHOO"}}
+    if inactive == "other-source":
+        row["assetProfile"]["dataSource"] = "MANUAL"
+    else:
+        row["tags"] = [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a" if inactive == "draft"
+                        else "f2e868af-8333-459f-b161-cbc6544c24bd"}]
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"activities": [row], "count": 1}))
+    ids, comments, pos = m.ghost_get_existing_orders(CFG)
+    w = World(monkeypatch, report(trade_xml("S", "SELL")))
+    w.run(ids=ids, comments=comments, pos=pos)
+    assert w.activities == [] and w.ids == {"OLD"}
+
+
+def test_canonical_accepted_buy_cannot_back_sale_under_original_ticker(monkeypatch):
+    from types import SimpleNamespace
+    w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL")))
+    monkeypatch.setattr(m, "ghost_import_activities", original_import)
+    calls = []
+    def post(*args, **kwargs):
+        rows = kwargs["json"]["activities"]
+        calls.append(rows)
+        row = {**rows[0], "id": "created", "assetProfile": {"symbol": "KO.CANONICAL", "dataSource": "YAHOO"}}
+        return SimpleNamespace(status_code=201, json=lambda: {"activities": [row]})
+    monkeypatch.setattr(m.requests, "post", post)
+    assert w.run()[1] is False
+    assert len(calls) == 1
+    assert w.pos["qty"][(ACC, "KO")] == 0
+    assert w.pos["qty"][(ACC, "KO.CANONICAL")] == 10
+
+
+
+def test_future_buy_cannot_back_current_sell(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("B", date="20990801;100000") + trade_xml("S", "SELL")))
+    assert w.run()[1] is False
+    assert w.activities == []
+
+
+def test_future_dividend_is_not_created_as_draft(monkeypatch):
+    w = World(monkeypatch, report(divs=div_xml(date="20990801")))
+    assert w.run()[1] is False
+    assert w.activities == []
