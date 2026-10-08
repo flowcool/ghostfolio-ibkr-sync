@@ -41,11 +41,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# IBKR pay date vs ex-date (manually entered) can differ by weeks.
-# Quarterly dividends are ~90 days apart, so ±35 days avoids false positives
-# between consecutive payments while covering the ex-date/pay-date gap.
+# Wide discovery covers ex-date/pay-date gaps, but can span distinct monthly payments.
+# Only short-window unique pairs may be applied; event identity still needs review.
 DATE_TOLERANCE = timedelta(days=35)
-DATE_WARN_THRESHOLD = timedelta(days=7)  # log warning if delta exceeds this
+DATE_WARN_THRESHOLD = timedelta(days=7)  # warn in dry-run; refuse mutation beyond this
 
 
 def load_config():
@@ -288,6 +287,7 @@ def main():
     # Require a unique one-to-one assignment; never guess between real trades.
     matched_pairs = []
     unmatched_ibkr = []
+    refused_pairs = 0
     candidates = []
     for ib in div_ibkr:
         matches = []
@@ -304,7 +304,16 @@ def main():
         if (len(matches) == 1
                 and sum(any(m["id"] == matches[0]["id"] for m in other)
                         for _, other in candidates) == 1):
-            matched_pairs.append((ib, matches[0]))
+            manual = matches[0]
+            delta = abs(parse_date(ib["date"]) - parse_date(manual["date"]))
+            if not dry_run and delta > DATE_WARN_THRESHOLD:
+                log.warning("Refusing dividend cleanup pair %s / %s: date delta %s exceeds %s days; "
+                            "verify payment identity manually; both records kept unchanged",
+                            ib["id"], manual["id"], delta, DATE_WARN_THRESHOLD.days)
+                refused_pairs += 1
+                unmatched_ibkr.append(ib)
+                continue
+            matched_pairs.append((ib, manual))
         else:
             unmatched_ibkr.append(ib)
             if matches:
@@ -332,7 +341,7 @@ def main():
         date_delta = abs(ib_date - m_date) if ib_date and m_date else "?"
         log.info("")
         if isinstance(date_delta, timedelta) and date_delta > DATE_WARN_THRESHOLD:
-            log.warning("  *** DATE DELTA %s > %s days — review this pair! ex-date vs pay-date?",
+            log.warning("  *** DATE DELTA %s > %s days — candidate only; --apply refuses this pair; verify payment identity manually",
                         date_delta, DATE_WARN_THRESHOLD.days)
         log.info("  %s qty=%s price=%s | date delta=%s",
                  symbol_of(ib), ib.get("quantity"), ib.get("unitPrice"), date_delta)
@@ -349,6 +358,9 @@ def main():
         process_pairs(sys.modules[__name__], config, matched_pairs, args.journal)
     except (RuntimeError, OSError) as exc:
         log.error("Cleanup stopped: %s", exc)
+        sys.exit(1)
+    if refused_pairs:
+        log.warning("Cleanup incomplete: %d refused wide-date pairs", refused_pairs)
         sys.exit(1)
 
 
