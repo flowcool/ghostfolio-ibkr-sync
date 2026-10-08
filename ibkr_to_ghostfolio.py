@@ -1525,7 +1525,10 @@ def notify_worker():
     except ImportError:
         return 11
     notifier = apprise.Apprise()
-    if not all(notifier.add(url) for url in payload["urls"]):
+    # One entry may hold several space- or comma-separated URLs: bound the
+    # destinations Apprise actually expanded, not the list entries
+    if (not all(notifier.add(url) for url in payload["urls"])
+            or len(notifier) > APPRISE_URLS_MAX):
         return 13
     try:
         sent = notifier.notify(title=payload["title"], body=payload["body"])

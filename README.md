@@ -244,6 +244,13 @@ characters are refused before any request. The login request does not follow red
 `GHOST_HOST` at the final Ghostfolio URL. A run never logs in again midway: if the session token
 is refused later in the run, that run fails with exit 1 and the next run logs in afresh.
 
+**Plain `http://` is for a trusted network only.** The login request carries the long-lived
+security token in its body, so over `http://` anyone who can observe the path can capture it
+(the session token of every later request, in either mode, is exposed the same way). Use
+`http://` only when the sync reaches Ghostfolio over a private link, such as the internal Docker
+network of a shared compose stack (`http://ghostfolio:3333`). When the traffic crosses any other
+network, point `GHOST_HOST` at an `https://` URL.
+
 **Switching modes / rollback:** remove one variable and set the other, then recreate the
 container. Images released before `GHOST_ACCESS_TOKEN` existed only understand `GHOST_TOKEN`:
 when rolling back to one, set `GHOST_TOKEN` again first.

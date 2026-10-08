@@ -11,6 +11,9 @@ The mandatory checks must pass before merging.
 
 Only `main`, `staging` and `v*` tag refs may publish. `latest` is selected only
 for `refs/heads/main`; a release tag publishes its full and minor versions.
+A tag build first checks that the tag is exactly `vMAJOR.MINOR.PATCH` (no
+pre-release suffix, no leading zeros) and that its commit is on `main`; otherwise
+it fails before login and push, so no misleading image tag is published.
 Manual builds use GitHub's selected ref without a separate checkout override.
 Builds for the same ref are serialized. A weekly `main` run pulls a fresh base
 and rebuilds without cache, so OS package updates are not hidden by old layers.
