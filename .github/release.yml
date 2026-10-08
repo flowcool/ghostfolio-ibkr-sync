@@ -1,0 +1,25 @@
+changelog:
+  exclude:
+    labels:
+      - skip-release-notes
+  categories:
+    - title: "Breaking changes and migration"
+      labels:
+        - breaking-change
+        - compat
+    - title: "Features"
+      labels:
+        - feature
+    - title: "Fixes"
+      labels:
+        - fix
+    - title: "Documentation"
+      labels:
+        - documentation
+    - title: "Maintenance and dependencies"
+      labels:
+        - maintenance
+        - dependencies
+    - title: "Other changes"
+      labels:
+        - "*"
