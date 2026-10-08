@@ -535,7 +535,7 @@ services:
       MAPPING_FILE: /app/mapping.yaml
       CRON: "0 6 * * *"
       # Optional: one alert per failed run (see Failure notifications)
-      # APPRISE_URLS: '["ntfy://ntfy.sh/my-private-topic"]'
+      # APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic"]'
     volumes:
       - ./mapping.yaml:/app/mapping.yaml:ro
     networks:
