@@ -455,7 +455,8 @@ Look for lines starting with `[DRY RUN]`; when there is nothing to import the lo
 Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends one
 notification through [Apprise](https://github.com/caronc/apprise/wiki), which supports
 ntfy, Gotify, Telegram, Discord, Slack, email and many more. Give it a JSON list (up to 10
-URLs, each up to 2048 characters):
+URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
+space- or comma-separated URLs counts each one toward the limit of 10):
 
 ```yaml
       APPRISE_URLS: '["ntfy://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]'
