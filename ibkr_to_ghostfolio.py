@@ -511,7 +511,9 @@ def accepted_import_subset(submitted, body):
         if any(not isinstance(v, str) or not v for v in key) or key not in by_key or key in seen:
             raise RuntimeError("Unmatched or repeated accepted import identity")
         original = by_key[key]
-        profile = row.get("assetProfile")
+        # Preserve listing compatibility: current key wins, even if invalid.
+        profile = (row["assetProfile"] if "assetProfile" in row
+                   else row.get("SymbolProfile"))
         if (not isinstance(row.get("id"), str) or not row["id"].strip()
                 or row["id"] in created_ids
                 or not isinstance(profile, dict)
