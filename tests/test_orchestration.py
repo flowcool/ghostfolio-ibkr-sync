@@ -293,7 +293,8 @@ def env(monkeypatch):
     for k, v in {"IBKR_TOKEN": "tok", "IBKR_ACCOUNT_IDS": "U1,U2", "IBKR_QUERY_IDS": "q1,q2",
                  "GHOST_TOKEN": "g", "GHOST_HOST": "http://ghost:3333/", "MAPPING_FILE": ""}.items():
         monkeypatch.setenv(k, v)
-    for k in ("GHOST_ACCOUNT_NAMES", "DRY_RUN", "GHOST_CURRENCY", "GHOST_PLATFORM_ID"):
+    for k in ("GHOST_ACCOUNT_NAMES", "DRY_RUN", "GHOST_CURRENCY", "GHOST_PLATFORM_ID",
+              "GHOST_ACCESS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
 
