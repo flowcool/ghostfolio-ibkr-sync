@@ -46,7 +46,9 @@ effect in legacy mode.
    - Neither set -> `RuntimeError` (same class as today's missing-var error).
    - Preserve opaque nonblank credential bytes verbatim (no trimming of the
      secret itself beyond the set/unset decision, no normalization).
-   - Record the resolved `auth_mode` ("legacy" | "access") in config.
+   - Exactly one of `ghost_token` / `ghost_access_token` is non-None in config;
+     the auth mode is derived from which one is set (no separate field that
+     could drift).
 
 2. **`ghost_exchange_access_token(host, access_token)` helper**:
    - Reuse the existing SSRF prefix-assertion pattern
