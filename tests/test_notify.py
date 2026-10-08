@@ -85,8 +85,15 @@ def fake_apprise(add=True, notify=True):
     sent = []
 
     class Apprise:  # mimics apprise.Apprise
+        def __init__(self):
+            self.count = 0
+
         def add(self, url):
+            self.count += 1
             return add
+
+        def __len__(self):
+            return self.count
 
         def notify(self, title, body):
             if isinstance(notify, Exception):
@@ -232,10 +239,44 @@ def test_interrupt_while_waiting_kills_the_worker_and_propagates(monkeypatch, tm
     assert procs[0].returncode is not None                       # killed and reaped
 
 
-def test_real_worker_with_real_apprise_reports_an_unreachable_destination(monkeypatch):
-    # json:// to a closed local port: real import, setup and send, no network egress
-    status = m.send_notification({"urls": ["json://127.0.0.1:9/hook"], "timeout": 20}, "t", "b")
-    assert status == "failed"
+def run_real_apprise_worker(monkeypatch, urls, http):
+    # Real Apprise import, parsing and send; only its HTTP transport is mocked
+    calls = []
+
+    def request(*a, **k):
+        calls.append(k.get("url", a[1] if len(a) > 1 else None))
+        return http()
+    monkeypatch.setattr(m.requests, "request", request)
+    data = json.dumps({"urls": urls, "title": "t", "body": "b"}).encode()
+    monkeypatch.setattr(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(data)))
+    try:
+        return m.notify_worker(), calls
+    finally:
+        m.logging.disable(m.logging.NOTSET)
+
+
+def ok_response():
+    resp = m.requests.Response()
+    resp.status_code = 200
+    return resp
+
+
+def test_real_apprise_reports_an_unreachable_destination(monkeypatch):
+    def unreachable():
+        raise m.requests.ConnectionError("unreachable")
+    code, calls = run_real_apprise_worker(monkeypatch, ["json://notify.invalid/hook"], unreachable)
+    assert code == 12 and len(calls) == 1
+
+
+def test_real_apprise_reports_a_delivered_notification(monkeypatch):
+    code, calls = run_real_apprise_worker(monkeypatch, ["json://notify.invalid/hook"], ok_response)
+    assert code == 0 and len(calls) == 1
+
+
+def test_real_apprise_bounds_destinations_expanded_from_one_entry(monkeypatch):
+    entry = " ".join(f"json://notify.invalid/{i}" for i in range(m.APPRISE_URLS_MAX + 1))
+    code, calls = run_real_apprise_worker(monkeypatch, [entry], ok_response)
+    assert code == 13 and calls == []
 
 
 def test_script_read_from_stdin_cannot_spawn_a_worker(monkeypatch):
