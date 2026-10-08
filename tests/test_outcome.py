@@ -97,6 +97,18 @@ def test_clean_run_records_no_failure(env):
     assert holder["outcome"] == {"failures": [], "dropped": 0, "accounts_total": 3, "accounts_failed": 0}
 
 
+def test_a_failed_run_leaves_nothing_in_the_next_run_outcome(env):
+    holder = capture_outcome(env)
+    stub_accounts(env, {"U111": ({}, False), "U222": RuntimeError(CANARY), "U333": ({}, True)})
+    assert m.main() == 1
+    first = holder["outcome"]
+    assert first["accounts_failed"] == 2 and len(first["failures"]) == 2
+    stub_accounts(env, {"U111": ({}, True), "U222": ({}, True), "U333": ({}, True)})
+    assert m.main() == 0
+    assert holder["outcome"] is not first
+    assert holder["outcome"] == {"failures": [], "dropped": 0, "accounts_total": 3, "accounts_failed": 0}
+
+
 def test_warning_only_run_records_no_failure(env):
     holder = capture_outcome(env)
     stub_accounts(env, {"U111": ({"JP1": {"symbol": "X", "description": "Y"}}, True),
