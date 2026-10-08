@@ -460,6 +460,9 @@ one line per failure with a fixed stage and reason code (for example
 `account: account_failed (account #2)`, where `#2` is the position in `IBKR_ACCOUNT_IDS`).
 Never error messages, account IDs or names, symbols, amounts, URLs or tokens: read the
 container log for details. Up to 20 failure lines, then `and N more`.
+`ghost_startup: token_rejected` means Ghostfolio refused the token (HTTP 401/403): with the
+legacy `GHOST_TOKEN` this is how an expired session token shows up (see
+[Token expiry](#token-expiry)).
 
 **When nothing is sent:** successful runs, runs that only logged warnings (for example
 unmapped ISINs), dry runs (`DRY_RUN` is honoured even when the rest of the configuration is
@@ -596,7 +599,7 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
-With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`.
+With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
 
 ### "Ghostfolio login failed: ..."
 

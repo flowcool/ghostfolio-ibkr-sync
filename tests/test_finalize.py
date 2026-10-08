@@ -151,6 +151,16 @@ def test_ghostfolio_startup_failure_notifies_once(env):
     assert len(sent) == 1 and "- ghost_startup: activities_unavailable" in sent[0]["body"]
 
 
+def test_expired_ghostfolio_token_notifies_token_rejected(env):
+    sent = spy_send(env)
+    resp = m.requests.Response()
+    resp.status_code = 401
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
+        m.requests.HTTPError("401 Unauthorized", response=resp)))
+    assert m.main() == 1
+    assert len(sent) == 1 and "- ghost_startup: token_rejected" in sent[0]["body"]
+
+
 def test_unexpected_failure_notifies_once(env):
     sent = spy_send(env)
     env.setattr(m, "run_sync", lambda outcome: (_ for _ in ()).throw(ValueError(CANARY)))

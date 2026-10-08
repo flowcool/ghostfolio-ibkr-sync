@@ -144,6 +144,30 @@ def test_ghostfolio_startup_failure_is_recorded(env):
         {"stage": "ghost_startup", "reason": "activities_unavailable", "ordinal": None}]
 
 
+def http_error(status):
+    resp = m.requests.Response()
+    resp.status_code = status
+    return m.requests.HTTPError(f"{status} for http://ghost:3333/?t={CANARY}", response=resp)
+
+
+def test_rejected_ghostfolio_token_is_recorded_as_token_rejected(env):
+    holder = capture_outcome(env)
+    env.setattr(m, "ghost_get_existing_orders",
+                lambda cfg: (_ for _ in ()).throw(http_error(401)))
+    assert m.main() == 1
+    assert holder["outcome"]["failures"] == [
+        {"stage": "ghost_startup", "reason": "token_rejected", "ordinal": None}]
+
+
+def test_other_http_errors_stay_activities_unavailable(env):
+    holder = capture_outcome(env)
+    env.setattr(m, "ghost_get_existing_orders",
+                lambda cfg: (_ for _ in ()).throw(http_error(502)))
+    assert m.main() == 1
+    assert holder["outcome"]["failures"] == [
+        {"stage": "ghost_startup", "reason": "activities_unavailable", "ordinal": None}]
+
+
 def test_failed_and_crashing_accounts_record_ordinals_and_the_others_still_run(env):
     holder = capture_outcome(env)
     calls = []

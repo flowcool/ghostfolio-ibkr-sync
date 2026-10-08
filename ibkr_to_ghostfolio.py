@@ -1420,11 +1420,18 @@ OUTCOME_REASONS = {
     "config": ("invalid_configuration",),
     "mapping": ("invalid_mapping",),
     "ghost_auth": ("login_failed",),
-    "ghost_startup": ("activities_unavailable",),
+    "ghost_startup": ("activities_unavailable", "token_rejected"),
     "account": ("account_failed", "unexpected_error"),
     "unexpected": ("unhandled_error",),
 }
 MAX_OUTCOME_FAILURES = 20
+
+
+def is_token_rejection(exc):
+    """True when Ghostfolio answered 401/403, i.e. the bearer token is expired or invalid."""
+    response = getattr(exc, "response", None)
+    return (isinstance(exc, requests.HTTPError) and response is not None
+            and response.status_code in (401, 403))
 
 
 def new_run_outcome():
@@ -1668,7 +1675,12 @@ def run_sync(outcome):
         existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
     except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
-        record_failure(outcome, "ghost_startup", "activities_unavailable")
+        if is_token_rejection(exc):
+            log.error("Ghostfolio rejected the token: an expired GHOST_TOKEN must be "
+                      "regenerated, or switch to GHOST_ACCESS_TOKEN")
+            record_failure(outcome, "ghost_startup", "token_rejected")
+        else:
+            record_failure(outcome, "ghost_startup", "activities_unavailable")
         return 1
     log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
              len(existing_trade_ids), len(existing_dividend_comments))
