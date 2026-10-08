@@ -1,15 +1,17 @@
 version: 2
 updates:
   # Grouped so interdependent updates (e.g. requests + PyYAML) are tested and
-  # reviewed together. Major versions stay separate PRs. A 3-day cooldown skips
-  # just-published versions; security updates ignore the cooldown.
+  # reviewed together. Major versions stay separate PRs. A release is proposed
+  # only once it is 14 days old: the dependency release watch opens a review
+  # issue on day one, the bump PR follows once reviewed and settled. Security
+  # updates ignore the cooldown.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
     cooldown:
-      default-days: 3
+      default-days: 14
     groups:
       python-minor-patch:
         update-types:
