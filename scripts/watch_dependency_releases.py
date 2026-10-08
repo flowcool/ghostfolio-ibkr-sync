@@ -36,7 +36,11 @@ TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}
 
 
 def version_key(version):
-    return tuple(int(part) for part in version.split("."))
+    """Comparable key; trailing zeros dropped so 2.34.2.0 equals 2.34.2 (PEP 440)."""
+    parts = [int(part) for part in version.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
 
 
 def read_pins(root=ROOT):
@@ -102,7 +106,7 @@ def release_page(pin, version):
 
 
 def notice_body(pin, release, links):
-    current, new = version_key(pin["version"]), version_key(release["version"])
+    current, new = version_key(pin["version"]) + (0, 0), version_key(release["version"]) + (0, 0)
     if new[0] != current[0]:
         level = "major version change: breaking changes are likely"
     elif new[:2] != current[:2]:
@@ -143,9 +147,9 @@ def monitor(api, repository, pins, fetch_pypi=pypi_releases, limit=MAX_NEW_ISSUE
         else:
             releases, links = github_releases(api, pin["name"])
         current = version_key(pin["version"])
-        newer = {r["version"]: r for r in releases if version_key(r["version"]) > current}
-        pending.extend((pin, release, links) for _, release in
-                       sorted(newer.items(), key=lambda item: version_key(item[0])))
+        # Keyed by version_key: equivalent spellings (3.11, 3.11.0) get one issue.
+        newer = {version_key(r["version"]): r for r in releases if version_key(r["version"]) > current}
+        pending.extend((pin, newer[key], links) for key in sorted(newer))
     if not pending:
         print("No new dependency releases")
         return []

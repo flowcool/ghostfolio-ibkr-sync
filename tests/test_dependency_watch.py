@@ -72,6 +72,22 @@ def test_major_bump_is_flagged_and_minor_is_not():
     assert "major version change: breaking changes are likely" in api.writes[1]["body"]
 
 
+def test_equivalent_versions_are_not_newer_and_open_a_single_issue():
+    pins = [{"ecosystem": "pypi", "name": "requests", "version": "2.34.2"}]
+    releases = {"2.34.2": files(), "2.34.2.0": files(), "2.35": files(), "2.35.0": files()}
+    pypi = lambda name: watch.pypi_releases(name, fetch=lambda url: {"releases": releases, "info": {}})
+    api = FakeAPI(supercronic=[])
+    watch.monitor(api, REPO, pins, fetch_pypi=pypi)
+    assert len(api.writes) == 1 and api.writes[0]["title"].startswith("Review requests 2.35")
+    assert "minor version change" in api.writes[0]["body"]
+
+
+def test_patch_after_a_two_part_pin_is_a_patch():
+    pin = {"ecosystem": "pypi", "name": "x", "version": "2.0"}
+    assert "patch version change" in watch.notice_body(pin, {"version": "2.0.1"}, [])
+    assert "minor version change" in watch.notice_body(pin, {"version": "2.1"}, [])
+
+
 def test_repeated_runs_and_closed_issues_never_duplicate_or_reopen():
     api = FakeAPI()
     watch.monitor(api, REPO, PINS, fetch_pypi=fetch)
