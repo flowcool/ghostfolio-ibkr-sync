@@ -33,6 +33,7 @@ Auto-invoke : `code-review` sur diff > 20 lignes, `security-review` si HTTP/XML/
 - PRs : isolées par concern, merge commit uniquement (squash/rebase désactivés)
 - CI: every PR runs pytest, dependency-audit, amd64/arm64 container-check and CodeQL. Required checks gate merges; PRs never publish. See `.github/BUILD.md` for publication refs, main-only latest, weekly refresh and rollback.
 - push `staging` → tag `:staging`, tester manuellement avant merge
+- Veille dépendances : `dependency-release-watch.yml` (quotidien) ouvre une issue `dependency-release` par nouvelle version stable d'un pin (`requirements.txt` via PyPI, supercronic via GitHub) → relire les breaking changes, puis fermer. Dependabot pip a un `cooldown` de 14 j (jamais pour les correctifs de sécurité)
 - Release : après merge, `git tag -a vX.Y.Z <merge-sha>` + push + `gh release create vX.Y.Z --verify-tag --latest --notes-file head.md --generate-notes` (checklist, semver et gabarit de notes : `docs/releasing.md`) → CI publie `:X.Y.Z` + `:X.Y`. `:latest` reste main-only (un tag d'un vieux commit ne doit pas l'écraser). NAS reste sur `:latest` (décision opérateur 2026-09-30)
 - Version : CI `git describe --tags --always` → build-arg `APP_VERSION` → loggée au démarrage (`:latest` affiche `vX.Y.Z-N-g<sha>`)
 - Test prod sans écriture : `ssh ugreen 'docker exec -i -e DRY_RUN=1 ghostfolio-ibkr-sync-individual python -' < ibkr_to_ghostfolio.py` (code de la branche, données réelles)
