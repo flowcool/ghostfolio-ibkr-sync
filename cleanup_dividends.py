@@ -294,7 +294,7 @@ def main():
         for m in div_manual:
             if identity_of(m) != identity_of(ib) or m["type"] != ib["type"]:
                 continue
-            if any(abs(m[field] - ib[field]) > 1e-9
+            if any(m[field] != ib[field]
                    for field in ("quantity", "unitPrice", "fee")):
                 continue
             if abs(parse_date(ib["date"]) - parse_date(m["date"])) <= DATE_TOLERANCE:

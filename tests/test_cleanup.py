@@ -172,6 +172,20 @@ def test_unchanged_fresh_legacy_activity_can_use_current_list_profile(tool, monk
     assert writes == ["PUT", "DELETE"]
 
 
+@pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
+@pytest.mark.parametrize("apply", [False, True])
+def test_financial_noise_is_unmatched_in_preview_and_apply(tool, monkeypatch, caplog, field, apply):
+    caplog.set_level("INFO")
+    manual = activity(tool, "manual")
+    manual[field] += 1e-10
+    writes = []
+    monkeypatch.setattr(tool, "put_comment", lambda *a, **kw: writes.append("PUT") or True)
+    monkeypatch.setattr(tool, "delete_activity", lambda *a, **kw: writes.append("DELETE") or True)
+    run_cleanup(tool, monkeypatch, [activity(tool), manual], apply=apply)
+    assert any("Matched pairs" in r.message and r.message.endswith(": 0") for r in caplog.records)
+    assert writes == []
+
+
 def test_excluded_financial_type_with_invalid_profile_does_not_block(tool, monkeypatch, caplog):
     caplog.set_level("INFO")
     excluded = {"id": "excluded", "type": "BUY" if tool is cleanup_dividends else "DIVIDEND",
