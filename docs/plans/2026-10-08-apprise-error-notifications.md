@@ -58,10 +58,16 @@ effects.
    kill+reap on timeout and on exceptional paths; returns a fixed delivery status;
    no application-level retries.
 4. **Dependency closure**: pin a published, compatible Apprise base release and
-   its complete Linux transitive closure in a **separate** manifest (not the lean
-   runtime `requirements.txt`); audit in an isolated env (`pip-audit`). Decide
-   whether the image installs it (new image surface) or it ships as an optional
-   layer — document the image-size/attack-surface tradeoff.
+   its complete Linux transitive closure; audit in an isolated env (`pip-audit`).
+   Decision (implementation): the closure goes into `requirements.txt` rather than
+   a separate manifest, because the image, the CI `pip-audit` job, dependabot and
+   the container check already cover that file; a second manifest would need each
+   of them rewired. Only the worker process imports Apprise.
+   Pinned: `apprise==2.0.1` (operator choice over 1.13.1: same closure, worker
+   and tests verified against the 2.x API changes), `click`,
+   `markdown==3.10.3`, `oauthlib==4.0.0` (3.3.1 carries PYSEC-2026-4114),
+   `requests-oauthlib`; verified identical under Python 3.12 and 3.13, `pip check`
+   clean, `pip-audit` clean.
 
 Tests: hanging worker (deadline + reap), secret/output canaries (token never in
 captured output), missing dependency (graceful disable), malformed settings.
