@@ -60,6 +60,11 @@ DIVIDEND_MATCH_DAYS = 3
 # Configuration
 # ---------------------------------------------------------------------------
 
+def dry_run_requested():
+    """True when DRY_RUN is truthy; readable even when the rest of the config is invalid."""
+    return os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _env_secret(name):
     """Return a credential verbatim, or None when absent, empty or whitespace only."""
     value = os.environ.get(name)
@@ -130,7 +135,7 @@ def load_config():
         "ghost_currency": os.environ.get("GHOST_CURRENCY", "USD"),
         "ghost_platform_id": os.environ.get("GHOST_PLATFORM_ID", ""),
         "mapping_file": os.environ.get("MAPPING_FILE", "mapping.yaml"),
-        "dry_run": os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on"),
+        "dry_run": dry_run_requested(),
     }
 
 
@@ -1571,6 +1576,52 @@ def send_notification(settings, title, body):
     return NOTIFY_EXIT_STATUS.get(proc.returncode, "failed")
 
 
+NOTIFY_TITLE = "ghostfolio-ibkr-sync: run failed"
+
+
+def build_failure_summary(outcome, now=None):
+    """Plain-text summary: fixed codes, UTC time, counts and account ordinals only."""
+    now = now or datetime.now(timezone.utc)
+    lines = [f"Run failed at {now.strftime('%Y-%m-%d %H:%M')} UTC.",
+             f"Accounts failed: {int(outcome['accounts_failed'])} of {int(outcome['accounts_total'])}."]
+    for failure in outcome["failures"]:
+        stage, reason = failure["stage"], failure["reason"]
+        if reason not in OUTCOME_REASONS.get(stage, ()):
+            stage, reason = "unexpected", "unhandled_error"
+        ordinal = failure["ordinal"]
+        where = f" (account #{ordinal})" if type(ordinal) is int and ordinal > 0 else ""
+        lines.append(f"- {stage}: {reason}{where}")
+    if outcome["dropped"]:
+        lines.append(f"- and {int(outcome['dropped'])} more")
+    lines.append("Details are in the container log.")
+    return "\n".join(lines)
+
+
+def finalize_run(outcome, code):
+    """Send at most one notification for a completed failed run.
+
+    Silent for success, warning-only runs, dry runs (DRY_RUN read raw, so it
+    holds even when the configuration is invalid) and when notifications are
+    off.  Never changes the exit code and never raises an Exception.
+    """
+    if code == 0 or dry_run_requested():
+        return
+    try:
+        settings = load_notification_config()
+        if settings is None:
+            return
+        status = send_notification(settings, NOTIFY_TITLE, build_failure_summary(outcome))
+    except Exception:
+        log.warning("Failure notification could not be sent: internal error")
+        return
+    if status == "sent":
+        log.info("Failure notification sent")
+    elif status == "timeout":
+        log.warning("Failure notification timed out (it may still arrive; not retried)")
+    else:
+        log.warning("Failure notification not delivered: %s", status)
+
+
 def run_sync(outcome):
     """Run one sync.  Returns the exit code; every exit 1 is recorded in outcome."""
     try:
@@ -1667,7 +1718,7 @@ def main():
     """Main entry point.  Returns a process exit code (0 = clean, 1 = failure).
 
     SystemExit and KeyboardInterrupt propagate untouched: an interrupted run is
-    not a completed run.
+    not a completed run and sends no notification.
     """
     log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
     outcome = new_run_outcome()
@@ -1677,6 +1728,7 @@ def main():
         log.exception("Sync failed with an unhandled error")
         record_failure(outcome, "unexpected", "unhandled_error")
         code = 1
+    finalize_run(outcome, code)
     return code
 
 

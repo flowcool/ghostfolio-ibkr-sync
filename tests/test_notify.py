@@ -244,3 +244,13 @@ def test_script_read_from_stdin_cannot_spawn_a_worker(monkeypatch):
     monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn"))
     assert m.send_notification({"urls": URLS, "timeout": 10}, "t", "b") == "spawn_failed"
 
+
+def test_failed_run_piped_on_stdin_reports_spawn_failed(tmp_path):
+    env = {"PATH": "/usr/bin:/bin", "IBKR_ACCOUNT_IDS": "U1", "IBKR_QUERY_IDS": "q",
+           "GHOST_TOKEN": "g", "GHOST_HOST": "http://g", "MAPPING_FILE": "",
+           "APPRISE_URLS": json.dumps(URLS)}                  # IBKR_TOKEN missing -> exit 1
+    with open(m.__file__, "rb") as script:
+        proc = subprocess.run([sys.executable, "-"], stdin=script, capture_output=True,
+                              timeout=60, env=env, cwd=tmp_path)
+    assert proc.returncode == 1
+    assert b"Failure notification not delivered: spawn_failed" in proc.stderr
