@@ -370,3 +370,50 @@ def test_repeated_active_id_still_aborts_before_writes(tool, monkeypatch):
     manual["id"] = synced["id"]
     with pytest.raises(RuntimeError, match="Repeated cleanup activity id"):
         run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+
+
+@pytest.mark.parametrize("days,seconds", [(7, 0), (7, 1), (28, 0), (-28, 0), (35, 0), (36, 0)])
+@pytest.mark.parametrize("apply", [False, True])
+def test_dividend_date_window_keeps_wide_candidates_read_only(monkeypatch, tmp_path, caplog,
+                                                             days, seconds, apply):
+    from datetime import datetime, timedelta, timezone
+
+    tool = cleanup_dividends
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tool.requests.sessions.Session, "request",
+                        lambda *a, **k: pytest.fail("Unexpected HTTP call"))
+    caplog.set_level("INFO")
+    synced, manual = activity(tool), activity(tool, "manual")
+    manual["date"] = "2026-02-15T00:00:00Z"
+    synced["date"] = (datetime(2026, 2, 15, tzinfo=timezone.utc)
+                      + timedelta(days=days, seconds=seconds)).isoformat()
+    synced["comment"] = "dividend#US0378331005#" + synced["date"][:10]
+    writes = []
+    monkeypatch.setattr(tool.requests, "get", lambda url, **kwargs:
+                        SimpleNamespace(status_code=200, json=lambda: deepcopy(
+                            manual if url.endswith("manual") else synced)))
+
+    def put_comment(cfg, row, comment, dry_run):
+        writes.append(("PUT", row["id"]))
+        manual["comment"] = comment
+        return True
+
+    monkeypatch.setattr(tool, "put_comment", put_comment)
+    monkeypatch.setattr(tool, "delete_activity",
+                        lambda cfg, ident, **kwargs: writes.append(("DELETE", ident)) or True)
+    delta = abs(timedelta(days=days, seconds=seconds))
+    refused = apply and timedelta(days=7) < delta <= timedelta(days=35)
+    if refused:
+        with pytest.raises(SystemExit) as exc:
+            run_cleanup(tool, monkeypatch, [synced, manual], apply=True)
+        assert exc.value.code == 1
+        assert any("Refusing dividend cleanup pair" in r.message for r in caplog.records)
+    else:
+        run_cleanup(tool, monkeypatch, [synced, manual], apply=apply)
+    assert writes == ([("PUT", "manual"), ("DELETE", "synced")]
+                      if apply and delta <= timedelta(days=7) else [])
+    if not apply and delta <= timedelta(days=35):
+        assert any("Matched pairs" in r.message and r.message.endswith(": 1")
+                   for r in caplog.records)
+    if not writes:
+        assert manual["comment"] is None
