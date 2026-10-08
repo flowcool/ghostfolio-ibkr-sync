@@ -1,8 +1,8 @@
 # Release notes automation and breaking-change policy
 
-Status: investigation result (2026-10-08). Read-only: no workflow, label,
-ruleset or release was changed. Rollback of this document is superseding or
-reverting it.
+Status: investigation result (2026-10-08); decision: Option A (native notes).
+The companion changes (labels workflow, `.github/release.yml`, PR template,
+[releasing.md](releasing.md)) are listed under "Implementation" below.
 
 ## Problem
 
@@ -26,6 +26,21 @@ be corrected after the fact.
   No `CHANGELOG.md`, no version file: the version comes from `git describe`.
 - Commits already use `fix:`/`feat:`/`refactor:`/`chore:`, but PR titles and
   merge commits are not enforced to be conventional.
+
+## Audit of the existing history (2026-10-08)
+
+Read-only review of git, tags, releases and PRs.
+
+| Finding | Evidence | Consequence |
+|---|---|---|
+| Tags are clean | 13 annotated tags v1.0.0 to v2.1.0, each with a published release | Nothing to repair |
+| Merging is disciplined | all 52 first-parent commits on `main` are PR merges | Notes can safely be PR-based |
+| PR titles are conventional | 50 of 50 merged PRs use `fix:`/`feat:`/`chore:`/`docs:`/`test:` | Labels can be derived from titles automatically |
+| PRs carry no release labels | 44 of 50 unlabeled (only Dependabot PRs have any); no `breaking-change` label exists | Native grouping would show nothing until labels are applied |
+| Release notes are inconsistent | v2.0.4 to v2.0.7 are one-liners; v2.0.3 and earlier use Fixed/Internal; v2.0.0 has a breaking section; v2.0.8 and v2.1.0 are detailed | A reader cannot rely on a fixed place for breaking changes |
+| Rollback info is rare | a previous-image digest appears only in v2.1.0 | The rollback target must be recorded at release time |
+| Version rule is unwritten | v2.1.0 shipped a removal (`--resume` of JSON snapshots) and stricter validation in a minor | The policy below makes the rule explicit |
+| Compatibility notes depended on memory | v2.0.0 and v2.1.0 list them; the v2.1.0 section had to be corrected after publication | A template and a label are needed, not a generator |
 
 ## Option A: GitHub generated release notes (native)
 
@@ -121,9 +136,10 @@ publication. Tags are still created by the operator and still trigger the
 image build. Rollback of the practice: delete `.github/release.yml` and the
 template section; releases revert to hand-written notes.
 
-## Separately scoped implementation proposal (not done here)
+## Implementation
 
-Each step is its own PR with its own validation and rollback.
+Steps 1 to 3 ship in this PR as separate commits, each revertable alone. Step
+3's check is advisory (a warning annotation, never a failure, never required).
 
 1. **Labels and `.github/release.yml`**: create the labels; configure
    categories (`breaking-change` and `compat` first, `*` catch-all,
