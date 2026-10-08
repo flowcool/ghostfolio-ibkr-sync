@@ -305,3 +305,51 @@ def test_failed_inferred_put_persistence_prevents_recovery_delete(world, monkeyp
         resume(world)
     assert world["calls"] == ["PUT"] and "synced" in world["rows"]
     assert journal(world)["pairs"]["synced"]["put"] == "unknown"
+
+
+@pytest.mark.parametrize("world", [cleanup_dividends], indirect=True, ids=["dividends"])
+@pytest.mark.parametrize("state", ["untagged", "tagged", "complete"])
+def test_wide_date_legacy_journal_can_be_inspected_but_never_applied(world, state):
+    synced = deepcopy(world["synced"])
+    synced["date"] = "2026-01-29T00:00:00Z"
+    synced["comment"] = "dividend#ISIN#2026-01-29"
+    world["rows"]["synced"] = deepcopy(synced)
+    if state != "untagged":
+        world["rows"]["manual"]["comment"] = synced["comment"]
+    if state == "complete":
+        world["rows"].pop("synced")
+    doc = {"schema": 1, "tool": "cleanup_dividends", "host": CFG["ghost_host"],
+           "pairs": {"synced": {"manual_preimage": world["manual"], "synced_preimage": synced,
+                                 "new_comment": synced["comment"],
+                                 "put": "unknown", "delete": "unknown"}}}
+    recovery.write_journal(world["path"], doc, create=True)
+    before = world["path"].read_bytes()
+    rows = deepcopy(world["rows"])
+    resume(world, write=False)
+    with pytest.raises(RuntimeError, match="Wide-date dividend"):
+        resume(world)
+    assert world["calls"] == []
+    assert world["rows"] == rows
+    assert world["path"].read_bytes() == before
+
+
+@pytest.mark.parametrize("world", [cleanup_dividends], indirect=True, ids=["dividends"])
+def test_wide_date_later_journal_pair_blocks_all_mutations(world):
+    first = {"manual_preimage": world["manual"], "synced_preimage": world["synced"],
+             "new_comment": world["synced"]["comment"],
+             "put": "not_attempted", "delete": "not_attempted"}
+    second = deepcopy(first)
+    second["manual_preimage"]["id"] = "manual-2"
+    second["synced_preimage"]["id"] = "synced-2"
+    second["synced_preimage"]["date"] = "2026-01-29T00:00:00Z"
+    second["synced_preimage"]["comment"] = second["new_comment"] = "dividend#ISIN#2026-01-29"
+    for row in (second["manual_preimage"], second["synced_preimage"]):
+        world["rows"][row["id"]] = deepcopy(row)
+    doc = {"schema": 1, "tool": "cleanup_dividends", "host": CFG["ghost_host"],
+           "pairs": {"synced": first, "synced-2": second}}
+    recovery.write_journal(world["path"], doc, create=True)
+    before = world["path"].read_bytes()
+    with pytest.raises(RuntimeError, match="Wide-date dividend"):
+        resume(world)
+    assert world["calls"] == []
+    assert world["path"].read_bytes() == before

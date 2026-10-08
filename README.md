@@ -594,6 +594,10 @@ For a separately authorized resume, quiesce other writers, retain the journal, a
 python cleanup_duplicates.py --resume cleanup-pairs.yaml --apply
 ```
 
+Dividend journals with date gaps above 7 days remain available for read-only
+inspection, including journals created before this safeguard. `--resume --apply`
+refuses them before any mutation; verify and reconcile those payments manually.
+
 Recovery revalidates immediately before mutation, skips a PUT already verified as
 committed, and skips a DELETE already verified as complete. An unchanged untouched
 pair can continue normally. Repeated successful recovery sends no further mutations.

@@ -133,6 +133,11 @@ def execute_pairs(tool, config, path, journal, apply):
     """Inspect all pairs before mutations; stop on any uncertain mutation."""
     # Validate all fresh evidence before touching the first pair.
     for key, pair in journal["pairs"].items():
+        if apply and tool_name(tool) == "cleanup_dividends":
+            manual, synced = pair["manual_preimage"], pair["synced_preimage"]
+            delta = abs(tool.parse_date(manual["date"]) - tool.parse_date(synced["date"]))
+            if delta > tool.DATE_WARN_THRESHOLD:
+                raise RuntimeError("Wide-date dividend cleanup refused; inspect payment identity manually")
         action, _ = pair_state(tool, config, pair)
         log.info("Recovery pair %s: %s", key, action)
     if not apply:
