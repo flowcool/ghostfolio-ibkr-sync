@@ -558,7 +558,9 @@ def accepted_import_subset(submitted, body):
         original = by_key[key]
         if not activity_is_active(row) or not activity_date_is_current(row):
             raise RuntimeError("Created activity is inactive; cannot update active holdings")
-        profile = row.get("assetProfile")
+        # Preserve listing compatibility: current key wins, even if invalid.
+        profile = (row["assetProfile"] if "assetProfile" in row
+                   else row.get("SymbolProfile"))
         if (not isinstance(row.get("id"), str) or not row["id"].strip()
                 or row["id"] in created_ids
                 or not isinstance(profile, dict)
