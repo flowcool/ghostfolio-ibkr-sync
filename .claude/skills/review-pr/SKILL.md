@@ -1,5 +1,6 @@
 ---
-description: Review a PR on this repo using a cold sub-agent + optional CodeRabbit
+name: review-pr
+description: Review a PR on this repo using a cold sub-agent and a manually requested CodeRabbit review
 ---
 
 # Review PR
@@ -63,12 +64,19 @@ gh pr comment <N> --repo flowcool/ghostfolio-ibkr-sync --body "## Review sub-age
 <findings and corrections>"
 ```
 
-## Step 5: Optional CodeRabbit second opinion
+## Step 5: Request a CodeRabbit second opinion
 
-- Only on OPEN PRs (merged PRs get empty reviews)
-- One PR at a time (rate limit ~5/hour)
-- Trigger: `@coderabbitai review` as PR comment
-- Wait for walkthrough before merging
+- Use an OPEN PR whose changes are ready; merged PRs cannot be reviewed.
+- Request one PR at a time. OSS quotas depend on the repository; do not assume
+  paid-plan limits. Public repositories below 10 stars require manual requests.
+- Post `@coderabbitai review` as a PR comment after the final push. Use
+  `@coderabbitai full review` only when a complete new pass is needed.
+- Verify the review completed for the current PR head. A walkthrough, summary,
+  skipped notice or pending status alone does not prove a completed review.
+- Address confirmed findings. If corrections add commits, request another
+  incremental pass and record the completed review URL and reviewed head SHA.
+- If CodeRabbit is unavailable, record the reason and let the maintainer decide
+  whether to merge. Preserve required CI and the independent review above.
 
 ## Step 6: After merge — release, then remember merge is not deployment
 
