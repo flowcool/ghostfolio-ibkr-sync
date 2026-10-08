@@ -385,3 +385,29 @@ def test_exact_import_shape_without_tags_does_not_hide_future_draft():
     candidate = {**import_candidate(), "date": "2099-08-01T00:00:00Z"}
     with pytest.raises(RuntimeError, match="inactive"):
         m.accepted_import_subset([candidate], {"activities": [created(candidate)]})
+
+
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+def test_created_response_accepts_current_and_legacy_profiles(monkeypatch, profile_key):
+    candidate = import_candidate()
+    row = created(candidate)
+    if profile_key == "SymbolProfile":
+        row[profile_key] = row.pop("assetProfile")
+    else:
+        row["SymbolProfile"] = {"symbol": "STALE", "dataSource": "MANUAL"}
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert m.ghost_import_activities(cfg, [candidate]) == ([candidate], True)
+    assert not cfg.get("_uncertain_import_accounts")
+
+
+@pytest.mark.parametrize("profile", [None, {}, [], {"symbol": "", "dataSource": "YAHOO"},
+                                     {"symbol": "KO", "dataSource": "MANUAL"}])
+def test_created_response_invalid_current_profile_cannot_use_legacy(monkeypatch, profile):
+    candidate = import_candidate()
+    row = {**created(candidate), "assetProfile": profile,
+           "SymbolProfile": {"symbol": "KO", "dataSource": "YAHOO"}}
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert m.ghost_import_activities(cfg, [candidate]) == ([], False)
+    assert cfg["_uncertain_import_accounts"] == {"synthetic"}
