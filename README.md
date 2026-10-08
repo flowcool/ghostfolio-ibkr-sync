@@ -122,12 +122,18 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
    >
    > **Recovery if you already used a shorter period:** review existing activities
    > against the statement before widening the query. The repository contains
-   > `cleanup_duplicates.py` and `cleanup_dividends.py`, but **do not run them with
-   > `--apply`**: their legacy profile matching is incompatible with current
-   > Ghostfolio activity responses and can pair unrelated assets. Their matching
-   > also needs account isolation. Dry-run output is not proof that deletion is
-   > safe. These tools are not included in the Docker image. Reconcile affected
-   > entries manually after taking a verified backup.
+   > `cleanup_duplicates.py` and `cleanup_dividends.py`. They require matching
+   > account, currency and asset-profile identity, unique one-to-one matches,
+   > and fresh records before mutation. These checks cannot prove that two
+   > similar payments represent the same event, and the tools do not provide
+   > transactional protection against concurrent edits. Review every proposed
+   > pair against the statement and take a verified backup before `--apply`;
+   > dry-run output alone is not proof that deletion is safe. These tools are
+   > not included in the Docker image.
+   > Dividend cleanup lists candidates up to 35 days apart in dry-run, but
+   > `--apply` keeps both records unchanged when their dates differ by more than
+   > 7 days and exits 1. Verify distant ex-date/payment-date pairs manually;
+   > there is no bypass flag. A shorter date gap still does not prove event identity.
 
 4. Select the following sections and fields:
 
@@ -315,7 +321,7 @@ European ETFs and stocks require mapping because Yahoo Finance uses exchange suf
 
 ### Unmapped ISINs
 
-When the script encounters an ISIN not in the mapping file, it falls back to the IBKR symbol and **attempts to import the activity**. If Ghostfolio cannot resolve that ticker, the tool drops its activities, imports the rest and exits 1. At the end of the run it logs one self-contained warning per ISIN:
+When the script encounters an ISIN not in the mapping file, it falls back to the IBKR symbol and **attempts to import the activity**. If Ghostfolio cannot resolve that ticker, the tool drops its activities, imports the remaining activities if any remain, and exits 1. At the end of the run it logs one self-contained warning per ISIN:
 
 ```
 [WARNING] Unmapped ISIN JP3637000005 (TRINITY INDUSTRIAL CORP) uses IBKR symbol '6382.T' as ticker (fallback) — verify in Ghostfolio or add to mapping symbol_mapping: 'JP3637000005: <yahoo ticker>'
