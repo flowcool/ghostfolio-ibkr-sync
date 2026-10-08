@@ -1,0 +1,27 @@
+name: PR release labels
+
+# Advisory: labels a PR from its conventional title so GitHub's generated release
+# notes (.github/release.yml) are grouped. Never a required check, never fails.
+on:
+  pull_request:
+    types: [opened, edited, reopened, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Label from title
+        run: python3 scripts/label_pr_release.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

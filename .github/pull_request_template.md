@@ -2,6 +2,12 @@
 
 Describe the problem and resulting behavior. Keep this PR focused on one change.
 
+## Release impact
+
+<!-- Version bump (none/patch/minor/major), breaking or operational change,
+migration steps, rollback. Write "None" if there is no impact. Required, in
+plain words, when the PR is labeled breaking-change or compat. -->
+
 ## Verification
 
 - Command:
