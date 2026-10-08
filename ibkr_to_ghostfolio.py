@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
 from math import isfinite
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urlsplit
 
 import requests
 import yaml
@@ -57,13 +57,55 @@ DIVIDEND_MATCH_DAYS = 3
 # Configuration
 # ---------------------------------------------------------------------------
 
+def _env_secret(name):
+    """Return a credential verbatim, or None when absent, empty or whitespace only."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return value
+
+
+def validate_ghost_host(host):
+    """Refuse a GHOST_HOST that could send the access token somewhere unintended.
+
+    The message is fixed: the host may carry userinfo credentials.
+    """
+    try:
+        parts = urlsplit(host)
+        port_ok = parts.port is None or parts.port > 0
+    except ValueError:
+        port_ok = False
+    if (not port_ok
+            or parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or "@" in parts.netloc
+            or parts.query or parts.fragment or "?" in host or "#" in host
+            or any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f or c == "\\" for c in host)):
+        raise RuntimeError("GHOST_HOST must be an http(s) URL without credentials, "
+                           "query, fragment, whitespace or control characters")
+
+
 def load_config():
-    """Load and validate configuration from environment variables."""
-    required = ["IBKR_TOKEN", "IBKR_ACCOUNT_IDS", "IBKR_QUERY_IDS",
-                "GHOST_TOKEN", "GHOST_HOST"]
-    missing = [k for k in required if not os.environ.get(k)]
+    """Load and validate configuration from environment variables.
+
+    Ghostfolio credentials: exactly one of GHOST_TOKEN (a bearer used as is,
+    legacy) or GHOST_ACCESS_TOKEN (the security token, exchanged for a bearer
+    once per run by main).
+    """
+    ghost_token = _env_secret("GHOST_TOKEN")
+    access_token = _env_secret("GHOST_ACCESS_TOKEN")
+    missing = [k for k in ("IBKR_TOKEN", "IBKR_ACCOUNT_IDS", "IBKR_QUERY_IDS") if not os.environ.get(k)]
+    if ghost_token is None and access_token is None:
+        missing.append("GHOST_TOKEN or GHOST_ACCESS_TOKEN")
+    if not os.environ.get("GHOST_HOST"):
+        missing.append("GHOST_HOST")
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+    if ghost_token is not None and access_token is not None:
+        raise RuntimeError("Set only one of GHOST_TOKEN or GHOST_ACCESS_TOKEN, not both")
+    ghost_host = os.environ["GHOST_HOST"].rstrip("/")
+    if access_token is not None:
+        validate_ghost_host(ghost_host)
 
     account_ids = os.environ["IBKR_ACCOUNT_IDS"].split(",")
     query_ids = os.environ["IBKR_QUERY_IDS"].split(",")
@@ -79,8 +121,9 @@ def load_config():
         "account_ids": [a.strip() for a in account_ids],
         "query_ids": [q.strip() for q in query_ids],
         "account_names": [n.strip() for n in account_names] if account_names != [""] else [],
-        "ghost_token": os.environ["GHOST_TOKEN"],
-        "ghost_host": os.environ["GHOST_HOST"].rstrip("/"),
+        "ghost_token": ghost_token,
+        "ghost_access_token": access_token,
+        "ghost_host": ghost_host,
         "ghost_currency": os.environ.get("GHOST_CURRENCY", "USD"),
         "ghost_platform_id": os.environ.get("GHOST_PLATFORM_ID", ""),
         "mapping_file": os.environ.get("MAPPING_FILE", "mapping.yaml"),
@@ -331,6 +374,39 @@ def ghost_headers(token):
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
+
+
+# (connect, read) inactivity timeouts for the login exchange
+GHOST_AUTH_TIMEOUT = (10, 30)
+# The bearer becomes an Authorization header value: printable ASCII, no space
+_HEADER_SAFE_TOKEN_RE = re.compile(r"[\x21-\x7e]+")
+
+
+def ghost_exchange_access_token(host, access_token):
+    """Exchange the Ghostfolio security token for a session bearer.
+
+    One POST /api/v1/auth/anonymous, no redirects (a redirect would carry the
+    security token elsewhere) and no retry.  Every failure raises a fixed
+    message: neither the request exception nor the response body is surfaced,
+    as either could echo a credential.
+    """
+    validate_ghost_host(host)
+    try:
+        resp = requests.post(f"{host}/api/v1/auth/anonymous",
+                             json={"accessToken": access_token},
+                             timeout=GHOST_AUTH_TIMEOUT, allow_redirects=False)
+    except requests.RequestException:
+        raise RuntimeError("Ghostfolio login failed: network error") from None
+    if not 200 <= resp.status_code < 300:
+        raise RuntimeError(f"Ghostfolio login failed: HTTP {resp.status_code}")
+    try:
+        body = resp.json()
+    except ValueError:
+        raise RuntimeError("Ghostfolio login failed: response is not JSON") from None
+    token = body.get("authToken") if isinstance(body, dict) else None
+    if not isinstance(token, str) or not _HEADER_SAFE_TOKEN_RE.fullmatch(token):
+        raise RuntimeError("Ghostfolio login failed: response has no usable authToken")
+    return token
 
 
 def activity_date_is_current(activity):
