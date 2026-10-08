@@ -216,15 +216,37 @@ Activity Statement data updates once daily after market close. Running the sync 
 
 ## Ghostfolio Setup
 
-### 1. Get an auth token
+### 1. Choose how the sync authenticates
 
-```bash
-curl -X POST http://localhost:3333/api/v1/auth/anonymous \
-  -H 'Content-Type: application/json' \
-  -d '{"accessToken": "YOUR_GHOSTFOLIO_ACCESS_TOKEN"}'
-```
+Set **exactly one** of these two variables (both set, or neither, stops the run with exit 1):
 
-The response contains an `authToken` field. Use this as `GHOST_TOKEN`. This token expires and will need to be regenerated periodically.
+- **`GHOST_ACCESS_TOKEN` (recommended)** — the Ghostfolio *security token* you sign in with
+  (shown when the user was created; Ghostfolio can generate a new one). At the start of every
+  run, after the configuration and mapping file are validated and before anything is read from
+  Ghostfolio or IBKR, the sync exchanges it once for a fresh session token via
+  `POST /api/v1/auth/anonymous`. There is nothing to renew by hand. A dry run logs in too
+  (logging in writes no financial data). The security token is long-lived: treat it like a
+  password, and rotate it in Ghostfolio if it leaks.
+- **`GHOST_TOKEN` (legacy)** — a session bearer you obtain yourself; it is used as is and
+  **expires**, so you have to regenerate it periodically:
+
+  ```bash
+  curl -X POST http://localhost:3333/api/v1/auth/anonymous \
+    -H 'Content-Type: application/json' \
+    -d '{"accessToken": "YOUR_GHOSTFOLIO_SECURITY_TOKEN"}'
+  ```
+
+  The response contains an `authToken` field. Use it as `GHOST_TOKEN`.
+
+With `GHOST_ACCESS_TOKEN`, `GHOST_HOST` must be a plain `http://` or `https://` URL (an
+optional path is allowed): user credentials, a query string, a fragment, whitespace or control
+characters are refused before any request. The login request does not follow redirects, so point
+`GHOST_HOST` at the final Ghostfolio URL. A run never logs in again midway: if the session token
+is refused later in the run, that run fails with exit 1 and the next run logs in afresh.
+
+**Switching modes / rollback:** remove one variable and set the other, then recreate the
+container. Images released before `GHOST_ACCESS_TOKEN` existed only understand `GHOST_TOKEN`:
+when rolling back to one, set `GHOST_TOKEN` again first.
 
 ### 2. Create an IBKR Platform
 
@@ -233,7 +255,7 @@ The response contains an `authToken` field. Use this as `GHOST_TOKEN`. This toke
 3. Enter a name like `Interactive Brokers` and a URL like `https://www.interactivebrokers.com`
 4. Save it
 
-To find the Platform ID, query the API:
+To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command above):
 
 ```bash
 curl http://localhost:3333/api/v1/platform \
@@ -273,7 +295,8 @@ All configuration is done via environment variables:
 | `IBKR_TOKEN` | Yes | IBKR Flex Web Service token | `1234567890abcdef` |
 | `IBKR_ACCOUNT_IDS` | Yes | Comma-separated IBKR account IDs | `U1234567` |
 | `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs (one per account) | `123456` |
-| `GHOST_TOKEN` | Yes | Ghostfolio auth bearer token | `eyJhbGciOi...` |
+| `GHOST_ACCESS_TOKEN` | One of these two | Ghostfolio security token, exchanged for a session token at the start of each run (recommended; see [Ghostfolio Setup](#1-choose-how-the-sync-authenticates)) | `a1b2c3...` |
+| `GHOST_TOKEN` | One of these two | Ghostfolio session bearer token, used as is (legacy; expires) | `eyJhbGciOi...` |
 | `GHOST_HOST` | Yes | Ghostfolio base URL | `http://ghostfolio:3333` |
 | `GHOST_CURRENCY` | No | Legacy setting, currently unused; it does not override or convert currencies | `EUR` |
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
@@ -381,7 +404,7 @@ docker run --rm --network your-ghostfolio-network \
   -e IBKR_TOKEN=your_token \
   -e IBKR_ACCOUNT_IDS=U1234567 \
   -e IBKR_QUERY_IDS=123456 \
-  -e GHOST_TOKEN=your_ghost_token \
+  -e GHOST_ACCESS_TOKEN=your_ghost_security_token \
   -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
   -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
@@ -397,7 +420,7 @@ cp mapping.yaml.example mapping.yaml  # edit the copied mappings for your securi
 export IBKR_TOKEN=your_token
 export IBKR_ACCOUNT_IDS=U1234567
 export IBKR_QUERY_IDS=123456
-export GHOST_TOKEN=your_ghost_token
+export GHOST_ACCESS_TOKEN=your_ghost_security_token
 export GHOST_HOST=http://localhost:3333
 export GHOST_ACCOUNT_NAMES="IBKR Main"
 .venv/bin/python ibkr_to_ghostfolio.py
@@ -410,7 +433,7 @@ Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, co
 ```bash
 docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
   -e IBKR_TOKEN=your_token -e IBKR_ACCOUNT_IDS=U1234567 -e IBKR_QUERY_IDS=123456 \
-  -e GHOST_TOKEN=your_ghost_token -e GHOST_HOST=http://ghostfolio:3333 \
+  -e GHOST_ACCESS_TOKEN=your_ghost_security_token -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
   -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
@@ -433,7 +456,7 @@ services:
       IBKR_TOKEN: your_token
       IBKR_ACCOUNT_IDS: U1234567
       IBKR_QUERY_IDS: 123456
-      GHOST_TOKEN: your_ghost_token
+      GHOST_ACCESS_TOKEN: your_ghost_security_token
       GHOST_HOST: http://ghostfolio:3333
       GHOST_ACCOUNT_NAMES: "IBKR Individual"
       MAPPING_FILE: /app/mapping.yaml
@@ -452,7 +475,7 @@ services:
       IBKR_TOKEN: your_token
       IBKR_ACCOUNT_IDS: U7654321
       IBKR_QUERY_IDS: 654321
-      GHOST_TOKEN: your_ghost_token
+      GHOST_ACCESS_TOKEN: your_ghost_security_token
       GHOST_HOST: http://ghostfolio:3333
       GHOST_ACCOUNT_NAMES: "IBKR Joint"
       MAPPING_FILE: /app/mapping.yaml
@@ -497,7 +520,7 @@ If Ghostfolio identifies an unresolved symbol, the tool drops that symbol and re
 
 Before any import, the tool reads all existing Ghostfolio activities in one request, because deduplication depends on them. If that list cannot be trusted, the run stops with exit 1 and writes nothing (no import, no cash balance update):
 
-- `Ghostfolio redacted activity values (quantity/comment are null)` — Ghostfolio hides quantities and comments when **Presenter View** (restricted view, the eye icon) is on for the user that owns `GHOST_TOKEN`, or when the token lacks the `portfolio:read:values` scope. Without the `IBKR#` comments every trade would look new. Turn Presenter View off, or use a token with full read access, and re-run.
+- `Ghostfolio redacted activity values (quantity/comment are null)` — Ghostfolio hides quantities and comments when **Presenter View** (restricted view, the eye icon) is on for the Ghostfolio user the sync signs in as, or when the token lacks the `portfolio:read:values` scope. Without the `IBKR#` comments every trade would look new. Turn Presenter View off, or use a token with full read access, and re-run.
 - `Ghostfolio activity at index N has a missing or invalid asset profile symbol` — a BUY, SELL or DIVIDEND is missing a usable `assetProfile` (or legacy `SymbolProfile`). Check the API response and server compatibility; the tool refuses to reconcile against an empty position context.
 - `Ghostfolio returned N activities but reports count=M` — the list and its total disagree, usually because an activity was added or deleted in Ghostfolio during the read. Re-run; the next scheduled run recovers on its own.
 
@@ -506,7 +529,7 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 | Code | Meaning |
 | --- | --- |
 | 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
+| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
@@ -528,7 +551,17 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
-The Ghostfolio auth token also expires. Regenerate it using the curl command in the Ghostfolio Setup section and update your container environment variable.
+With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`.
+
+### "Ghostfolio login failed: ..."
+
+Only with `GHOST_ACCESS_TOKEN`. The run stops with exit 1 before reading or writing anything. The message is deliberately short and never contains a token:
+
+- `HTTP 403` — Ghostfolio refused the security token: check it (copy/paste, no quotes), or generate a new one.
+- `HTTP 3xx` — `GHOST_HOST` redirects (for example `http://` to `https://`, or a missing path); set it to the final URL.
+- `HTTP 429` — Ghostfolio throttled the login; it clears by itself, the next run retries.
+- `network error` — Ghostfolio is unreachable from the container (network, host name, port).
+- `response is not JSON` / `response has no usable authToken` — `GHOST_HOST` does not point at the Ghostfolio API (for example a reverse-proxy page).
 
 ### Options trades being skipped
 
@@ -546,7 +579,7 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 - **Stock splits and other corporate actions are not handled** - Ghostfolio keeps your transactions as they were, while Yahoo returns split-adjusted prices, so a split makes the valuation wrong until the old transactions are corrected by hand (multiply the quantity and divide the unit price by the ratio, and fix the stored market data). The Corporate Actions section of Flex reports is not parsed; it does not create split or merger activities.
 - **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. Give the Ghostfolio account the same currency as the IBKR base currency (see [Create accounts](#3-create-accounts)).
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
-- **Token management** - both the IBKR Flex token and the Ghostfolio auth token expire and require manual renewal. Set a recurring calendar reminder for the IBKR token (up to 1 year).
+- **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.
 - **Account-scoped queries** - use a separate Flex Query per sub-account. Several account/query pairs can run sequentially in one container; separate containers are recommended for operational isolation.
 - **Additive imports** - later IBKR corrections to already-imported trades or same-date dividends are not reconciled. Dividend proximity matching can suppress distinct payments within ±3 days; check unusual payment schedules and tax corrections manually.
 - **Commission currency** - commissions are booked in the activity currency; a different IBKR commission currency is not converted.
@@ -558,6 +591,9 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 ## Inspecting an interrupted cleanup
 
 The cleanup tools are operator maintenance commands, outside the container image.
+They do not log in by themselves: they read only `GHOST_TOKEN` and `GHOST_HOST`, even if the
+sync uses `GHOST_ACCESS_TOKEN`. Before a cleanup session, get a session token with the curl
+command in [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) and export it as `GHOST_TOKEN`.
 Heuristic pair matching still requires a reviewed dry-run, verified backup and quiet
 portfolio writers. The recovery feature does not authorize financial repair by itself.
 

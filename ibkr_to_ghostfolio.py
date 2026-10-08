@@ -521,7 +521,7 @@ def ghost_get_existing_orders(config):
     if any(a.get("quantity") is None for a in activities):
         raise RuntimeError(
             "Ghostfolio redacted activity values (quantity/comment are null): "
-            "disable restricted view for the GHOST_TOKEN user, or use a token "
+            "disable restricted view for the Ghostfolio user, or use a token "
             "with the portfolio:read:values scope; refusing to sync without "
             "existing IBKR# IDs (duplicates risk)")
 
@@ -1418,6 +1418,18 @@ def main():
         log.error("%s", exc)
         return 1
     log.info("Loaded %d symbol mappings", len(mapping))
+
+    # Access mode: one fresh bearer per run, after local validation and before
+    # any Ghostfolio or IBKR call (dry-run included: a login writes nothing).
+    # Never re-authenticated mid-run.
+    if config.get("ghost_access_token") is not None:
+        try:
+            config["ghost_token"] = ghost_exchange_access_token(
+                config["ghost_host"], config.pop("ghost_access_token"))
+        except RuntimeError as exc:
+            log.error("%s", exc)
+            return 1
+        log.info("Authenticated to Ghostfolio with GHOST_ACCESS_TOKEN")
 
     account_ids = config["account_ids"]
     query_ids = config["query_ids"]

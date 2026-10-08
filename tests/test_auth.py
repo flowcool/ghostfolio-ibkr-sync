@@ -169,3 +169,129 @@ def test_exchange_failures_raise_fixed_messages_without_secrets(monkeypatch, cap
     assert SECRET not in message and BEARER_SECRET not in message
     assert e.value.__cause__ is None
     assert SECRET not in caplog.text and BEARER_SECRET not in caplog.text
+
+
+# --- per-run authentication in main --------------------------------------------
+
+def access_env(env, dry_run=False):
+    env.setenv("GHOST_ACCESS_TOKEN", SECRET)
+    if dry_run:
+        env.setenv("DRY_RUN", "1")
+    return env
+
+
+def record_startup(monkeypatch, tokens=("bearer-1", "bearer-2", "bearer-3"), fail=None):
+    """Stub every startup step; return the ordered list of what happened."""
+    events = []
+    issued = iter(tokens)
+
+    def exchange(host, access_token):
+        events.append(("exchange", host, access_token))
+        if fail:
+            raise fail
+        return next(issued)
+
+    def existing(cfg):
+        events.append(("existing", cfg["ghost_token"]))
+        return set(), set(), {"qty": {}}
+
+    def process(cfg, ibkr_id, *a):
+        events.append(("account", ibkr_id, cfg["ghost_token"]))
+        return {}, True
+    monkeypatch.setattr(m, "ghost_exchange_access_token", exchange)
+    monkeypatch.setattr(m, "ghost_get_existing_orders", existing)
+    monkeypatch.setattr(m, "process_account", process)
+    return events
+
+
+def test_access_mode_authenticates_once_before_any_ghostfolio_or_ibkr_call(env):
+    events = record_startup(access_env(env))
+    assert m.main() == 0
+    assert events == [("exchange", "http://ghost:3333", SECRET),
+                      ("existing", "bearer-1"), ("account", "U1", "bearer-1")]
+
+
+def test_each_invocation_issues_a_fresh_bearer(env):
+    events = record_startup(access_env(env))
+    assert m.main() == 0 and m.main() == 0
+    assert [e for e in events if e[0] == "exchange"] == [("exchange", "http://ghost:3333", SECRET)] * 2
+    assert [e[2] for e in events if e[0] == "account"] == ["bearer-1", "bearer-2"]
+
+
+def test_invalid_mapping_prevents_the_exchange(env, tmp_path):
+    access_env(env).setenv("MAPPING_FILE", str(tmp_path / "missing.yaml"))
+    events = record_startup(env)
+    assert m.main() == 1
+    assert events == []
+
+
+def test_authentication_failure_stops_before_reads_accounts_and_writes(env, caplog):
+    events = record_startup(access_env(env), fail=RuntimeError("Ghostfolio login failed: HTTP 403"))
+    assert m.main() == 1
+    assert [e[0] for e in events] == ["exchange"]
+    assert any("Ghostfolio login failed: HTTP 403" in r.message for r in caplog.records)
+    assert SECRET not in caplog.text
+
+
+def test_unauthorised_read_after_login_is_not_retried_with_a_new_login(env):
+    access_env(env)
+    logins = []
+    env.setattr(m, "ghost_exchange_access_token", lambda h, t: logins.append(1) or "bearer")
+    def unauthorised(cfg):
+        raise m.requests.HTTPError("401 Client Error")
+    env.setattr(m, "ghost_get_existing_orders", unauthorised)
+    assert m.main() == 1
+    assert logins == [1]
+
+
+def test_legacy_mode_never_logs_in_and_uses_the_token_as_bearer(env):
+    env.setenv("GHOST_TOKEN", "legacy-jwt")
+    events = record_startup(env)
+    assert m.main() == 0
+    assert events == [("existing", "legacy-jwt"), ("account", "U1", "legacy-jwt")]
+
+
+def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(env):
+    """Real helpers end to end, only the HTTP layer and the IBKR fetch faked."""
+    access_env(env, dry_run=True)
+    reads, writes, logins = [], [], []
+
+    class R:
+        def __init__(self, body, status=200):
+            self.status_code, self._body, self.text = status, body, ""
+        def json(self):
+            return self._body
+        def raise_for_status(self):
+            pass
+
+    def post(url, **kw):
+        if url.endswith("/api/v1/auth/anonymous"):
+            logins.append(kw["json"])
+            return R({"authToken": "fresh-bearer"}, 201)
+        writes.append(("POST", url))
+        return R({}, 201)
+
+    def get(url, headers=None, **kw):
+        reads.append((url, headers["Authorization"]))
+        if url.endswith("/api/v1/activities"):
+            return R({"activities": [], "count": 0})
+        return R([{"id": "gf-1", "name": "U1"}])
+
+    env.setattr(m.requests, "post", post)
+    env.setattr(m.requests, "get", get)
+    env.setattr(m.requests, "put", lambda url, **kw: writes.append(("PUT", url)))
+    env.setattr(m.requests, "delete", lambda url, **kw: writes.append(("DELETE", url)))
+    trade = ('<Trade tradeID="T1" symbol="KO" isin="US1912161007" assetCategory="STK" buySell="BUY" '
+             'quantity="10" tradePrice="60" ibCommission="-1" currency="USD" dateTime="20260801;100000"/>')
+    div = ('<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="25" dateTime="20260715" '
+           'isin="US1912161007" symbol="KO" currency="USD" description="KO CASH DIVIDEND"/>')
+    xml = (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trade}</Trades>"
+           f"<CashTransactions>{div}</CashTransactions><CashReport>"
+           '<CashReportCurrency currency="BASE_SUMMARY" endingCash="100"/></CashReport>'
+           "</FlexStatement></FlexStatements></FlexQueryResponse>")
+    env.setattr(m, "fetch_flex_report", lambda *a, **k: xml)
+
+    assert m.main() == 0
+    assert logins == [{"accessToken": SECRET}]
+    assert writes == []
+    assert reads and all(auth == "Bearer fresh-bearer" for _, auth in reads)
