@@ -19,6 +19,7 @@ Fork de `obol89/ghostfolio-ibkr-sync`. Cron Python qui sync Interactive Brokers 
 |---|---|---|
 | Rule `python-conventions` | `.claude/rules/python-conventions.md` | Auto quand `*.py` touché |
 | Rule `security` | `.claude/rules/security.md` | Toujours chargée |
+| Rule `delegation` | `.claude/rules/delegation.md` | Toujours chargée — modèle de fleet partagé (délégation, right-sizing Luna→Astra, handoff infra) |
 | Skill `/review-pr` | `.claude/skills/review-pr/` | Manuel — obligatoire avant merge |
 | Skill `/test-sync` | `.claude/skills/test-sync/` | Manuel |
 | Tests `pytest` | `tests/` (offline) | `.venv/bin/python -m pytest -q` avant commit ; CI les lance avant le build |

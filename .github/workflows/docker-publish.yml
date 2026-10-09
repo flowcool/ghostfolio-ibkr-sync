@@ -84,6 +84,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          trivyignores: .trivyignore
 
   build-and-push:
     needs: [test, dependency-audit, container-check]

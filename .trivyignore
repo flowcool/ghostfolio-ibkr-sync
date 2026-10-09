@@ -1,0 +1,15 @@
+# Scoped Trivy allowlist — review and prune when upstream ships a fix.
+#
+# supercronic v0.2.49 (latest, published 2026-08-14) ships a binary built with
+# Go stdlib 1.26.6, which carries these two FIXABLE HIGH CVEs:
+#   CVE-2026-78667  net/http  DoS via crafted HTTP Range headers  (fixed in Go 1.26.9/1.27.2)
+#   CVE-2026-97031  crypto/tls DoS via multiple ECH outer extension refs (fixed in Go 1.26.9/1.27.2)
+# Both are denial-of-service, not RCE. In this image supercronic only runs the
+# local cron that execs the Python sync — no HTTP listener (no
+# -prometheus-listen-address) and no TLS client — so neither code path is
+# reachable. Upstream has no rebuilt release yet (v0.2.49 is latest).
+#
+# Remove both lines once supercronic publishes a release built with Go >= 1.26.9.
+# Re-review by: 2026-11-15
+CVE-2026-78667
+CVE-2026-97031
