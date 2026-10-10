@@ -8,7 +8,29 @@ reviews:
   review_status: true
   auto_review:
     enabled: true
-    drafts: false
+    # Work is delivered as stacked PRs, often drafts: review every base branch,
+    # not only the default one.
+    drafts: true
+    base_branches:
+      - ".*"
+    # Stacked PRs receive many merge commits; CodeRabbit otherwise pauses them
+    # ("Reviews paused") and silently skips later pushes. 0 disables the pause.
+    auto_pause_after_reviewed_commits: 0
+  # Mono-file, functional, no-docstring convention; the warning is noise on every PR.
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+  # Compact functional style is deliberate here; ruff/languagetool are noise.
+  tools:
+    ruff:
+      enabled: false
+    languagetool:
+      enabled: false
   path_instructions:
     - path: "**/*.py"
       instructions: >-
