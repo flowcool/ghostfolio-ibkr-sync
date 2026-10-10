@@ -76,7 +76,14 @@ jobs:
           outputs: type=docker,dest=${{ runner.temp }}/image.tar
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
-      - name: Scan image for fixable high and critical vulnerabilities
+      # Blocking gate: fixable HIGH/CRITICAL in packages we can act on (base image
+      # OS packages, plus our Python layer). The supercronic binary is excluded
+      # here because its Go-stdlib CVEs are not fixable by us until upstream ships
+      # a rebuilt release, and its code paths are unreachable in this image (local
+      # cron only, no HTTP listener, no TLS client). It is covered by the advisory
+      # scan below instead of blocking every PR. Python deps are also gated by
+      # pip-audit in the dependency-audit job.
+      - name: Scan image for fixable high and critical vulnerabilities (blocking)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: ${{ runner.temp }}/image.tar
@@ -84,7 +91,20 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          skip-files: /usr/local/bin/supercronic
           trivyignores: .trivyignore
+      # Advisory scan: reports every fixable HIGH/CRITICAL (including the
+      # supercronic binary skipped above) for visibility, but never blocks the
+      # merge. Runs even if the blocking scan failed.
+      - name: Advisory vulnerability scan (never blocks)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: ${{ runner.temp }}/image.tar
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
 
   build-and-push:
     needs: [test, dependency-audit, container-check]
