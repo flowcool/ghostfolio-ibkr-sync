@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Sync Interactive Brokers trades and dividends to a self-hosted Ghostfolio instance."""
 
+import base64
 import json
 import logging
 import os
@@ -12,7 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
-from math import isfinite
+from math import ceil, isfinite
 from urllib.parse import quote, quote_plus, urlsplit
 
 import requests
@@ -137,6 +138,39 @@ def load_config():
         "mapping_file": os.environ.get("MAPPING_FILE", "mapping.yaml"),
         "dry_run": dry_run_requested(),
     }
+
+
+def legacy_token_expiry_days(config, now=None):
+    """Read an unverified JWT expiry for reminders only, never authentication."""
+    if config.get("ghost_access_token") is not None:
+        return None
+    raw_days = os.environ.get("GHOST_TOKEN_EXPIRY_WARNING_DAYS", "14").strip()
+    if not re.fullmatch(r"[0-9]{1,3}", raw_days) or int(raw_days) > 365:
+        log.warning("GHOST_TOKEN_EXPIRY_WARNING_DAYS is invalid; using 14 days")
+        raw_days = "14"
+    warning_days = int(raw_days)
+    if warning_days == 0:
+        return None
+    try:
+        token = config.get("ghost_token")
+        if not isinstance(token, str) or len(token) > 16384:
+            raise ValueError
+        parts = token.split(".")
+        if (len(parts) != 3 or not parts[0] or not parts[2]
+                or not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", parts[1])):
+            raise ValueError
+        payload = json.loads(base64.b64decode(
+            parts[1] + "=" * (-len(parts[1]) % 4), altchars=b"-_", validate=True))
+        expiry = payload.get("exp") if isinstance(payload, dict) else None
+        if type(expiry) not in (int, float) or not isfinite(expiry):
+            raise ValueError
+        seconds_left = expiry - (time.time() if now is None else now)
+        if seconds_left > warning_days * 86400:
+            return None
+        return max(0, ceil(seconds_left / 86400))
+    except (ValueError, OverflowError, RecursionError):
+        log.debug("Legacy GHOST_TOKEN has no usable JWT expiry; reminder skipped")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1587,6 +1621,13 @@ def send_notification(settings, title, body):
 
 
 NOTIFY_TITLE = "ghostfolio-ibkr-sync: run failed"
+TOKEN_EXPIRY_NOTIFY_TITLE = "ghostfolio-ibkr-sync: token expiring"
+
+
+def build_token_expiry_summary(days):
+    """Fixed advisory code and remaining-day count; no JWT claims are disclosed."""
+    return (f"- ghost_auth: token_expiring (days remaining: {days})\n"
+            "Regenerate GHOST_TOKEN or switch to GHOST_ACCESS_TOKEN.")
 
 
 def build_failure_summary(outcome, now=None):
@@ -1603,33 +1644,39 @@ def build_failure_summary(outcome, now=None):
         lines.append(f"- {stage}: {reason}{where}")
     if outcome["dropped"]:
         lines.append(f"- and {int(outcome['dropped'])} more")
+    if outcome.get("token_expiry_days") is not None:
+        lines.append(build_token_expiry_summary(outcome["token_expiry_days"]))
     lines.append("Details are in the container log.")
     return "\n".join(lines)
 
 
 def finalize_run(outcome, code):
-    """Send at most one notification for a completed failed run.
+    """Send at most one notification for failures or a legacy-token reminder.
 
-    Silent for success, warning-only runs, dry runs (DRY_RUN read raw, so it
-    holds even when the configuration is invalid) and when notifications are
-    off.  Never changes the exit code and never raises an Exception.
+    Ordinary warnings remain silent. Dry runs (DRY_RUN read raw, even when
+    configuration is invalid) never notify. Delivery never changes the exit
+    code. A reminder on a failed run is included in its failure notification.
     """
-    if code == 0 or dry_run_requested():
+    days = outcome.get("token_expiry_days")
+    if (code == 0 and days is None) or dry_run_requested():
         return
+    label = "Failure" if code else "Token expiry"
     try:
         settings = load_notification_config()
         if settings is None:
             return
-        status = send_notification(settings, NOTIFY_TITLE, build_failure_summary(outcome))
+        title = NOTIFY_TITLE if code else TOKEN_EXPIRY_NOTIFY_TITLE
+        body = build_failure_summary(outcome) if code else build_token_expiry_summary(days)
+        status = send_notification(settings, title, body)
     except Exception:
-        log.warning("Failure notification could not be sent: internal error")
+        log.warning("%s notification could not be sent: internal error", label)
         return
     if status == "sent":
-        log.info("Failure notification sent")
+        log.info("%s notification sent", label)
     elif status == "timeout":
-        log.warning("Failure notification timed out (it may still arrive; not retried)")
+        log.warning("%s notification timed out (it may still arrive; not retried)", label)
     else:
-        log.warning("Failure notification not delivered: %s", status)
+        log.warning("%s notification not delivered: %s", label, status)
 
 
 def run_sync(outcome):
@@ -1649,6 +1696,16 @@ def run_sync(outcome):
         record_failure(outcome, "mapping", "invalid_mapping")
         return 1
     log.info("Loaded %d symbol mappings", len(mapping))
+
+    days = legacy_token_expiry_days(config)
+    if days is not None:
+        outcome["token_expiry_days"] = days
+        if days:
+            log.warning("Legacy GHOST_TOKEN expires in %d day(s); regenerate it or "
+                        "switch to GHOST_ACCESS_TOKEN", days)
+        else:
+            log.warning("Legacy GHOST_TOKEN has expired; regenerate it or "
+                        "switch to GHOST_ACCESS_TOKEN")
 
     # Access mode: one fresh bearer per run, after local validation and before
     # any Ghostfolio or IBKR call (dry-run included: a login writes nothing).

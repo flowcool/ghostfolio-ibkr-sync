@@ -35,7 +35,7 @@ flowchart LR
 
 ## Overview
 
-This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades. With `GHOST_ACCESS_TOKEN` it logs in to Ghostfolio by itself at every run, so there is no session token to renew, and with `APPRISE_URLS` it sends one alert when a run fails (see [Failure notifications](#failure-notifications-apprise)).
+This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades. With `GHOST_ACCESS_TOKEN` it logs in to Ghostfolio by itself at every run, so there is no session token to renew, and with `APPRISE_URLS` it sends one alert when a run fails or the legacy session token is about to expire (see [Failure notifications](#failure-notifications-apprise)).
 
 ## Why this exists
 
@@ -323,6 +323,7 @@ All configuration is done via environment variables:
 | `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs (one per account) | `123456` |
 | `GHOST_ACCESS_TOKEN` | One of these two | Ghostfolio security token, exchanged for a session token at the start of each run (recommended; see [Ghostfolio Setup](#1-choose-how-the-sync-authenticates)) | `a1b2c3...` |
 | `GHOST_TOKEN` | One of these two | Ghostfolio session bearer token, used as is (legacy; expires) | `eyJhbGciOi...` |
+| `GHOST_TOKEN_EXPIRY_WARNING_DAYS` | No | Legacy token reminder window, integer 0-365 days (default `14`; `0` disables). Invalid values warn and use `14`. Ignored with `GHOST_ACCESS_TOKEN` | `14` |
 | `GHOST_HOST` | Yes | Ghostfolio base URL | `http://ghostfolio:3333` |
 | `GHOST_CURRENCY` | No | Legacy setting, currently unused; it does not override or convert currencies | `EUR` |
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
@@ -331,7 +332,7 @@ All configuration is done via environment variables:
 | `CRON` | No | Cron schedule for recurring runs (Docker only) | `0 6 * * *` |
 | `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
-| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs to notify when a run fails (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
+| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs for failures and legacy token expiry reminders (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
 | `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
 | `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without POSTing/PUTting to Ghostfolio | `1` |
 
@@ -473,7 +474,9 @@ Look for lines starting with `[DRY RUN]`; when there is nothing to import the lo
 
 Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends one
 notification through [Apprise](https://github.com/caronc/apprise/wiki), which supports
-ntfy, Gotify, Telegram, Discord, Slack, email and many more. Give it a JSON list (up to 10
+ntfy, Gotify, Telegram, Discord, Slack, email and many more. A completed successful run
+also sends a reminder when its legacy `GHOST_TOKEN` is about to expire (see
+[Token expiry](#token-expiry)); the reminder keeps exit 0. Give it a JSON list (up to 10
 URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
 space- or comma-separated URLs counts each one toward the limit of 10):
 
@@ -491,8 +494,13 @@ container log for details. Up to 20 failure lines, then `and N more`.
 legacy `GHOST_TOKEN` this is how an expired session token shows up (see
 [Token expiry](#token-expiry)).
 
-**When nothing is sent:** successful runs, runs that only logged warnings (for example
-unmapped ISINs), dry runs (`DRY_RUN` is honoured even when the rest of the configuration is
+Expiry reminders use the fixed code `ghost_auth: token_expiring` and a rounded-up count
+of days remaining (`0` means expired). If the run also fails, the reminder is included
+in the same failure notification. At most one notification is sent per completed run;
+there is no daily state, so multiple runs in one day can repeat the reminder.
+
+**When nothing is sent:** successful runs without an expiry reminder, runs that only
+logged other warnings (for example unmapped ISINs), dry runs (`DRY_RUN` is honoured even when the rest of the configuration is
 invalid), runs stopped by a signal, and when `APPRISE_URLS` is blank or `[]`. If
 `APPRISE_URLS` or `APPRISE_TIMEOUT` is invalid, the run logs
 `APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled` and syncs as usual.
@@ -503,7 +511,7 @@ Ghostfolio credentials), the URLs passed on its standard input, and its output d
 misbehaving plugin cannot print your destination credentials into the log. One deadline,
 `APPRISE_TIMEOUT`, covers the whole worker (Python start, Apprise import, sending, exit); a
 worker still running at the deadline is killed. This adds at most `APPRISE_TIMEOUT` seconds,
-plus Apprise's import time inside it, to a failed run. There is **no retry**: after a timeout
+plus Apprise's import time inside it, to a notifying run. There is **no retry**: after a timeout
 the notification may or may not have arrived (`Failure notification timed out (it may still
 arrive; not retried)`). Delivery problems (`timeout`, `failed`, `invalid_destination`,
 `unavailable` when Apprise cannot be imported, `payload_too_large`, `spawn_failed`, which
@@ -629,6 +637,18 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
 With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
+
+In legacy mode, startup reads the JWT's `exp` claim locally. Within **14 days** of
+expiry (including an already expired token), it logs a `WARNING` with the days
+remaining and sends an Apprise reminder after the run completes, when configured.
+Set `GHOST_TOKEN_EXPIRY_WARNING_DAYS` to an integer from `0` to `365` to change the
+window; `0` disables the reminder, and invalid values warn and fall back to `14`.
+The reminder alone never fails the sync. A dry run logs the warning but sends no
+notification; interrupted runs send none either. Tokens without a usable numeric
+`exp` (including malformed JWTs) skip the check with a fixed debug message. The
+payload is not signature-verified and is used only for the reminder: Ghostfolio
+still decides whether the token is valid. The token and its other claims are never
+included in the reminder. `GHOST_ACCESS_TOKEN` mode skips this check entirely.
 
 ### "Ghostfolio login failed: ..."
 
