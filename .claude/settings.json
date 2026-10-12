@@ -10,10 +10,7 @@
       "Bash(git *)",
       "Bash(grep*)",
       "Bash(find . *)",
-      "Bash(gh *)",
-      "Bash(docker logs ghostfolio*)",
-      "Bash(docker inspect ghostfolio*)",
-      "Bash(docker exec ghostfolio-ibkr-sync-individual python*)"
+      "Bash(gh *)"
     ]
   },
   "hooks": {

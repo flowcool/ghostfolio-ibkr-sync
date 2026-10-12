@@ -6,10 +6,12 @@ description: Test the sync script against live data (manual / DRY_RUN); unit tes
 
 Live-data checks: the script is stateless and idempotent (dedup on Ghostfolio side). Offline unit tests: `.venv/bin/python -m pytest -q` (see `tests/`).
 
-## Run in existing container (production cron)
+## Run in an existing container
+
+Only run this against real services with explicit operator authorization.
 
 ```bash
-docker exec ghostfolio-ibkr-sync-individual python /app/ibkr_to_ghostfolio.py
+docker exec "$CONTAINER_NAME" python /app/ibkr_to_ghostfolio.py
 ```
 
 ## Run locally (requires env vars)
@@ -22,7 +24,7 @@ python ibkr_to_ghostfolio.py
 ## Dry-run mode (preview without writing)
 
 ```bash
-DRY_RUN=1 docker exec ghostfolio-ibkr-sync-individual python /app/ibkr_to_ghostfolio.py
+DRY_RUN=1 docker exec "$CONTAINER_NAME" python /app/ibkr_to_ghostfolio.py
 # Or locally:
 DRY_RUN=1 python ibkr_to_ghostfolio.py
 ```
@@ -31,10 +33,10 @@ DRY_RUN=1 python ibkr_to_ghostfolio.py
 
 ```bash
 # Check image
-docker inspect ghostfolio-ibkr-sync-individual --format '{{.Config.Image}}'
+docker inspect "$CONTAINER_NAME" --format '{{.Config.Image}}'
 
 # Last cron logs
-docker logs ghostfolio-ibkr-sync-individual --tail 50
+docker logs "$CONTAINER_NAME" --tail 50
 ```
 
 ## Validation approach

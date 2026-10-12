@@ -44,6 +44,10 @@ mapping.yaml
 # Claude Code local overrides (a shared .claude/settings.json stays tracked)
 .claude/settings.local.json
 
+# Private local agent guidance; never publish deployment details.
+CLAUDE.md
+.claude/skills/review-pr/SKILL.md
+
 # OS cruft
 .DS_Store
 Thumbs.db

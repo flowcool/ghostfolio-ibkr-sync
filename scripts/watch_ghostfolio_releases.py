@@ -85,7 +85,7 @@ def notice_body(config, release, previous_tag):
         "- [ ] Add or update offline contract/regression fixtures for relevant changes.",
         "- [ ] Record compatibility evidence and any follow-up work before closing.",
         "",
-        "This notice does not upgrade Ghostfolio, deploy the NAS or run against real financial data.",
+        "This notice does not upgrade Ghostfolio, deploy a running environment or run against real financial data.",
         "Closing it acknowledges this release review; the watcher will not reopen or duplicate it.",
     ])
     return "\n".join(lines)

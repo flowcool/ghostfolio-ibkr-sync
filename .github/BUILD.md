@@ -34,7 +34,7 @@ a broken required workflow prevents its own repair; restore them after the
 repair passes. To roll back an image operationally, use the recorded digest of
 a previous good build. GHCR version tags are mutable and are not an immutable
 rollback record. Git tag protections do not make container tags immutable.
-No GitHub change deploys or recreates the NAS container.
+No GitHub change deploys or recreates a running container.
 
 ## Ghostfolio release watch
 
@@ -47,6 +47,7 @@ notices are recognized by immutable release ID; closed notices are not reopened.
 
 Issues link official release notes and an upstream compare view. Keyword hints
 help triage but never certify compatibility. Review upstream API changes and
-add offline regression fixtures where needed. The watcher never probes the NAS
-or changes a deployed version. Disable `upstream-release-watch.yml` in Actions
+add offline regression fixtures where needed. The watcher never probes a
+running deployment or changes a deployed version. Disable
+`upstream-release-watch.yml` in Actions
 and revert its merge to roll back; existing notices can be closed.
