@@ -1,14 +1,40 @@
 """Offline checks for the README's scheduled Compose example."""
 from pathlib import Path
 
+import pytest
 import yaml
 
 
 def compose_example():
-    readme = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
-    # Deliberately coupled to this heading and its first YAML fence; fail on drift.
-    section = readme.split('## Docker Compose / Portainer\n', 1)[1]
-    return yaml.safe_load(section.split('```yaml\n', 1)[1].split('```', 1)[0])
+    readme = (Path(__file__).resolve().parents[1] / 'README.md').read_text(encoding='utf-8')
+    heading = '## Docker Compose / Portainer\n'
+    assert heading in readme, 'README Compose section not found'
+    section = readme.split(heading, 1)[1].split('\n## ', 1)[0]
+    expected = {'ibkr-sync-individual', 'ibkr-sync-joint'}
+    for fenced in section.split('```yaml\n')[1:]:
+        parsed = yaml.safe_load(fenced.split('```', 1)[0])
+        services = parsed.get('services') if isinstance(parsed, dict) else None
+        if isinstance(services, dict) and expected <= set(services):
+            return parsed
+    raise AssertionError('README scheduled Compose YAML block not found')
+
+
+def test_compose_helper_selects_scheduled_services_not_first_block(monkeypatch):
+    readme = ('## Docker Compose / Portainer\n'
+              '```yaml\nservices: {unrelated: {}}\n```\n'
+              '```yaml\nservices: {ibkr-sync-individual: {}, ibkr-sync-joint: {}}\n```\n')
+    monkeypatch.setattr(Path, 'read_text', lambda *args, **kwargs: readme)
+    assert set(compose_example()['services']) == {'ibkr-sync-individual', 'ibkr-sync-joint'}
+
+
+@pytest.mark.parametrize('readme', [
+    '', '## Docker Compose / Portainer\n```yaml\n[]\n```\n',
+    '## Docker Compose / Portainer\n```yaml\nservices: {unrelated: {}}\n```\n',
+])
+def test_compose_helper_rejects_missing_scheduled_example(monkeypatch, readme):
+    monkeypatch.setattr(Path, 'read_text', lambda *args, **kwargs: readme)
+    with pytest.raises(AssertionError, match='README .* not found'):
+        compose_example()
 
 
 def test_compose_services_use_read_only_hardening_and_tmpfs():
