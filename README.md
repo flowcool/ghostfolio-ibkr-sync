@@ -677,6 +677,15 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 
 ## Limitations
 
+- **Flex XML size** - each SendRequest or GetStatement response is limited to
+  10 MiB (10,485,760 response-body bytes) before XML parsing. Larger responses
+  fail with `IBKR Flex response exceeds XML size limit`; no financial writes
+  are made for that query. The limit includes the exact boundary and measures
+  the body after HTTP decompression, not a Content-Length header. This is a
+  parsing guard, not a streaming download or total-memory limit: `requests`
+  still buffers the response before the check. Keep the 365-day recovery
+  window; review unnecessary Flex fields/sections rather than shortening it
+  just to fit the limit.
 - **No options support** - Ghostfolio does not support options as an asset class; options trades are skipped entirely
 - **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
