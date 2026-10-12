@@ -395,8 +395,8 @@ The image runs as the stable non-root UID/GID `10001:10001`. Before starting
 the container, make the host mapping file readable by that owner:
 
 ```bash
-sudo chown 10001:10001 mapping.yaml
 chmod 0600 mapping.yaml
+sudo chown 10001:10001 mapping.yaml
 ```
 
 This works with the hardened profile's `cap_drop: [ALL]` and a read-only bind

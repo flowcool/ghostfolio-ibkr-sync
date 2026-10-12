@@ -3,13 +3,18 @@
 set -euo pipefail
 image=${1:?Pass the locally built test image}
 probe=$(realpath "$(dirname "$0")/../tests/container_sync_probe.py")
-mapping=$(mktemp)
+# Hold the mapping file inside an operator-owned temp dir. The file itself is
+# chowned to 10001 below, but unlinking it needs write access on the parent dir
+# (which the operator owns, non-sticky), not file ownership. So cleanup needs no
+# sudo and cannot hang on a sudo prompt inside the EXIT trap.
+mapping_dir=$(mktemp -d)
+mapping="$mapping_dir/mapping.yaml"
 scheduled_id=''
 cleanup() {
     if [ -n "$scheduled_id" ]; then
         docker rm -f "$scheduled_id" >/dev/null
     fi
-    sudo rm -f "$mapping"
+    rm -rf "$mapping_dir"
 }
 trap cleanup EXIT
 docker run --rm --read-only --network none --cap-drop ALL \
