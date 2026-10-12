@@ -391,6 +391,22 @@ behaves exactly as without the feature. Older images ignore the variable.
 
 For scheduled runs with multiple sub-accounts, run a separate container per account with staggered cron times. The `CRON` environment variable uses [supercronic](https://github.com/aptible/supercronic) internally.
 
+The image runs as the stable non-root UID/GID `10001:10001`. Before starting
+the container, make the host mapping file readable by that owner:
+
+```bash
+chmod 0600 mapping.yaml
+sudo chown 10001:10001 mapping.yaml
+```
+
+This works with the hardened profile's `cap_drop: [ALL]` and a read-only bind
+mount. `chmod o+r mapping.yaml` is an alternative only when no matching named user
+or group ACL entry denies read access. On POSIX ACL volumes, the ACL mask does
+not apply to `ACL_OTHER`; matching entries with no effective read permission
+deny access without falling through to `ACL_OTHER`. Check `getfacl mapping.yaml`.
+Running as UID 0 does not bypass those permissions after all capabilities are
+dropped. Use the same ownership for one-off Docker runs that bind-mount the file.
+
 Use exactly five fields separated by a single space or tab, containing only
 digits and `*`, `/`, `,`, `-` (for example `0 6 * * *` or `*/15 * * * *`).
 Named days/months, macros such as `@daily`, seconds fields and embedded commands
@@ -403,6 +419,7 @@ still runs the sync once immediately.
 services:
   ibkr-sync-individual:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+    user: "10001:10001"
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
@@ -428,6 +445,7 @@ services:
 
   ibkr-sync-joint:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+    user: "10001:10001"
     container_name: ghostfolio-ibkr-sync-joint
     restart: unless-stopped
     read_only: true
@@ -488,7 +506,7 @@ pull and recreate the container. `:latest` remains the example's choice and
 follows `main`; operators may instead select an available full version or a
 recorded digest for controlled upgrades. No deployment is changed automatically.
 
-This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml`. Create that file first and make it readable by the non-root container user (for a non-secret mapping file, `chmod o+r mapping.yaml` is one option). The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
+This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml` and give it owner `10001:10001` with mode `0600` as described above. The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
 
 ## Troubleshooting
 

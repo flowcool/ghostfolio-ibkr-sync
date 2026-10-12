@@ -7,7 +7,8 @@ import requests
 import yaml
 
 
-assert os.getuid() != 0
+assert os.getuid() == 10001
+assert os.getgid() == 10001
 for name in ('/app', '/app/entrypoint.sh', '/app/requirements.txt'):
     info = Path(name).stat()
     assert info.st_uid == 0

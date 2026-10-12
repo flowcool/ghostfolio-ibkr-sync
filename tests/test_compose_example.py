@@ -41,6 +41,7 @@ def test_compose_services_use_read_only_hardening_and_tmpfs():
     services = compose_example()['services']
     assert len(services) == 2
     for service in services.values():
+        assert service['user'] == '10001:10001'
         assert service['read_only'] is True
         assert service['cap_drop'] == ['ALL']
         assert service['security_opt'] == ['no-new-privileges:true']
