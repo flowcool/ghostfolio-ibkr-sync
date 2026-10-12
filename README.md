@@ -539,12 +539,17 @@ services:
   ibkr-sync-individual:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     environment:
       TZ: Europe/Warsaw
-      IBKR_TOKEN: your_token
+      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
       IBKR_ACCOUNT_IDS: U1234567
       IBKR_QUERY_IDS: 123456
-      GHOST_ACCESS_TOKEN: your_ghost_security_token
+      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
       GHOST_HOST: http://ghostfolio:3333
       GHOST_ACCOUNT_NAMES: "IBKR Individual"
       MAPPING_FILE: /app/mapping.yaml
@@ -560,12 +565,17 @@ services:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
     container_name: ghostfolio-ibkr-sync-joint
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     environment:
       TZ: Europe/Warsaw
-      IBKR_TOKEN: your_token
+      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
       IBKR_ACCOUNT_IDS: U7654321
       IBKR_QUERY_IDS: 654321
-      GHOST_ACCESS_TOKEN: your_ghost_security_token
+      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
       GHOST_HOST: http://ghostfolio:3333
       GHOST_ACCOUNT_NAMES: "IBKR Joint"
       MAPPING_FILE: /app/mapping.yaml
@@ -581,6 +591,37 @@ networks:
 ```
 
 Use `http://ghostfolio:3333` (internal Docker network hostname) rather than an external IP or localhost. Stagger the cron times by a few minutes so the two containers do not run simultaneously.
+
+Supply `IBKR_TOKEN` and `GHOST_ACCESS_TOKEN` through the environment used by
+Compose, a private `.env` file beside the Compose file, or Portainer stack
+environment variables. Do not put real credentials into the YAML. For a local
+`.env`, restrict permissions to its owner (`chmod 600 .env`) and keep it out of
+version control and shared backups/artifacts. Required-value interpolation
+refuses startup configuration when either credential is missing or empty.
+`docker compose config` can print resolved secrets: prefer `config --quiet`
+for validation and never share resolved output. Environment values are not a
+secret vault; administrators with Docker access can inspect them.
+Both services share these variables when their credentials are the same. If
+they differ, use separate required variables per service, for example
+`IBKR_TOKEN: ${IBKR_TOKEN_JOINT:?Set IBKR_TOKEN_JOINT}` and
+`GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN_JOINT:?Set GHOST_ACCESS_TOKEN_JOINT}`
+for the joint account, and supply those values through the same private sources.
+
+This example uses the recommended access-token mode. For legacy session-token
+mode, replace the `GHOST_ACCESS_TOKEN` line in **both** services with
+`GHOST_TOKEN: ${GHOST_TOKEN:?Set GHOST_TOKEN}` and do not set both modes.
+
+The read-only root keeps application code immutable. The private runtime
+crontab is generated under `/tmp`; its 16 MiB tmpfs is writable, non-executable
+and ephemeral. The sync itself does not write persistent files. Optional
+notification plugins may have their own storage requirements; verify your
+configured notifier before adopting a read-only root filesystem.
+Use a **published** image containing the `/tmp` crontab change: older images
+writing `/app/crontab` cannot run this hardened example. Merging the runtime
+change is not enough: wait for its image publication workflow to succeed, then
+pull and recreate the container. `:latest` remains the example's choice and
+follows `main`; operators may instead select an available full version or a
+recorded digest for controlled upgrades. No deployment is changed automatically.
 
 This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml`. Create that file first and make it readable by the non-root container user (for a non-secret mapping file, `chmod o+r mapping.yaml` is one option). The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
 
