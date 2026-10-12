@@ -36,10 +36,11 @@ RUN chmod 0555 /app /app/entrypoint.sh \
     && chmod 0444 /app/ibkr_to_ghostfolio.py /app/requirements.txt
 
 # Keep application files owned by root; runtime crontabs live under /tmp.
-# Note: bind-mounted files (e.g. mapping.yaml) must be world-readable
-# (o+r) on the host, or the container will fail to read them.
-RUN addgroup --system appuser \
-    && adduser --system --no-create-home --gecos "" --ingroup appuser appuser
+# Stable IDs let operators grant access to read-only bind mounts without relying
+# on world permissions or a distro-assigned system UID.
+RUN addgroup --gid 10001 appuser \
+    && adduser --uid 10001 --no-create-home --gecos "" --ingroup appuser \
+        --disabled-password --shell /usr/sbin/nologin appuser
 
 USER appuser
 
