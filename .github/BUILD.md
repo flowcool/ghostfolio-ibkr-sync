@@ -15,8 +15,11 @@ A tag build first checks that the tag is exactly `vMAJOR.MINOR.PATCH` (no
 pre-release suffix, no leading zeros) and that its commit is on `main`; otherwise
 it fails before login and push, so no misleading image tag is published.
 Manual builds use GitHub's selected ref without a separate checkout override.
-Builds for the same ref are serialized. A weekly `main` run pulls a fresh base
-and rebuilds without cache, so OS package updates are not hidden by old layers.
+Builds for the same ref are serialized. The Python base is pinned by its
+multiarchitecture digest; Dependabot proposes reviewed Docker digest updates.
+A weekly `main` run pulls that pinned base and rebuilds without cache, so
+package updates available to the build are not hidden by old layers. It does
+not advance the base digest; base-image fixes require merging a digest update.
 Images include provenance and an SBOM. High/critical image vulnerabilities with
 available fixes fail CI; unfixed findings do not block publication.
 
