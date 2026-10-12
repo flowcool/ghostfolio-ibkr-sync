@@ -9,7 +9,7 @@ cleanup() {
     if [ -n "$scheduled_id" ]; then
         docker rm -f "$scheduled_id" >/dev/null
     fi
-    rm -f "$mapping"
+    sudo rm -f "$mapping"
 }
 trap cleanup EXIT
 docker run --rm --read-only --network none --cap-drop ALL \
@@ -27,8 +27,8 @@ options=(--read-only --network none --cap-drop ALL
 # Owner-only mapping access must work with the documented hardened profile,
 # without DAC capabilities or a live NAS.
 printf 'symbol_mapping:\n  TEST: TEST\n' > "$mapping"
-sudo chown 10001:10001 "$mapping"
 chmod 0600 "$mapping"
+sudo chown 10001:10001 "$mapping"
 mapping_output=$(docker run --rm "${options[@]}" \
     --mount "type=bind,src=$mapping,dst=/tmp/mapping.yaml,readonly" \
     -e MAPPING_FILE=/tmp/mapping.yaml --entrypoint python "$image" -c '
