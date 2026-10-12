@@ -11,7 +11,7 @@ ARG SUPERCRONIC_SHA256SUM_amd64=a53ae236602c7338aba3fbaff40bda6300eae3b9fedb8261
 ARG SUPERCRONIC_SHA256SUM_arm64=02aa0cb229ba09050cba6638059dadb9eedc2276632ea43d6a57a2f8c1629dd5
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends curl && \
-    curl --proto '=https' --tlsv1.2 -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${TARGETARCH}" && \
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${TARGETARCH}" && \
     case "${TARGETARCH}" in \
       amd64) EXPECTED="${SUPERCRONIC_SHA256SUM_amd64}" ;; \
       arm64) EXPECTED="${SUPERCRONIC_SHA256SUM_arm64}" ;; \

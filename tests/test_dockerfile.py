@@ -20,6 +20,7 @@ def test_supercronic_download_requires_https_and_tls_minimum():
                 if line.strip().startswith('curl '))
     args = shlex.split(line.split(' && ', 1)[0])
     assert args[args.index('--proto') + 1] == '=https'
+    assert args[args.index('--proto-redir') + 1] == '=https'
     assert '--tlsv1.2' in args
     assert '-fsSLO' in args
     assert args[-1] == ('https://github.com/aptible/supercronic/releases/download/'
