@@ -10,7 +10,16 @@ def run_entrypoint(tmp_path):
     source = Path(__file__).resolve().parents[1] / 'entrypoint.sh'
     script = tmp_path / 'entrypoint.sh'
     crontab = tmp_path / 'crontab'
-    script.write_text(source.read_text().replace('/app/crontab', str(crontab)))
+    script.write_text(source.read_text())
+    mktemp = tmp_path / 'mktemp'
+    mktemp.write_text(
+        '#!/bin/bash\n'
+        '[ "$1" = /tmp/ibkr-crontab.XXXXXX ] || exit 1\n'
+        '[ "$MKTEMP_STATUS" = 0 ] || exit "$MKTEMP_STATUS"\n'
+        ': > "$CRONTAB_PATH"\n'
+        'printf "%s\\n" "$CRONTAB_PATH"\n'
+    )
+    mktemp.chmod(0o755)
     calls = tmp_path / 'calls'
     supercronic = tmp_path / 'supercronic'
     supercronic.write_text(
@@ -31,13 +40,15 @@ def run_entrypoint(tmp_path):
     python.write_text('#!/bin/bash\nprintf "python %s\\n" "$1" >> "$CALLS"\n')
     python.chmod(0o755)
 
-    def run(cron=None, validation_status=0):
+    def run(cron=None, validation_status=0, mktemp_status=0):
         # Do not inherit developer credentials, notifications or scheduler settings.
         env = {
             'PATH': f'{tmp_path}:/usr/bin:/bin',
             'APP_VERSION': 'test',
             'CALLS': str(calls),
             'VALIDATION_STATUS': str(validation_status),
+            'MKTEMP_STATUS': str(mktemp_status),
+            'CRONTAB_PATH': str(crontab),
         }
         if cron is not None:
             env['CRON'] = cron
@@ -58,6 +69,7 @@ def test_valid_cron_is_written_and_tested_before_start(run_entrypoint, cron):
     assert result.returncode == 0
     assert crontab.read_text() == f'{cron} python /app/ibkr_to_ghostfolio.py\n'
     assert calls.read_text().splitlines() == ['test', 'run']
+    assert crontab.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize('cron', [
@@ -81,6 +93,14 @@ def test_supercronic_validation_failure_prevents_start(run_entrypoint):
     assert result.stderr == 'Invalid CRON: schedule validation failed\n'
     assert result.stdout == 'ghostfolio-ibkr-sync version test\n'
     assert calls.read_text().splitlines() == ['test']
+
+
+def test_crontab_creation_failure_prevents_start(run_entrypoint):
+    result, crontab, calls = run_entrypoint('0 6 * * *', mktemp_status=1)
+    assert result.returncode == 1
+    assert result.stderr == 'Could not create runtime crontab\n'
+    assert not crontab.exists()
+    assert not calls.exists()
 
 
 @pytest.mark.parametrize('cron', [None, ''])
