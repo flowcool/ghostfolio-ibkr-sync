@@ -530,6 +530,9 @@ Cleanup is not part of the additive sync; review its safety requirements first.
 
 ## Development
 
+See the [architecture decision records](docs/adr/README.md) for the existing
+sync boundaries, financial trade-offs and reviewed DEGIRO core propagation.
+
 The sync is a single file, `ibkr_to_ghostfolio.py`, with `requests` and `pyyaml` as its only runtime dependencies; `apprise` (with a pinned dependency closure in `requirements.txt`) is imported only by the notification worker (`--notify-worker`). Tests are offline (no network, no Ghostfolio, no IBKR): they exercise the pure decision logic with mocked HTTP.
 
 ```bash
