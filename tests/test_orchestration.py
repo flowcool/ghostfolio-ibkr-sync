@@ -516,7 +516,7 @@ class HttpResp:
 
 def test_ibkr_get_retries_network_errors_then_succeeds(monkeypatch):
     attempts, sleeps = [], []
-    def get(url, params, timeout):
+    def get(url, params, timeout, **kwargs):
         attempts.append(1)
         if len(attempts) < 3:
             raise m.requests.ConnectionError("reset")
@@ -550,7 +550,7 @@ def test_ibkr_get_redacts_url_encoded_forms_of_the_token(monkeypatch):
 
 def test_ibkr_get_http_error_is_not_retried_and_is_redacted(monkeypatch):
     attempts = []
-    def get(url, params, timeout):
+    def get(url, params, timeout, **kwargs):
         attempts.append(1)
         return HttpResp(503)
     monkeypatch.setattr(m.requests, "get", get)
@@ -558,6 +558,20 @@ def test_ibkr_get_http_error_is_not_retried_and_is_redacted(monkeypatch):
     with pytest.raises(RuntimeError) as e:
         m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
     assert len(attempts) == 1 and "SECRET-TOK" not in str(e.value)
+
+
+def test_ibkr_get_rejects_redirects_without_following_them(monkeypatch):
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs)
+        return HttpResp(302)
+
+    monkeypatch.setattr(m.requests, "get", get)
+    with pytest.raises(RuntimeError, match="IBKR request redirected") as error:
+        m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
+    assert str(error.value) == "IBKR request redirected"
+    assert calls == [{"params": {"t": "SECRET-TOK"}, "timeout": 5, "allow_redirects": False}]
 
 
 # --- end to end through the real functions ------------------------------------
@@ -614,7 +628,8 @@ def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(mo
             row("DIVIDEND", 100, "2026-07-16"),
             row("BUY", 99, "2026-01-01", account="other-account")]
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
-        raise_for_status=lambda: None, json=lambda: {"activities": rows, "count": len(rows)}))
+        status_code=200, raise_for_status=lambda: None,
+        json=lambda: {"activities": rows, "count": len(rows)}))
     ids, comments, pos = m.ghost_get_existing_orders(CFG)
     assert pos["qty"][(ACC, "KO")] == 30
     assert pos["qty"][("other-account", "KO")] == 99
@@ -754,7 +769,8 @@ def test_inactive_existing_buy_cannot_authorize_active_sell(monkeypatch, inactiv
         row["tags"] = [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a" if inactive == "draft"
                         else "f2e868af-8333-459f-b161-cbc6544c24bd"}]
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
-        raise_for_status=lambda: None, json=lambda: {"activities": [row], "count": 1}))
+        status_code=200, raise_for_status=lambda: None,
+        json=lambda: {"activities": [row], "count": 1}))
     ids, comments, pos = m.ghost_get_existing_orders(CFG)
     w = World(monkeypatch, report(trade_xml("S", "SELL")))
     w.run(ids=ids, comments=comments, pos=pos)
