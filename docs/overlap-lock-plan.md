@@ -27,6 +27,9 @@ failed-import policy, or introduce automatic activity correction/deletion.
   up names again while processing. Duplicate targets share one lock.
   Dry-run must perform the same unique-name resolution and ID binding, with
   identical failures; only the state/locking and financial writes differ.
+  Both modes must preserve the existing `activity_is_active({"account": acc})`
+  rejection of inactive or excluded matching accounts, before binding the ID,
+  acquiring locks, reading the activities snapshot or making financial writes.
 - Key: SHA-256 of UTF-8 `json.dumps({"host": validated_host, "target": account_id},
   sort_keys=True)`, using Python's default separators and ASCII escaping. File:
   `STATE_DIR/<hex-key>.lock`. No broker identity, token, account name, PID or
@@ -211,6 +214,7 @@ then acquisition after the parent exits while that child remains alive;
 simultaneous first-time opens share one inode under the supported UID/umask;
 missing/unsafe/symlinked/wrong-owner storage fails closed with fixed diagnostics;
 dry-run needs no state but enforces the same unique destination resolution;
+both modes reject inactive/excluded destinations before binding or locking;
 busy-only outcomes warn with sync_busy and do not notify, while actual failures do;
 no financial calls on lock failure; sibling protocol collision when sharing
 the same namespace and the literal hash vector above; no journal modification.
