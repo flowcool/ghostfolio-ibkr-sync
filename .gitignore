@@ -27,14 +27,13 @@ htmlcov/
 # Secrets and local configuration
 .env
 .env.*
-!.env.example
 
 # Run logs
 *.log
 
 # Symbol mapping - lists your own holdings by ISIN, so mount it rather than commit it
 mapping.yaml
-!mapping.example.yaml
+!mapping.yaml.example
 
 # Editors and IDEs
 .idea/
