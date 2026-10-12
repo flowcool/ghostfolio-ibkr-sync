@@ -400,9 +400,10 @@ sudo chown 10001:10001 mapping.yaml
 ```
 
 This works with the hardened profile's `cap_drop: [ALL]` and a read-only bind
-mount. `chmod o+r mapping.yaml` is an alternative only when the effective
-permissions allow it: on POSIX ACL volumes the ACL mask can still remove
-`other` read access even when `ls -l` shows it. Check `getfacl mapping.yaml`.
+mount. `chmod o+r mapping.yaml` is an alternative only when no matching named user
+or group ACL entry denies read access. On POSIX ACL volumes, the ACL mask does
+not apply to `ACL_OTHER`; matching entries with no effective read permission
+deny access without falling through to `ACL_OTHER`. Check `getfacl mapping.yaml`.
 Running as UID 0 does not bypass those permissions after all capabilities are
 dropped. Use the same ownership for one-off Docker runs that bind-mount the file.
 
