@@ -6,6 +6,7 @@ import yaml
 
 def compose_example():
     readme = (Path(__file__).resolve().parents[1] / 'README.md').read_text()
+    # Deliberately coupled to this heading and its first YAML fence; fail on drift.
     section = readme.split('## Docker Compose / Portainer\n', 1)[1]
     return yaml.safe_load(section.split('```yaml\n', 1)[1].split('```', 1)[0])
 

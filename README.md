@@ -601,6 +601,11 @@ refuses startup configuration when either credential is missing or empty.
 `docker compose config` can print resolved secrets: prefer `config --quiet`
 for validation and never share resolved output. Environment values are not a
 secret vault; administrators with Docker access can inspect them.
+Both services share these variables when their credentials are the same. If
+they differ, use separate required variables per service, for example
+`IBKR_TOKEN: ${IBKR_TOKEN_JOINT:?Set IBKR_TOKEN_JOINT}` and
+`GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN_JOINT:?Set GHOST_ACCESS_TOKEN_JOINT}`
+for the joint account, and supply those values through the same private sources.
 
 This example uses the recommended access-token mode. For legacy session-token
 mode, replace the `GHOST_ACCESS_TOKEN` line in **both** services with
@@ -608,10 +613,13 @@ mode, replace the `GHOST_ACCESS_TOKEN` line in **both** services with
 
 The read-only root keeps application code immutable. The private runtime
 crontab is generated under `/tmp`; its 16 MiB tmpfs is writable, non-executable
-and ephemeral, so no persistent state volume is needed by the current runtime.
-Use an image containing the `/tmp` crontab change: older images writing
-`/app/crontab` cannot run this hardened example. Pull and recreate the container
-when adopting the updated image. `:latest` remains the example's choice and
+and ephemeral. The sync itself does not write persistent files. Optional
+notification plugins may have their own storage requirements; verify your
+configured notifier before adopting a read-only root filesystem.
+Use a **published** image containing the `/tmp` crontab change: older images
+writing `/app/crontab` cannot run this hardened example. Merging the runtime
+change is not enough: wait for its image publication workflow to succeed, then
+pull and recreate the container. `:latest` remains the example's choice and
 follows `main`; operators may instead select an available full version or a
 recorded digest for controlled upgrades. No deployment is changed automatically.
 
