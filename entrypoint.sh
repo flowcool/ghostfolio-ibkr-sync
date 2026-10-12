@@ -9,13 +9,20 @@ if [ -n "$CRON" ]; then
         echo 'Invalid CRON: expected five numeric schedule fields' >&2
         exit 1
     fi
-    printf '%s python /app/ibkr_to_ghostfolio.py\n' "$CRON" > /app/crontab
-    if ! supercronic -test /app/crontab > /dev/null 2>&1; then
+    if ! crontab_path=$(
+        umask 077
+        mktemp /tmp/ibkr-crontab.XXXXXX 2>/dev/null
+    ); then
+        echo 'Could not create runtime crontab' >&2
+        exit 1
+    fi
+    printf '%s python /app/ibkr_to_ghostfolio.py\n' "$CRON" > "$crontab_path"
+    if ! supercronic -test "$crontab_path" > /dev/null 2>&1; then
         echo 'Invalid CRON: schedule validation failed' >&2
         exit 1
     fi
     echo 'Running with validated cron schedule'
-    exec supercronic /app/crontab
+    exec supercronic "$crontab_path"
 else
     echo "Running once (no CRON schedule set)"
     exec python /app/ibkr_to_ghostfolio.py
