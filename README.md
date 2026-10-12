@@ -329,12 +329,12 @@ All configuration is done via environment variables:
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count) | `IBKR Individual` |
 | `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
-| `CRON` | No | Cron schedule for recurring runs (Docker only) | `0 6 * * *` |
+| `CRON` | No | Five numeric cron fields for recurring runs (Docker only); validated before startup | `0 6 * * *` |
 | `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
 | `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs for failures and legacy token expiry reminders (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
 | `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
-| `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without POSTing/PUTting to Ghostfolio | `1` |
+| `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without financial writes to Ghostfolio; token exchange still occurs with `GHOST_ACCESS_TOKEN` | `1` |
 
 ## Mapping File
 
@@ -457,7 +457,7 @@ export GHOST_ACCOUNT_NAMES="IBKR Main"
 
 ### Dry run first
 
-Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no Ghostfolio POST or PUT is sent. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
+Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
 ```bash
 docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
@@ -525,6 +525,14 @@ behaves exactly as without the feature. Older images ignore the variable.
 ## Docker Compose / Portainer
 
 For scheduled runs with multiple sub-accounts, run a separate container per account with staggered cron times. The `CRON` environment variable uses [supercronic](https://github.com/aptible/supercronic) internally.
+
+Use exactly five fields separated by a single space or tab, containing only
+digits and `*`, `/`, `,`, `-` (for example `0 6 * * *` or `*/15 * * * *`).
+Named days/months, macros such as `@daily`, seconds fields and embedded commands
+are rejected. The entrypoint checks the grammar, then runs `supercronic -test`
+before starting the scheduler. Invalid schedules exit 1 with a fixed diagnostic;
+the supplied value and validator output are not logged. An unset or empty `CRON`
+still runs the sync once immediately.
 
 ```yaml
 services:
