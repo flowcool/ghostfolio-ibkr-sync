@@ -25,6 +25,8 @@ failed-import policy, or introduce automatic activity correction/deletion.
   exactly one matching account per configured name; missing/ambiguous matches
   fail before financial writes. Freeze these IDs for the run instead of looking
   up names again while processing. Duplicate targets share one lock.
+  Dry-run must perform the same unique-name resolution and ID binding, with
+  identical failures; only the state/locking and financial writes differ.
 - Key: SHA-256 of UTF-8 `json.dumps({"host": validated_host, "target": account_id},
   sort_keys=True)`, using Python's default separators and ASCII escaping. File:
   `STATE_DIR/<hex-key>.lock`. No broker identity, token, account name, PID or
@@ -38,8 +40,14 @@ failed-import policy, or introduce automatic activity correction/deletion.
   URL alignment is a deployment prerequisite, not automatic detection.
 - Require a private directory owned by the runtime UID with mode `0700`;
   lock files must be regular, owner-matching, single-link files with mode
-  `0600`. Open without following symlinks, validate the open descriptor, and
-  keep it non-inheritable. Translate filesystem errors into fixed diagnostics;
+  `0600`. Open with `O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC`, passing creation mode
+  `0600` without truncation or exclusive creation. Validate type, owner, link
+  count and permissions using `fstat` on the opened descriptor. A umask can
+  remove permission bits, not add them: reject an unusable result rather than
+  loosening permissions on an existing file. Two first-time writers using
+  the supported UID/umask must open the same inode; one wins the lock and the
+  other reports contention, not a creation error. Keep descriptors non-inheritable
+  across exec. Translate filesystem errors into fixed diagnostics;
   never log the path, key, account ID, host, credentials or raw OS exception.
 - Never unlink, replace, rotate or truncate lock files during use. An empty
   persistent file is not a stale lock: possession belongs to the open file
@@ -62,18 +70,36 @@ validate local config/mapping -> authenticate -> resolve destination IDs
 
 Acquire all configured destination locks before the shared activities snapshot.
 If any is busy, release those already acquired and fail the entire invocation
-with exit 1 and fixed message `Another synchronization owns this account`.
-No waiting, automatic retry, partial account processing or financial write.
-Sorted acquisition and all-or-nothing failure avoid lock-order surprises;
-disjoint destination sets can still run concurrently.
+with exit 1, fixed reason `sync_busy` and warning
+`Another synchronization owns this account; no writes performed`.
+Do not send an Apprise failure notification for this busy-only outcome: a long
+run spanning later cron ticks must not create an alert storm. Keep the nonzero
+exit visible to the scheduler. Real configuration/storage and financial failures
+retain their existing notifications; never classify them as busy. No waiting,
+automatic retry, partial account processing or financial write. Sorted
+acquisition is for deterministic behavior, not deadlock prevention: non-blocking
+acquisition and release-all-on-failure do not wait on another owner. Disjoint
+destination sets can still run concurrently.
 
 Missing/unsafe/unwritable state or unsupported locking fails closed with fixed
 diagnostics and exit 1. Record a fixed startup failure reason for the existing
 notification path, without changing financial failure handling. Locks cover
 Flex fetching as well as imports and cash; slower broker polling therefore
-extends lock ownership. Release before optional notifications. Normal completion,
+extends lock ownership. Fetching Flex before locking could reduce lock duration,
+but would require splitting the current per-account fetch/process path and
+staging all reports before the shared snapshot. Keep the first implementation
+close to existing orchestration, avoid report-staging memory and mixed failure
+semantics, and accept longer lock occupancy. Busy-only warnings above mitigate
+the operational cost without altering financial behavior.
+
+Release before optional notifications. Normal completion,
 exceptions and process termination close descriptors; process death releases
-kernel locks once all references are closed. Do not pass them to worker children.
+kernel locks once all references are closed. `O_CLOEXEC`/non-inheritable prevents
+inheritance after exec, **not POSIX fork**. Do not fork while locks are held
+unless the child immediately closes every inherited lock descriptor before any
+worker action (an explicit child cleanup hook is required). Closing child copies
+must not issue `LOCK_UN`, which could release the parent's shared lock. No
+lock-owning descriptor may remain in a worker after the sync process exits.
 
 Dry-run stays read-only financially and requires no state volume or exclusive
 lock. Its preview may race a live run and is not authoritative reconciliation
@@ -82,7 +108,9 @@ silently run without protection. Do not add an opt-out flag in the first release
 
 **These are proposed behavior decisions needing operator approval:** mandatory
 state for live runs, rejection of ambiguous names, stable ID binding, fail-whole-
-run on contention (rather than skip one account), and unlocked preview mode.
+run on contention (rather than skip one account), busy-only warning without
+notification, and unlocked preview mode. The operator approved the review-driven
+document clarifications, not runtime implementation or deployment.
 
 ## Comparison with DEGIRO and propagation
 
@@ -97,7 +125,19 @@ Its `.yaml` files additionally fence durable uncertain writes; IBKR must not
 read or overwrite those journals as part of this proposal.
 
 Match the sibling's lock-file/key protocol where possible. Cross-adapter
-exclusion is conditional on equal validated URL, target ID, shared inode and
+compatibility must include this literal vector, computed with the key expression
+in the pinned DEGIRO source above (synthetic identity only):
+
+```text
+host: https://ghostfolio.example
+target: account-demo
+UTF-8 JSON: {"host": "https://ghostfolio.example", "target": "account-demo"}
+SHA-256: a210e2bcc5d8c357f065b532bb304a4ad34305605e8bed73dd535fcc31501c44
+```
+
+Assert the literal expected hash, not equality between two calls to the same
+helper; also exercise ASCII escaping and trailing-slash validation behavior.
+Cross-adapter exclusion is conditional on equal validated URL, target ID, shared inode and
 compatible runtime UID/permissions; test it offline before claiming support.
 Separate named volumes, copied files or equal filenames on different hosts do
 not coordinate. A UID mismatch must fail safely, not relax directory permissions.
@@ -165,10 +205,16 @@ Offline implementation tests must prove: same destination excludes concurrent
 processes; different destinations proceed; same-account renames/token changes
 keep identity; acquisition precedes the activities snapshot; all-or-nothing
 multi-account failure; exceptions/termination release descriptors; file inode
-is retained; children do not inherit the lock; missing/unsafe/symlinked/wrong-
-owner storage fails closed with fixed diagnostics; dry-run needs no state;
+is retained; exec workers cannot inherit the lock and an explicit POSIX fork
+test verifies child descriptor cleanup without unlocking the parent's lock,
+then acquisition after the parent exits while that child remains alive;
+simultaneous first-time opens share one inode under the supported UID/umask;
+missing/unsafe/symlinked/wrong-owner storage fails closed with fixed diagnostics;
+dry-run needs no state but enforces the same unique destination resolution;
+busy-only outcomes warn with sync_busy and do not notify, while actual failures do;
 no financial calls on lock failure; sibling protocol collision when sharing
-the same namespace; no journal modification. Run full pytest and py_compile
+the same namespace and the literal hash vector above; no journal modification.
+Run full pytest and py_compile
 before each implementation commit and record security review for state/URL handling.
 
 References: [Python fcntl](https://docs.python.org/3/library/fcntl.html) and
