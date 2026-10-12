@@ -76,6 +76,10 @@ jobs:
           outputs: type=docker,dest=${{ runner.temp }}/image.tar
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+      - name: Check isolated read-only runtime modes
+        run: |
+          docker load --input "${{ runner.temp }}/image.tar"
+          bash scripts/check_container_runtime.sh sync-check:ci
       # Blocking gate: fixable HIGH/CRITICAL in packages we can act on (base image
       # OS packages, plus our Python layer). The supercronic binary is excluded
       # here because its Go-stdlib CVEs are not fixable by us until upstream ships
