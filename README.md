@@ -82,21 +82,7 @@ ghostfolio-ibkr-sync version v2.2.0
 
 ### Upgrading to 2.2
 
-Nothing is required: an existing 2.1 configuration keeps working unchanged. Two optional
-additions are worth making:
-
-1. **Switch to `GHOST_ACCESS_TOKEN`.** Replace `GHOST_TOKEN` (a session token that expires after
-   a few months) with `GHOST_ACCESS_TOKEN` (your Ghostfolio security token); the sync then logs
-   in at every run. Set only one of the two: both together stop the run with exit 1. See
-   [Choose how the sync authenticates](#1-choose-how-the-sync-authenticates).
-2. **Turn on failure alerts** with `APPRISE_URLS` (and optionally `APPRISE_TIMEOUT`). See
-   [Failure notifications](#failure-notifications-apprise).
-
-Then pull the image and **recreate** the container (a restart keeps the old image), run once
-with `DRY_RUN=1`, and check the version in the start-up log. The image now also contains Apprise
-and its pinned dependencies; the sync never imports them. To roll back to 2.1, set
-`GHOST_TOKEN` again first: older images do not understand `GHOST_ACCESS_TOKEN`, and they ignore
-`APPRISE_*`.
+See the [2.2 upgrade and rollback guide](docs/upgrading-to-2.2.md).
 
 ## Prerequisites
 
@@ -108,130 +94,9 @@ The tool reads existing activities via `GET /api/v1/activities`, which landed in
 
 ## IBKR Setup
 
-### 1. Enable Flex Web Service
-
-1. Log in to IBKR Client Portal or Account Management
-2. Go to **Settings** - **Reporting** - **Flex Queries**
-3. At the bottom of the page, find **Flex Web Service** and click **Configure**
-4. Generate a new token (or note your existing one)
-5. Set the expiration to **1 year** so you do not have to rotate it frequently
-6. Save the token - you will need it as `IBKR_TOKEN`
-
-### 2. Create a Flex Query
-
-**Important:** If you have multiple sub-accounts, create one Flex Query per sub-account. See the multi-account section below before creating your queries.
-
-1. On the same Flex Queries page, click **Create** under **Activity Flex Query**
-2. Give it a name like `Ghostfolio Sync - Individual`
-3. Set the period to **Last 365 Calendar Days**
-
-   > **⚠️ Critical — do not use a shorter period (e.g. Last Month, Last Quarter)**
-   >
-   > 365 days is the widest period IBKR allows. A wide window lets the sync recover
-   > trades missed during a gap in daily runs (container down, expired token), as long
-   > as they are still inside the period. A shorter period causes two classes of silent
-   > failures:
-   >
-   > - **Missing trades**: trades older than the period are never seen, and a sell whose
-   >   buy is outside the window is imported only if Ghostfolio already holds that buy
-   >   (see [What the tool skips automatically](#what-the-tool-skips-automatically)).
-   > - **New historical candidates when widening the period**: trade-ID dedup still
-   >   recognises previously synced activities, but older manual entries or activities
-   >   from another importer may need reconciliation before importing the wider report.
-   >
-   > **Recovery if you already used a shorter period:** review existing activities
-   > against the statement before widening the query. The repository contains
-   > `cleanup_duplicates.py` and `cleanup_dividends.py`. They require matching
-   > account, currency and asset-profile identity, unique one-to-one matches,
-   > and fresh records before mutation. These checks cannot prove that two
-   > similar payments represent the same event, and the tools do not provide
-   > transactional protection against concurrent edits. Review every proposed
-   > pair against the statement and take a verified backup before `--apply`;
-   > dry-run output alone is not proof that deletion is safe. These tools are
-   > not included in the Docker image.
-   > Dividend cleanup lists candidates up to 35 days apart in dry-run, but
-   > `--apply` keeps both records unchanged when their dates differ by more than
-   > 7 days and exits 1. Verify distant ex-date/payment-date pairs manually;
-   > there is no bypass flag. A shorter date gap still does not prove event identity.
-
-4. Select the following sections and fields:
-
-**Account Information:**
-- ClientAccountID
-- CurrencyPrimary
-
-**Cash Report:**
-- CurrencyPrimary
-- EndingCash
-
-**Trades (Execution):**
-
-Select these fields for a predictable report. The parser ignores additional attributes, but missing required values can cause trades to be skipped:
-
-- ClientAccountID
-- CurrencyPrimary
-- AssetClass
-- SubCategory
-- Symbol
-- Description
-- ISIN
-- FIGI
-- TradeID
-- Multiplier
-- DateTime
-- TradeDate
-- IBCommission
-- IBCommissionCurrency
-- Open/CloseIndicator
-- Buy/Sell
-- Exchange
-- Quantity
-- TradeMoney
-- TradePrice
-
-**Cash Transactions:**
-
-In the section options, tick only these types: **Dividends**, **Payment In Lieu Of Dividends**, **Withholding Tax**, and the **Detail** level of detail. Then select these fields:
-
-- ClientAccountID
-- CurrencyPrimary
-- AssetClass
-- Symbol
-- Description
-- ISIN
-- FIGI
-- Date/Time
-- Amount
-- Type
-- LevelOfDetail (if listed)
-
-Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so accruals produce phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. The **Change in Dividend Accruals** section is no longer used and can be removed from the query.
-
-> **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or by any dividend of the same symbol in the same account within 3 days, so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
-
-5. Under **General Configuration**, set **Include Currency Rates** to **No**
-
-   Currency-rate rows are not used by this tool. It does not convert the cash balance or commissions between currencies.
-
-6. Save the query and note the Query ID (click the info icon next to the query to find it)
-
-### 3. Multi-account setup
-
-If you have multiple IBKR sub-accounts (for example individual and joint):
-
-- Create **one Flex Query per sub-account**, with only that sub-account selected in the account filter
-- Prefer **one container per sub-account** for independent scheduling and logs. One container can also process multiple accounts using equally sized, ordered `IBKR_ACCOUNT_IDS`, `IBKR_QUERY_IDS` and `GHOST_ACCOUNT_NAMES` lists. Each query must still select only its corresponding account.
-- **Exclude paper trading or management accounts** that have no positions - these will cause errors
-
-The tool processes each IBKR account independently and syncs it to a matching Ghostfolio account.
-
-### 4. Find the Query ID
-
-On the Flex Queries page, click the **info icon** (circle with "i") next to your query. The Query ID is displayed in the popup. You need this as `IBKR_QUERY_IDS`.
-
-### 5. Data availability
-
-Activity Statement data updates once daily after market close. Running the sync during market hours will only include trades from the previous day or earlier.
+Follow the [Flex Web Service and query setup guide](docs/ibkr-setup.md):
+enable the service, create one 365-day query per sub-account with the required
+trade and cash fields, and obtain its Query ID.
 
 ## Ghostfolio Setup
 
@@ -401,7 +266,7 @@ A clean, fully reconciled run normally emits only `INFO` lines. `WARNING` means 
 | `DEBUG` | FX/options skipped, each sell not imported because already reconciled |
 | `INFO` | Sells imported for long-held positions; one summary line of sells not imported (already entered manually, or no Ghostfolio position) |
 | `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell or buy nearby with another quantity; buy skipped because it matches a manual buy; withholding tax without a dividend the same day; network retry |
-| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; run aborted before any write (see [Run stops before importing anything](#run-stops-before-importing-anything)) |
+| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; run aborted before any write (see [Run stops before importing anything](docs/troubleshooting.md#run-stops-before-importing-anything)) |
 
 ## How activities are converted
 
@@ -476,7 +341,7 @@ Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends
 notification through [Apprise](https://github.com/caronc/apprise/wiki), which supports
 ntfy, Gotify, Telegram, Discord, Slack, email and many more. A completed successful run
 also sends a reminder when its legacy `GHOST_TOKEN` is about to expire (see
-[Token expiry](#token-expiry)); the reminder keeps exit 0. Give it a JSON list (up to 10
+[Token expiry](docs/troubleshooting.md#token-expiry)); the reminder keeps exit 0. Give it a JSON list (up to 10
 URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
 space- or comma-separated URLs counts each one toward the limit of 10):
 
@@ -492,7 +357,7 @@ Never error messages, account IDs or names, symbols, amounts, URLs or tokens: re
 container log for details. Up to 20 failure lines, then `and N more`.
 `ghost_startup: token_rejected` means Ghostfolio refused the token (HTTP 401/403): with the
 legacy `GHOST_TOKEN` this is how an expired session token shows up (see
-[Token expiry](#token-expiry)).
+[Token expiry](docs/troubleshooting.md#token-expiry)).
 
 Expiry reminders use the fixed code `ghost_auth: token_expiring` and a rounded-up count
 of days remaining (`0` means expired). If the run also fails, the reminder is included
@@ -627,94 +492,9 @@ This is a standalone sync stack for an existing Ghostfolio instance. Replace the
 
 ## Troubleshooting
 
-### "has no Cash Transactions section: dividends not synced"
-
-The Flex Query does not include the Cash Transactions section. Add it as described in [Create a Flex Query](#2-create-a-flex-query); trades still sync meanwhile, but the run exits 1.
-
-### "Not importing buy ... matches a manual Ghostfolio buy"
-
-An IBKR buy was **not** imported because Ghostfolio already has a buy of the same quantity within 2 days that has no `IBKR#` comment, so it is most likely the same purchase entered by hand. Importing it would double the position. Put `IBKR#<tradeID>` (the ID shown in the warning) in the comment of that manual entry and the warning goes away. If it was a different purchase, add the missing buy by hand. See [What the tool skips automatically](#what-the-tool-skips-automatically).
-
-### "Mapping file ... not found"
-
-The mapping file is missing at the configured path (or at the default `mapping.yaml` in the working directory, `/app` in the image). The run stops before contacting IBKR or Ghostfolio, because raw IBKR symbols can book trades on the wrong security (ticker collisions). Check the volume mount (`./mapping.yaml:/app/mapping.yaml`); if the host file did not exist when the container was created, Docker created a directory at `/app/mapping.yaml` instead: create the file on the host and recreate the container. Or set `MAPPING_FILE=""` to run without mappings on purpose. Invalid YAML, or a `symbol_mapping` that is not `ISIN: TICKER` pairs, also stops the run.
-
-### "not valid for the specified data source YAHOO"
-
-An imported symbol is not recognised by Yahoo Finance. Check the unmapped ISINs output at the end of the run and add the correct Yahoo Finance ticker to your mapping file. European ETFs almost always need an explicit mapping with an exchange suffix.
-
-### Import fails but activities were expected
-
-If Ghostfolio identifies an unresolved symbol, the tool drops that symbol and retries the remaining activities. Other import failures stop that account's import. It still updates cash and processes remaining accounts, but the run **exits 1** so your scheduler flags it. Fix the failing symbol in your mapping file and re-run; duplicate detection will skip already-imported activities.
-
-### Run stops before importing anything
-
-Before any import, the tool reads all existing Ghostfolio activities in one request, because deduplication depends on them. If that list cannot be trusted, the run stops with exit 1 and writes nothing (no import, no cash balance update):
-
-- `Ghostfolio redacted activity values (quantity/comment are null)` — Ghostfolio hides quantities and comments when **Presenter View** (restricted view, the eye icon) is on for the Ghostfolio user the sync signs in as, or when the token lacks the `portfolio:read:values` scope. Without the `IBKR#` comments every trade would look new. Turn Presenter View off, or use a token with full read access, and re-run.
-- `Ghostfolio activity at index N has a missing or invalid asset profile symbol` — a BUY, SELL or DIVIDEND is missing a usable `assetProfile` (or legacy `SymbolProfile`). Check the API response and server compatibility; the tool refuses to reconcile against an empty position context.
-- `Ghostfolio returned N activities but reports count=M` — the list and its total disagree, usually because an activity was added or deleted in Ghostfolio during the read. Re-run; the next scheduled run recovers on its own.
-
-### Exit codes
-
-| Code | Meaning |
-| --- | --- |
-| 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
-
-A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
-
-With [failure notifications](#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run (`DRY_RUN`), which never notifies; its delivery never changes the exit code.
-
-Unmapped ISINs are **not** a failure - they are reported at the end of the run as a prompt to update your mapping file, and the run still exits 0. Activities that Ghostfolio itself detects as duplicates are not a failure either. The tool logs `Ghostfolio created X of Y` and counts only submitted rows matched to the server-created activity list as imported. An unknown or unverifiable import outcome fails the account and blocks subsequent imports and processing of later queries targeting that account for the rest of the run.
-
-### Portfolio values are wrong after sync
-
-Run **Gather All Data** in Ghostfolio **Admin** - **Market Data**. This fetches historical prices for all symbols. Without this step, performance charts and current values will be missing or incorrect. You may need to also check that all required currency pairs are present in **Market Data**.
-
-### Negative positions appearing in Ghostfolio
-
-This happens when a sell trade is imported without its corresponding buy. The tool checks each security's net batch quantity against Ghostfolio holdings, and logs an `ERROR` when existing holdings plus new trades would be negative. This guard does not check chronological balances, and cannot repair a pre-existing negative position. Invalid or non-finite trade conversions, including raw commissions, are excluded before the holdings calculation and make the run exit 1. Repeated trade IDs are counted once; conflicting rows sharing an ID are excluded. Buys are submitted before sells, and the sell guard is recomputed from the accepted buys. Only rows matched to the server-created activity list update local holdings; an unknown import outcome blocks subsequent imports to that account in the run. Dry-run simulates proposed buys and cannot predict server duplicate handling. Review conversion errors and compare positions after importing. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
-
-### IBKR symbol variants (for example CSNKYz vs CSNKY)
-
-IBKR sometimes appends a suffix to symbol names for certain listings. The tool filters by both symbol name and ISIN, so variants of the same security are handled together.
-
-### Token expiry
-
-The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
-
-With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
-
-In legacy mode, startup reads the JWT's `exp` claim locally. Within **14 days** of
-expiry (including an already expired token), it logs a `WARNING` with the days
-remaining and sends an Apprise reminder after the run completes, when configured.
-Set `GHOST_TOKEN_EXPIRY_WARNING_DAYS` to an integer from `0` to `365` to change the
-window; `0` disables the reminder, and invalid values warn and fall back to `14`.
-The reminder alone never fails the sync. A dry run logs the warning but sends no
-notification; interrupted runs send none either. Tokens without a usable numeric
-`exp` (including malformed JWTs) skip the check with a fixed debug message. The
-payload is not signature-verified and is used only for the reminder: Ghostfolio
-still decides whether the token is valid. The token and its other claims are never
-included in the reminder. `GHOST_ACCESS_TOKEN` mode skips this check entirely.
-
-### "Ghostfolio login failed: ..."
-
-Only with `GHOST_ACCESS_TOKEN`. The run stops with exit 1 before reading or writing anything. The message is deliberately short and never contains a token:
-
-- `HTTP 403` — Ghostfolio refused the security token: check it (copy/paste, no quotes), or generate a new one.
-- `HTTP 3xx` — `GHOST_HOST` redirects (for example `http://` to `https://`, or a missing path); set it to the final URL.
-- `HTTP 429` — Ghostfolio throttled the login; it clears by itself, the next run retries.
-- `network error` — Ghostfolio is unreachable from the container (network, host name, port).
-- `response is not JSON` / `response has no usable authToken` — `GHOST_HOST` does not point at the Ghostfolio API (for example a reverse-proxy page).
-
-### Options trades being skipped
-
-This is intentional. Options (`OPT`) are skipped because Ghostfolio does not support them as an asset class.
-
-### FX conversions being skipped
-
-Also intentional. Trades with assetCategory `CASH` are FX conversion transactions, not investment positions.
+See the [troubleshooting guide](docs/troubleshooting.md) for exit codes,
+import failures, missing positions, token expiry and login diagnostics.
+For interrupted operator maintenance, use the [cleanup recovery guide](docs/cleanup.md).
 
 ## Limitations
 
@@ -744,57 +524,9 @@ Also intentional. Trades with assetCategory `CASH` are FX conversion transaction
 
 ## Inspecting an interrupted cleanup
 
-The cleanup tools are operator maintenance commands, outside the container image.
-They do not log in by themselves: they read only `GHOST_TOKEN` and `GHOST_HOST`, even if the
-sync uses `GHOST_ACCESS_TOKEN`. Before a cleanup session, get a session token with the curl
-command in [Ghostfolio Setup](#1-choose-how-the-sync-authenticates) and export it as `GHOST_TOKEN`.
-Heuristic pair matching still requires a reviewed dry-run, verified backup and quiet
-portfolio writers. The recovery feature does not authorize financial repair by itself.
-
-For a separately authorized cleanup, select an explicit journal path:
-
-```bash
-python cleanup_duplicates.py --apply --journal cleanup-pairs.yaml
-# Dividend equivalent: python cleanup_dividends.py --apply --journal dividend-pairs.yaml
-```
-
-Apply stores a private keyed YAML journal before the first mutation. Each pair records
-both verified activity preimages, user/account identity, intended comment and PUT/DELETE
-states. Updates are written atomically and synced to disk; an exclusive companion lock
-prevents concurrent use of the same journal. Preserve both files with your backup.
-Credentials are not stored; keep the journal private because it contains portfolio data.
-
-After an interruption or error, inspect without writes:
-
-```bash
-python cleanup_duplicates.py --resume cleanup-pairs.yaml
-```
-
-Inspection checks every pair against fresh user-scoped API records. A timeout may have
-committed: the fresh retained comment and deletion target decide the next action, not
-a stale status flag. Missing or changed retained records, different owners, values,
-accounts, currencies, sources or tags are refused. A missing synced record counts as
-complete only if the retained manual record is verified with the intended comment.
-Legacy JSON snapshots do not contain the required outcome/ownership contract and are
-not accepted as recovery journals.
-
-For a separately authorized resume, quiesce other writers, retain the journal, and run:
-
-```bash
-python cleanup_duplicates.py --resume cleanup-pairs.yaml --apply
-```
-
-Dividend journals with date gaps above 7 days remain available for read-only
-inspection, including journals created before this safeguard. `--resume --apply`
-refuses them before any mutation; verify and reconcile those payments manually.
-
-Recovery revalidates immediately before mutation, skips a PUT already verified as
-committed, and skips a DELETE already verified as complete. An unchanged untouched
-pair can continue normally. Repeated successful recovery sends no further mutations.
-An unknown mutation stops the run for another inspection; there is no automatic
-compensation or reinjection. The API has no conditional writes or pair transaction,
-so other writers must remain stopped during apply/resume. A readonly inspection does
-not constitute a guarantee against later concurrent edits.
+The [cleanup and recovery guide](docs/cleanup.md) explains separately authorized
+maintenance, private journals, read-only inspection and guarded resume.
+Cleanup is not part of the additive sync; review its safety requirements first.
 
 ## Development
 
