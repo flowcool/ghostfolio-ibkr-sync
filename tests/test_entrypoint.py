@@ -10,14 +10,16 @@ def run_entrypoint(tmp_path):
     source = Path(__file__).resolve().parents[1] / 'entrypoint.sh'
     script = tmp_path / 'entrypoint.sh'
     crontab = tmp_path / 'crontab'
+    created_paths = tmp_path / 'crontab-paths'
     script.write_text(source.read_text())
     mktemp = tmp_path / 'mktemp'
     mktemp.write_text(
         '#!/bin/bash\n'
         '[ "$1" = /tmp/ibkr-crontab.XXXXXX ] || exit 1\n'
         '[ "$MKTEMP_STATUS" = 0 ] || exit "$MKTEMP_STATUS"\n'
-        ': > "$CRONTAB_PATH"\n'
-        'printf "%s\\n" "$CRONTAB_PATH"\n'
+        'created=$(/usr/bin/mktemp "$RUNTIME_DIR/ibkr-crontab.XXXXXX") || exit 1\n'
+        'printf "%s\\n" "$created" >> "$CRONTAB_PATHS"\n'
+        'printf "%s\\n" "$created"\n'
     )
     mktemp.chmod(0o755)
     calls = tmp_path / 'calls'
@@ -32,6 +34,7 @@ def run_entrypoint(tmp_path):
         '    fi\n'
         'else\n'
         '    echo run >> "$CALLS"\n'
+        '    umask > "$RUNTIME_DIR/runtime-umask"\n'
         '    cat "$1"\n'
         'fi\n'
     )
@@ -48,7 +51,8 @@ def run_entrypoint(tmp_path):
             'CALLS': str(calls),
             'VALIDATION_STATUS': str(validation_status),
             'MKTEMP_STATUS': str(mktemp_status),
-            'CRONTAB_PATH': str(crontab),
+            'RUNTIME_DIR': str(tmp_path),
+            'CRONTAB_PATHS': str(created_paths),
         }
         if cron is not None:
             env['CRON'] = cron
@@ -56,7 +60,9 @@ def run_entrypoint(tmp_path):
             ['/bin/bash', str(script)], env=env, capture_output=True,
             text=True, timeout=5,
         )
-        return result, crontab, calls
+        generated = (Path(created_paths.read_text().splitlines()[-1])
+                     if created_paths.exists() else crontab)
+        return result, generated, calls
 
     return run
 
@@ -101,6 +107,27 @@ def test_crontab_creation_failure_prevents_start(run_entrypoint):
     assert result.stderr == 'Could not create runtime crontab\n'
     assert not crontab.exists()
     assert not calls.exists()
+
+
+def test_repeated_scheduled_starts_keep_unique_crontabs(run_entrypoint):
+    first, first_path, calls = run_entrypoint('0 6 * * *')
+    second, second_path, calls = run_entrypoint('5 6 * * *')
+    assert first.returncode == second.returncode == 0
+    assert first_path != second_path
+    assert first_path.read_text() == '0 6 * * * python /app/ibkr_to_ghostfolio.py\n'
+    assert second_path.read_text() == '5 6 * * * python /app/ibkr_to_ghostfolio.py\n'
+    assert calls.read_text().splitlines() == ['test', 'run', 'test', 'run']
+
+
+def test_private_crontab_umask_is_not_inherited_by_scheduler(run_entrypoint):
+    baseline = subprocess.run(
+        ['/bin/bash', '-c', 'umask'], capture_output=True, text=True, timeout=5,
+        env={'PATH': '/usr/bin:/bin'},
+    )
+    result, crontab, calls = run_entrypoint('0 6 * * *')
+    assert result.returncode == baseline.returncode == 0
+    assert (crontab.parent / 'runtime-umask').read_text() == baseline.stdout
+    assert crontab.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize('cron', [None, ''])

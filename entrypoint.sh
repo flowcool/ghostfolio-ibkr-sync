@@ -9,8 +9,10 @@ if [ -n "$CRON" ]; then
         echo 'Invalid CRON: expected five numeric schedule fields' >&2
         exit 1
     fi
-    umask 077
-    if ! crontab_path=$(mktemp /tmp/ibkr-crontab.XXXXXX 2>/dev/null); then
+    if ! crontab_path=$(
+        umask 077
+        mktemp /tmp/ibkr-crontab.XXXXXX 2>/dev/null
+    ); then
         echo 'Could not create runtime crontab' >&2
         exit 1
     fi

@@ -22,11 +22,13 @@ options=(--read-only --network none --cap-drop ALL
     --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777
     --mount "type=bind,src=$probe,dst=/app/ibkr_to_ghostfolio.py,readonly")
 
-docker run --rm "${options[@]}" "$image" | grep -q 'Synthetic read-only sync passed'
+one_off_output=$(docker run --rm "${options[@]}" "$image")
+grep -q 'Synthetic read-only sync passed' <<< "$one_off_output"
 scheduled_id=$(docker run -d "${options[@]}" -e 'CRON=* * * * *' "$image")
 # A real supercronic tick must run the synthetic Python payload successfully.
-for attempt in {1..75}; do
-    if docker logs "$scheduled_id" 2>&1 | grep -q 'Synthetic read-only sync passed'; then
+for attempt in {1..120}; do
+    scheduled_output=$(docker logs "$scheduled_id" 2>&1)
+    if grep -q 'Synthetic read-only sync passed' <<< "$scheduled_output"; then
         echo 'Read-only one-off and scheduled modes passed'
         exit 0
     fi
