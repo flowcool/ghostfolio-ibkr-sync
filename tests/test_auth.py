@@ -136,6 +136,12 @@ def test_exchange_posts_once_without_redirects_with_both_timeouts(monkeypatch):
     assert connect > 0 and read > 0
 
 
+def test_exchange_keeps_its_existing_redirect_failure(monkeypatch):
+    script_post(monkeypatch, Resp(302, {}))
+    with pytest.raises(RuntimeError, match="Ghostfolio login failed: HTTP 302"):
+        m.ghost_exchange_access_token("http://ghost:3333", SECRET)
+
+
 def test_exchange_refuses_an_unsafe_host_before_sending_anything(monkeypatch):
     calls = script_post(monkeypatch, Resp(201, {"authToken": "x"}))
     with pytest.raises(RuntimeError, match="GHOST_HOST must be"):

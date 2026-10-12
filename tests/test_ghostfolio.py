@@ -75,6 +75,19 @@ def test_http_error_propagates(monkeypatch):
         m.ghost_get_existing_orders(CFG)
 
 
+def test_existing_activities_reject_redirect_without_following(monkeypatch):
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs)
+        return Resp({}, 302)
+
+    monkeypatch.setattr(m.requests, "get", get)
+    with pytest.raises(RuntimeError, match="Ghostfolio request redirected"):
+        m.ghost_get_existing_orders(CFG)
+    assert calls == [{"headers": m.ghost_headers("tok"), "timeout": 60, "allow_redirects": False}]
+
+
 # --- import ---------------------------------------------------------------
 
 def _unresolved_400(symbol, index=0):
@@ -89,7 +102,7 @@ def sequence_post(monkeypatch, responses):
     sent = []
     it = iter(responses)
 
-    def _post(url, headers, json, timeout):
+    def _post(url, headers, json, timeout, **kwargs):
         sent.append(json["activities"])
         return next(it)
     monkeypatch.setattr(m.requests, "post", _post)
@@ -125,6 +138,20 @@ def test_import_network_error_returns_false(monkeypatch):
         raise m.requests.ConnectionError("down")
     monkeypatch.setattr(m.requests, "post", boom)
     assert m.ghost_import_activities(CFG, [{"symbol": "KO"}]) == ([], False)
+
+
+def test_import_rejects_redirect_without_following(monkeypatch, caplog):
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        return Resp({}, 302)
+
+    monkeypatch.setattr(m.requests, "post", post)
+    assert m.ghost_import_activities(CFG, [import_candidate()]) == ([], False)
+    assert "Ghostfolio request redirected" in caplog.text
+    assert calls == [{"headers": m.ghost_headers("tok"), "json": {"activities": [import_candidate()]},
+                      "timeout": 60, "allow_redirects": False}]
 
 
 def test_import_short_accepted_count_is_not_a_failure(monkeypatch):
@@ -184,14 +211,55 @@ def test_find_account_by_name_and_missing_account(monkeypatch):
     assert m.ghost_find_account_id(CFG, "nope") is None
 
 
+def test_accounts_reject_redirect_without_following(monkeypatch):
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs)
+        return Resp({}, 302)
+
+    monkeypatch.setattr(m.requests, "get", get)
+    with pytest.raises(RuntimeError, match="Ghostfolio request redirected"):
+        m.ghost_get_accounts(CFG)
+    assert calls == [{"headers": m.ghost_headers("tok"), "timeout": 30, "allow_redirects": False}]
+
+
 def test_cash_balance_payload_is_the_five_whitelisted_fields(monkeypatch):
     sent = {}
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(
         {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1", "comment": "x",
          "isExcluded": False, "balance": 1, "value": 5}))
-    monkeypatch.setattr(m.requests, "put", lambda url, headers, json, timeout: sent.update(json) or Resp({}, 200))
+    monkeypatch.setattr(m.requests, "put", lambda url, headers, json, timeout, **kwargs: sent.update(json) or Resp({}, 200))
     assert m.ghost_update_cash_balance(CFG, "9", 123.456) is True
     assert sent == {"balance": 123.456, "currency": "EUR", "id": "9", "name": "IBKR", "platformId": "p1"}
+
+
+def test_cash_balance_get_rejects_redirect_without_following(monkeypatch):
+    calls = []
+
+    def get(*args, **kwargs):
+        calls.append(kwargs)
+        return Resp({}, 302)
+
+    monkeypatch.setattr(m.requests, "get", get)
+    with pytest.raises(RuntimeError, match="Ghostfolio request redirected"):
+        m.ghost_update_cash_balance(CFG, "9", 123.456)
+    assert calls == [{"headers": m.ghost_headers("tok"), "timeout": 30, "allow_redirects": False}]
+
+
+def test_cash_balance_put_rejects_redirect_without_following(monkeypatch, caplog):
+    calls = []
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(
+        {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1"}))
+
+    def put(*args, **kwargs):
+        calls.append(kwargs)
+        return Resp({}, 302)
+
+    monkeypatch.setattr(m.requests, "put", put)
+    assert m.ghost_update_cash_balance(CFG, "9", 123.456) is False
+    assert "Ghostfolio request redirected" in caplog.text
+    assert calls[0]["allow_redirects"] is False
 
 
 def test_cash_balance_dry_run_does_not_touch_the_api(monkeypatch):
