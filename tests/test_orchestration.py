@@ -98,6 +98,17 @@ def test_flex_fetch_failure_returns_failed_and_does_nothing_else(monkeypatch):
     assert w.imported == [] and w.cash_calls == []
 
 
+def test_oversized_flex_reply_prevents_import_and_cash_update(monkeypatch):
+    fetch = m.fetch_flex_report
+    w = World(monkeypatch, report(trade_xml("T1")))
+    monkeypatch.setattr(m, "fetch_flex_report", fetch)
+    response = m.requests.Response()
+    response._content = b"x" * (m.IBKR_MAX_XML_BYTES + 1)
+    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: response)
+    assert w.run() == ({}, False)
+    assert w.imported == [] and w.cash_calls == []
+
+
 @pytest.mark.parametrize("find", [m.requests.ConnectionError("net"), None])
 def test_ghostfolio_account_lookup_failure_or_missing_account_fails_the_account(monkeypatch, find):
     w = World(monkeypatch, report(trade_xml("T1")), find=find)
@@ -430,6 +441,7 @@ WARN = "<FlexStatementResponse><Status>Warn</Status><ErrorCode>1019</ErrorCode><
 class Txt:
     def __init__(self, text):
         self.text = text
+        self.content = text.encode("utf-8")
 
 
 def script_flex(monkeypatch, *bodies):

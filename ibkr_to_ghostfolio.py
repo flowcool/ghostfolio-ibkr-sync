@@ -38,6 +38,7 @@ IBKR_STMT_URL = (
 )
 
 SKIP_ASSET_CATEGORIES = {"CASH", "OPT"}
+IBKR_MAX_XML_BYTES = 10 * 1024 * 1024
 
 # Both are legitimate IBKR Flex Web Service statement endpoints.
 # ndcdyn = current unified endpoint (Flex Web Service V3).
@@ -274,6 +275,8 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
 
     # Step 1 - send request
     resp = _ibkr_get(IBKR_SEND_URL, {"t": token, "q": query_id, "v": "3"}, timeout=30)
+    if len(resp.content) > IBKR_MAX_XML_BYTES:
+        raise RuntimeError("IBKR Flex response exceeds XML size limit")
     root = ET.fromstring(resp.text)
 
     status = root.findtext("Status")
@@ -291,6 +294,8 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
     for attempt in range(1, max_retries + 1):
         resp = _ibkr_get(base_url, {"q": ref_code, "t": token, "v": "3"}, timeout=60)
 
+        if len(resp.content) > IBKR_MAX_XML_BYTES:
+            raise RuntimeError("IBKR Flex response exceeds XML size limit")
         root = ET.fromstring(resp.text)
         status = root.findtext("Status")
         error_code = root.findtext("ErrorCode")

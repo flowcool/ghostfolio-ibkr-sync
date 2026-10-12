@@ -178,6 +178,57 @@ def test_fetch_flex_report_rejects_foreign_statement_url(monkeypatch):
     class Resp:
         text = ("<FlexStatementResponse><Status>Success</Status><ReferenceCode>1</ReferenceCode>"
                 "<Url>https://ndcdyn.interactivebrokers.com.evil.example/x</Url></FlexStatementResponse>")
+        content = text.encode("utf-8")
     monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: Resp())
     with pytest.raises(RuntimeError, match="Unexpected IBKR statement URL"):
         m.fetch_flex_report("tok", "q")
+
+
+# --- Flex HTTP response size boundary -----------------------------------
+
+@pytest.mark.parametrize("stage", ["send", "statement"])
+@pytest.mark.parametrize("delta", [-1, 0, 1])
+def test_flex_response_byte_limit_before_parsing(monkeypatch, stage, delta):
+    send = ('<R><Status>Success</Status><ReferenceCode>1</ReferenceCode>'
+            '<Url>https://ndcdyn.interactivebrokers.com/statement</Url></R>')
+    statement = '<FlexQueryResponse><FlexStatements/></FlexQueryResponse>'
+    target = send if stage == "send" else statement
+    target += ' ' * (m.IBKR_MAX_XML_BYTES + delta - len(target.encode("utf-8")))
+    bodies = [target, statement] if stage == "send" else [send, target]
+    responses = []
+    for body in bodies:
+        response = m.requests.Response()
+        response._content = body.encode("utf-8")
+        response.encoding = "utf-8"
+        responses.append(response)
+    replies = iter(responses)
+    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: next(replies))
+    original = m.ET.fromstring
+    parsed = []
+
+    def parse(text):
+        parsed.append(text)
+        return original(text)
+
+    monkeypatch.setattr(m.ET, "fromstring", parse)
+    if delta > 0:
+        with pytest.raises(RuntimeError) as error:
+            m.fetch_flex_report("synthetic", "synthetic")
+        assert str(error.value) == "IBKR Flex response exceeds XML size limit"
+        assert target not in parsed
+        assert len(parsed) == (0 if stage == "send" else 1)
+    else:
+        assert m.fetch_flex_report("synthetic", "synthetic") == bodies[1]
+        assert len(parsed) == 2
+
+
+def test_flex_limit_counts_response_bytes_not_characters(monkeypatch):
+    body = '<R>' + '\u00e9' * (m.IBKR_MAX_XML_BYTES // 2) + '</R>'
+    assert len(body) < m.IBKR_MAX_XML_BYTES
+    response = m.requests.Response()
+    response._content = body.encode("utf-8")
+    response.encoding = "utf-8"
+    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: response)
+    monkeypatch.setattr(m.ET, "fromstring", lambda text: pytest.fail("must not parse"))
+    with pytest.raises(RuntimeError, match="^IBKR Flex response exceeds XML size limit$"):
+        m.fetch_flex_report("synthetic", "synthetic")
