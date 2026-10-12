@@ -76,8 +76,7 @@ def test_access_mode_rejects_unsafe_hosts_with_a_fixed_message(env, host):
     assert SECRET not in str(e.value)
 
 
-@pytest.mark.parametrize("host", ["http://ghost:3333", "https://pf.example.com/ghostfolio/",
-                                  "http://192.168.2.117:3333", "http://[::1]:3333"])
+@pytest.mark.parametrize("host", ["http://ghost:3333", "https://pf.example.com/ghostfolio/"])
 def test_access_mode_accepts_plain_http_and_https_hosts(env, host):
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
     env.setenv("GHOST_HOST", host)

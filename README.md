@@ -530,7 +530,6 @@ For scheduled runs with multiple sub-accounts, run a separate container per acco
 services:
   ibkr-sync-individual:
     image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-    container_name: ghostfolio-ibkr-sync-individual
     restart: unless-stopped
     environment:
       TZ: Europe/Warsaw

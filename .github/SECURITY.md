@@ -7,4 +7,5 @@ transaction exports in public issues or pull requests.
 
 Security fixes target the current `main` branch. Older releases do not receive
 separate backports. Dependency and image security checks run on pull requests
-and weekly; merging a fix publishes an image but does not deploy the NAS.
+and weekly; merging a fix publishes an image but does not deploy a running
+container.
