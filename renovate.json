@@ -1,34 +1,60 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": [
+    "config:recommended"
+  ],
+  "enabledManagers": ["pip_requirements", "github-actions", "dockerfile", "docker-compose"],
   "timezone": "Europe/Zurich",
-  "schedule": ["before 9am on Monday"],
+  "schedule": ["* * * * 1"],
   "prConcurrentLimit": 3,
   "prHourlyLimit": 2,
+  "automerge": false,
+  "platformAutomerge": false,
   "dependencyDashboard": true,
+  "ignoreUnstable": true,
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "ignoreDeps": ["ghcr.io/flowcool/ghostfolio-ibkr-sync", "ghostfolio-ibkr-sync"],
   "packageRules": [
     {
-      "description": "Wait 14 days before proposing Python package updates.",
+      "description": "Keep the complete pinned Python dependency closure together after the review window.",
       "matchManagers": ["pip_requirements"],
-      "minimumReleaseAge": "14 days"
+      "minimumReleaseAge": "14 days",
+      "rangeStrategy": "pin"
     },
     {
-      "description": "Wait 3 days before proposing GitHub Actions updates.",
+      "matchManagers": ["pip_requirements"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "python-minor-patch"
+    },
+    {
+      "description": "Preserve the review window for image and CI changes.",
+      "matchManagers": ["github-actions", "dockerfile", "docker-compose"],
+      "minimumReleaseAge": "3 days",
+      "pinDigests": true
+    },
+    {
       "matchManagers": ["github-actions"],
-      "minimumReleaseAge": "3 days"
+      "matchDatasources": ["github-tags", "github-digest"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "groupName": "github-actions"
     },
     {
-      "description": "Wait 3 days before proposing Docker image updates.",
-      "matchManagers": ["dockerfile", "docker-compose"],
-      "minimumReleaseAge": "3 days"
+      "description": "Python interpreter migration is a separate reviewed change.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "/^3\\.12(?:\\.|-|$)/"
     },
     {
-      "description": "Require dashboard approval for major updates.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": ">=3.12 <3.13"
+    },
+    {
+      "description": "Major upgrades require approval before creating a branch or PR.",
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
     }
   ],
-  "automerge": false,
   "vulnerabilityAlerts": {
     "enabled": false
   },
