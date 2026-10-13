@@ -2,15 +2,16 @@
 
 ## Why
 
-Captures support 46 payment groups/49 actions. IBKR quantity resolves unrated PIL and contradicts rounded inference; accrual amounts/tax differ from payments.
+46 groups/49 actions support structured quantity and cash authority.
 
 ## What Changes
 
 - **BREAKING:** require enriched Flex; remove description inference and one-unit fallback.
-- Associate IBKR quantities conservatively; retain cash payment evidence.
-- Reject incompatible dividend input or individual unsupported payments locally.
+- Identity → deduplication → quantity checks; cash authority.
+- Check candidate payments/relevant accruals; unrelated rows cannot block others.
+- Reject overflow/positive underflow after conversion/scaling, including GBP→GBp.
 
-Inventory rebuilt from saved baseline/diagnostic captures (B/D):
+Saved baseline/diagnostic inventory (B/D):
 
 | Flex record | B/D | Scope |
 |---|---:|---|
@@ -38,8 +39,8 @@ None.
 
 ## Impact
 
-Runtime, offline tests, README/setup; unchanged dependencies/ENV.
+Runtime/tests/README/setup; dependencies/ENV unchanged.
 
 ## Non-goals
 
-Historical reconciliation, maintenance, monetary revision, regrouping, shared-helper changes, service access. Private captures stay outside Git.
+Historical reconciliation/maintenance, monetary revisions, regrouping, shared-helper changes, service access. Captures stay private.

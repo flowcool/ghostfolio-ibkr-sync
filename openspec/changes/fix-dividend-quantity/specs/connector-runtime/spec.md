@@ -1,57 +1,65 @@
 # Spec Delta
 
-Future checks SHALL select passing assertions with synthetic inputs/mocked HTTP, never empty selections.
+Future checks SHALL assert synthetic inputs/mocked HTTP; never select zero tests.
 
 ## MODIFIED Requirements
 
 ### Requirement: Flex selection and conversion
 
-The connector SHALL select Trade children, exclude CASH/OPT, aggregate DETAIL dividend/PIL/withholding by security/day, and select BASE_SUMMARY cash. Other cash types/levels and AssetSummary SHALL be ignored. Trade type SHALL be BUY for exact BUY, otherwise SELL. Quantities/prices SHALL be absolute; commission/withholding costs become fees; refunds/rebates clamp to zero. Nonpositive payments SHALL skip.
+The connector SHALL select Trade children excluding CASH/OPT, DETAIL dividend/PIL/withholding grouped by security/day, and BASE_SUMMARY cash; ignore other cash types/levels and AssetSummary. Trades SHALL use BUY for exact BUY, otherwise SELL; absolute quantity/price; commission/withholding fees with refunds/rebates clamped to zero. Nonpositive payments SHALL skip.
 
-Cash Transactions SHALL establish payments, gross and withholding. Conversion SHALL preserve account, currency/minor-unit scaling, cash-day UTC date and comment identity. Description inference and one-unit fallback SHALL be removed.
+Cash Transactions SHALL establish payments/gross/withholding. Conversion SHALL preserve account, currency/scaling, cash-day UTC date/comment. Description inference and one-unit fallback SHALL be removed.
 
-For each net-positive action, association SHALL require identical nonempty `accountId/conid/currency/actionID/exDate`, one unique `Re` with `payDate` equal to cash day, and `date` OR `reportDate` equal to that day. All associated revisions SHALL agree numerically on one positive finite representable IBKR `quantity`, without rounding/tolerance. `Re` alone SHALL NOT establish payment.
+Each net-positive action SHALL require identical nonempty `accountId/conid/currency/actionID/exDate`, one unique `Re` with `payDate` matching cash day, and matching `date` OR `reportDate`. Associated quantities SHALL agree as positive finite decimals before numeric conversion, without rounding/tolerance. `Re` alone SHALL NOT establish payment.
 
-Dividends/PIL sharing an action SHALL use quantity once. Distinct ordinary/bonus actions SHALL share one quantity, never sum quantities. Zero-net actions SHALL provide no quantity; negative-net actions, mixed currencies or incompatible evidence SHALL reject the group. Results SHALL be row-order independent. Price SHALL be paid gross/quantity, positive/finite/representable, irrespective of accrual amounts, tax or gross rate.
+Dividends/PIL and distinct ordinary/bonus actions SHALL use one common quantity, never sum quantities. Zero-net actions SHALL provide no quantity; negative-net actions/mixed currencies/incompatible evidence SHALL reject the group. Results SHALL be row-order independent. Price SHALL be cash gross/quantity, irrespective of accrual money/rate. After numeric conversion/minor-unit scaling, quantity/price SHALL remain positive finite and fee nonnegative finite; overflow/positive underflow SHALL reject the group.
 
 #### Scenario: Selected records
 - **WHEN** baseline selection/conversion is replayed with enriched fixtures
-- **THEN** selection, gross, fees, scaling, date and identity remain unchanged.
+- **THEN** selection/gross/fees/scaling/date/identity remain unchanged.
 
-Baseline: README conversion table. Check: `python3 -m pytest -q tests/test_parsing.py tests/test_conversion.py`.
+Baseline: README conversion table. Check: `.venv/bin/python -m pytest -q tests/test_parsing.py tests/test_conversion.py`.
 
 #### Scenario: Quantity association
-- **WHEN** fixtures exercise unrated PIL (3 shares, gross 1.5), quantity 450 versus inferred 451, fractional/one-share quantities, earlier date, late reportDate, incorrect keys/dates, multiple Re, missing/invalid/conflicting quantities or Re without cash
-- **THEN** only exact supported associations yield unchanged IBKR quantities; unsupported groups reject; Re creates no payment.
+- **WHEN** fixtures cover unrated PIL (3 shares/gross 1.5), quantity 450 versus inferred 451, fractions/one-share, earlier date/late reportDate, wrong keys/dates, multiple Re, missing/invalid/conflicting quantities, Re without cash
+- **THEN** supported quantities remain unchanged; unsupported groups reject; Re creates no payment.
 
-Check: `python3 -m pytest -v tests -k dividend_structured_quantity`.
+Check: `.venv/bin/python -m pytest -v tests -k dividend_structured_quantity`.
+
+#### Scenario: Final numeric limits
+- **WHEN** fixtures cover quantity `1e-400`/`1e400`, decimal conflicts collapsing to one numeric value, price overflow/underflow, and GBP→GBp overflow of price/fee alongside normal scaling
+- **THEN** unsafe groups reject locally, decimal conflicts before conversion; valid quantity/price/fee/cash totals remain correct.
+
+Check: `.venv/bin/python -m pytest -v tests -k dividend_structured_numeric`.
 
 #### Scenario: Components and money
 - **WHEN** fixtures include split PIL, ordinary/bonus at equal/different rates, unequal quantities, signed zero/negative actions, mixed currencies and differing accrual gross/tax/rate
-- **THEN** valid groups use quantity once and cash totals; invalid groups reject; permutation, accounting and identity assertions pass.
+- **THEN** valid groups retain quantity/cash totals; invalid groups reject; permutation/accounting/identity assertions pass.
 
-Check: `python3 -m pytest -v tests -k dividend_structured_components`.
+Check: `.venv/bin/python -m pytest -v tests -k dividend_structured_components`.
 
 ## ADDED Requirements
 
 ### Requirement: Enriched dividend input and local rejection
 
-ChangeInDividendAccruals SHALL be mandatory. Required attributes SHALL be association keys on payment/accrual rows, plus `quantity/code/date/payDate/reportDate` on accrual rows. Missing section/attributes SHALL block account dividends; present-but-empty evidence SHALL reject only affected groups. Empty sections without payments SHALL be valid.
+Processing SHALL extract cash identity without quantity checks, deduplicate by account/comment/proximity, then validate new candidates; existing activities remain untouched/unverified.
 
-Deduplication SHALL precede quantity checks. Existing activities SHALL remain untouched/unverified. Rejections SHALL log distinct incompatibility/missing/contradiction reasons, never mark rejected payments imported, leave trades/cash operating, and SHALL NOT change global success, exit status or notifications.
+ChangeInDividendAccruals SHALL be mandatory. Required attributes SHALL cover candidate payment/relevant accrual keys, plus `quantity/code/date/payDate/reportDate` on relevant accruals. Nonempty key mismatches SHALL exclude unrelated accruals; missing keys SHALL NOT prove irrelevance. Unrelated rows SHALL NOT block candidates. Withholding SHALL retain cash grouping without accrual-schema requirements. Missing section/relevant attributes SHALL block account dividends; present-but-empty evidence SHALL reject affected groups. Empty sections without payments SHALL be valid.
+
+Rejections SHALL log distinct incompatibility/missing/contradiction reasons, never mark rejected payments imported, leave trades/cash operating, and SHALL NOT change success/exit/notifications. Other failures SHALL retain existing behavior.
 
 #### Scenario: Compatibility and isolation
-- **WHEN** old exports, empty sections with/without payments, short-window omissions, rejected groups beside valid entries, and existing dividends with changed quantities are processed
-- **THEN** scope, logs, retries, deduplication and unchanged outcomes are asserted.
+- **WHEN** old/empty/short-window exports, malformed unrelated rows beside valid candidates, relevant missing attributes versus empty values, and existing dividends with invalid/conflicting quantities are processed
+- **THEN** identity→dedup→quantity order, rejection scopes/logs/retries, unrelated-row isolation and unchanged outcomes are asserted.
 
-Check: `python3 -m pytest -v tests -k dividend_structured_input`.
+Check: `.venv/bin/python -m pytest -v tests -k dividend_structured_input`.
 
 ### Requirement: Forward dividend upgrade guidance
 
-README/setup SHALL require query enrichment before upgrade, distinguish rejection cases, remove inference compatibility, and explain backup/prior-image-digest rollback without financial restoration. Additional fields SHALL remain compatible with the prior runtime.
+README/setup SHALL require enrichment before upgrade, explain rejections/removed inference and backup/prior-image-digest rollback without financial restoration. Extra fields SHALL retain prior-runtime compatibility.
 
 #### Scenario: Upgrade inspection
 - **WHEN** guidance is inspected
-- **THEN** preparation, unchanged ENV/mounts and separate historical reconciliation/maintenance are explicit.
+- **THEN** preparation/ENV/mounts and historical boundaries are explicit.
 
 Check: `rg -n -A 35 'structured|enrich|rollback' README.md docs/ibkr-setup.md`.
