@@ -1,10 +1,7 @@
 version: 2
 updates:
-  # Grouped so interdependent updates (e.g. requests + PyYAML) are tested and
-  # reviewed together. Major versions stay separate PRs. A release is proposed
-  # only once it is 14 days old: the dependency release watch opens a review
-  # issue on day one, the bump PR follows once reviewed and settled. Security
-  # updates ignore the cooldown.
+  # After the Renovate Dependency Dashboard is open, set ordinary update limits
+  # to zero so Renovate owns them. Security updates remain enabled.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
