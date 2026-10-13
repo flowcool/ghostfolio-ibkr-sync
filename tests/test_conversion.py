@@ -17,7 +17,16 @@ def trade(**kw):
 def div(**kw):
     d = {"isin": ISIN, "symbol": "KO", "currency": "USD", "date": "2026-07-15", "amount": 25.0,
          "tax": 0.0, "description": "KO CASH DIVIDEND USD 0.25 PER SHARE"}
+    quantity = kw.pop("quantity", "100")
     d.update(kw)
+    keys = {"accountId": "broker-account", "conid": "1", "currency": d["currency"],
+            "actionID": "A1", "exDate": "20260701"}
+    payment = dict(keys, type="Dividends", amount=str(d["amount"]))
+    d["payments"] = [payment]
+    d["cash_rows"] = [payment, {"type": "Withholding Tax", "currency": d["currency"],
+                               "amount": str(d["tax"])}]
+    d["accruals"] = [dict(keys, code="Re", quantity=quantity, payDate=d["date"],
+                          date=d["date"], reportDate=d["date"])]
     return d
 
 
@@ -82,7 +91,7 @@ def test_invalid_commission_excludes_trade(commission):
 
 # --- dividends ------------------------------------------------------------
 
-def test_dividend_quantity_and_price_from_per_share_rate():
+def test_dividend_structured_quantity_and_cash_price():
     a = m.convert_dividend_to_activity(div(), "acc", {ISIN: "KO"}, {})
     assert a["type"] == "DIVIDEND"
     assert a["quantity"] == pytest.approx(100.0)
@@ -92,15 +101,15 @@ def test_dividend_quantity_and_price_from_per_share_rate():
     assert a["date"] == "2026-07-15T00:00:00+00:00"
 
 
-def test_dividend_quantity_snaps_to_whole_shares_within_one_percent():
+def test_dividend_structured_quantity_preserves_broker_shares_despite_rounded_cash():
     a = m.convert_dividend_to_activity(div(amount=24.99), "acc", {}, {})
     assert a["quantity"] == 100.0
     assert a["quantity"] * a["unitPrice"] == pytest.approx(24.99)
 
 
-def test_dividend_without_rate_is_booked_as_one_unit():
+def test_dividend_structured_quantity_without_description_rate():
     a = m.convert_dividend_to_activity(div(description="SPECIAL"), "acc", {}, {})
-    assert (a["quantity"], a["unitPrice"]) == (1.0, 25.0)
+    assert (a["quantity"], a["unitPrice"]) == (100.0, 0.25)
 
 
 def test_withholding_tax_becomes_fee_and_refund_becomes_zero():
@@ -131,3 +140,79 @@ def test_dividend_unmapped_isin_is_reported_without_overwriting_trade_descriptio
     unmapped = {ISIN: {"symbol": "KO", "description": "COCA COLA"}}
     m.convert_dividend_to_activity(div(), "acc", {}, unmapped)
     assert unmapped[ISIN]["description"] == "COCA COLA"
+
+
+@pytest.mark.parametrize("quantity,amount", [("3", 1.5), ("450", 45.1), ("0.00000001", 1), ("1", 5)])
+def test_dividend_structured_quantity_has_no_inference_rounding_or_fallback(quantity, amount):
+    activity = m.convert_dividend_to_activity(div(quantity=quantity, amount=amount,
+                                                 description="USD 0.1 PER SHARE"), "acc", {}, {})
+    assert activity["quantity"] == float(quantity)
+    assert activity["quantity"] * activity["unitPrice"] == pytest.approx(amount)
+
+
+def test_dividend_structured_quantity_does_not_use_description_when_evidence_is_missing():
+    dividend = div()
+    dividend["accruals"] = []
+    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+
+
+@pytest.mark.parametrize("quantity,amount,tax,currency,symbol", [
+    ("1e-400", 1, 0, "USD", "KO"), ("1e400", 1, 0, "USD", "KO"),
+    ("1e-308", 1e308, 0, "USD", "KO"), ("1e308", 1e-308, 0, "USD", "KO"),
+    ("1", 1e307, 0, "GBP", "PAF.L"), ("1", 1, -1e307, "GBP", "PAF.L"),
+    ("100", float("inf"), 0, "USD", "KO"), ("100", 25, float("nan"), "USD", "KO"),
+    ("100", 25, float("-inf"), "USD", "KO"),
+])
+def test_dividend_structured_numeric_rejects_unsafe_final_values(quantity, amount, tax, currency, symbol, caplog):
+    dividend = div(quantity=quantity, amount=amount, tax=tax, currency=currency)
+    assert m.convert_dividend_to_activity(dividend, "acc", {ISIN: symbol}, {}) is None
+    assert any("numeric" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("field", ["amount", "tax"])
+def test_dividend_structured_numeric_rejects_positive_underflow_in_cash(field):
+    dividend = div()
+    if field == "amount":
+        dividend["payments"][0]["amount"] = "1e-400"
+    else:
+        dividend["cash_rows"][1]["amount"] = "-1e-400"
+    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+
+
+def test_dividend_structured_numeric_normal_pence_scaling_preserves_cash_and_quantity():
+    dividend = div(quantity="450", amount=45.1, tax=-2, currency="GBP")
+    dividend["accruals"][0].update(grossAmount="999", tax="-999", rate="0.1")
+    activity = m.convert_dividend_to_activity(dividend, "acc", {ISIN: "PAF.L"}, {})
+    assert activity["quantity"] == 450
+    assert activity["currency"] == "GBp"
+    assert activity["quantity"] * activity["unitPrice"] / 100 == pytest.approx(45.1)
+    assert activity["fee"] / 100 == 2
+
+
+def test_dividend_structured_numeric_valid_subnormal_price_is_not_rounded_to_zero():
+    activity = m.convert_dividend_to_activity(div(quantity="1", amount=1e-310), "acc", {}, {})
+    assert activity["unitPrice"] == 1e-310
+    assert activity["quantity"] == 1
+
+
+def test_dividend_structured_numeric_large_cash_can_produce_representable_price():
+    dividend = div(quantity="1e308")
+    dividend["payments"][0]["amount"] = "1e400"
+    activity = m.convert_dividend_to_activity(dividend, "acc", {}, {})
+    assert activity["quantity"] == 1e308
+    assert activity["unitPrice"] == 1e92
+
+
+@pytest.mark.parametrize("amount", ["1e1000000000", "1e-1000000000"])
+def test_dividend_structured_numeric_extreme_cash_exponents_reject_without_unbounded_arithmetic(amount):
+    dividend = div()
+    dividend["payments"][0]["amount"] = amount
+    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+
+
+@pytest.mark.parametrize("quantity,amount,copies", [("1e-308", "1e999999", 1),
+                                                    ("1", "1e999999", 10)])
+def test_dividend_structured_numeric_decimal_arithmetic_overflow_stays_local(quantity, amount, copies):
+    dividend = div(quantity=quantity)
+    dividend["payments"] = [dict(dividend["payments"][0], amount=amount) for _ in range(copies)]
+    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None

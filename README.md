@@ -98,12 +98,14 @@ Follow the [Flex Web Service and query setup guide](docs/ibkr-setup.md):
 enable the service, create one 365-day query per sub-account with the required
 trade and cash fields, and obtain its Query ID.
 
-To prepare for structured dividend quantities, follow
-[the enriched Flex setup](docs/ibkr-setup.md#prepare-for-structured-dividend-quantities).
-The current connector still derives quantities from payment descriptions and
-ignores dividend accruals. Adding the fields is compatible with current behavior;
-requiring them in a future version would change the input contract and require
-explicit upgrade instructions. That future behavior is not implemented yet.
+Dividend quantities require
+[the enriched Flex fields](docs/ibkr-setup.md#prepare-for-structured-dividend-quantities)
+before upgrading. Cash Transactions still establish payments and withholding;
+Change in Dividend Accruals supplies quantity evidence only. The connector no
+longer infers quantity from descriptions or falls back to one unit. Missing,
+conflicting or unsafe evidence rejects the affected payment with a warning.
+Extra fields remain compatible with the previous runtime. Existing Ghostfolio
+activities are never corrected automatically.
 
 ## Ghostfolio Setup
 
@@ -282,7 +284,7 @@ A clean, fully reconciled run normally emits only `INFO` lines. `WARNING` means 
 | Trade | `BUY` when IBKR says `BUY`, otherwise `SELL`. Quantity and price are absolute values. The comment is `IBKR#<tradeID>`, the data source is always `YAHOO`. |
 | Commission | `fee` = the commission cost. A positive `ibCommission` (a rebate) is recorded as a fee of 0 and logged as a `WARNING`, because Ghostfolio fees cannot be negative. |
 | Dividend | One `DIVIDEND` per security and day: dividends and payments in lieu are summed (a reversal nets out), withholding tax becomes the `fee`. A net refund of tax is recorded as a fee of 0 with a `WARNING`. The comment is `dividend#<ISIN>#<date>` (or the IBKR symbol when there is no ISIN) and the date is the date of the cash transaction at 00:00 UTC. A dividend is treated as already present if Ghostfolio has that comment, **or any dividend of the same symbol in the same account within ±3 days** (so a real dividend that falls that close to a manual one is not imported). |
-| Dividend quantity and price | Read from the description (`... USD 0.25 PER SHARE ...`): quantity = amount ÷ rate, rounded to whole shares when within 1 %, price derived so that quantity × price equals the payment. Without such a rate the whole amount is booked as one unit. |
+| Dividend quantity and price | Each net-positive cash action matches accruals by nonempty `accountId`, `conid`, `currency`, `actionID` and `exDate`. It needs exactly one `Re` with `payDate` on the cash day and `date` or `reportDate` on that day. All associated quantities must agree as positive finite decimals. Dividend/PIL portions and ordinary/bonus actions share one common quantity; quantities are never summed or rounded. Price = cash gross ÷ quantity, regardless of accrual gross, tax or rate. Zero-net actions provide no quantity; negative-net actions, mixed currencies and conflicting evidence reject the group. Quantity and price must remain positive finite numbers, and fees nonnegative finite, after conversion and minor-unit scaling; overflow or positive underflow rejects the group. |
 | Date and time | IBKR timestamps are treated as UTC. A manual entry made in local time can differ by a day, which is why the manual-entry matching accepts ±2 days. |
 | Currency | The trade or dividend currency, except on markets where Yahoo quotes the minor unit (below). |
 

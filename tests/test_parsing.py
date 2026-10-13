@@ -1,4 +1,8 @@
 """Offline tests: Flex XML parsing, date parsing, mapping and secret redaction."""
+from decimal import Decimal
+from itertools import permutations
+import xml.etree.ElementTree as ET
+
 import pytest
 
 import ibkr_to_ghostfolio as m
@@ -232,3 +236,177 @@ def test_flex_limit_counts_response_bytes_not_characters(monkeypatch):
     monkeypatch.setattr(m.ET, "fromstring", lambda text: pytest.fail("must not parse"))
     with pytest.raises(RuntimeError, match="^IBKR Flex response exceeds XML size limit$"):
         m.fetch_flex_report("synthetic", "synthetic")
+
+
+# --- structured dividend quantity evidence ---------------------------------
+
+def structured_cash(amount="25", action="A1", type_="Dividends", **overrides):
+    attrs = {"type": type_, "amount": amount, "dateTime": "20260715", "isin": "US1912161007",
+             "symbol": "KO", "currency": "USD", "accountId": "broker-account", "conid": "1",
+             "actionID": action, "exDate": "20260701", "levelOfDetail": "DETAIL"}
+    attrs.update(overrides)
+    return ET.tostring(ET.Element("CashTransaction", attrs), encoding="unicode")
+
+
+def structured_accrual(quantity="100", action="A1", **overrides):
+    attrs = {"accountId": "broker-account", "conid": "1", "currency": "USD", "actionID": action,
+             "exDate": "20260701", "quantity": quantity, "code": "Re", "date": "20260715",
+             "payDate": "20260715", "reportDate": "20260715"}
+    attrs.update(overrides)
+    return ET.tostring(ET.Element("ChangeInDividendAccrual", attrs), encoding="unicode")
+
+
+def structured_dividend(payments, accruals):
+    xml = flex("".join(payments)).replace("</FlexStatement>",
+          "<ChangeInDividendAccruals>" + "".join(accruals) + "</ChangeInDividendAccruals></FlexStatement>")
+    return m.parse_cash_dividends(xml)
+
+
+@pytest.mark.parametrize("quantity,amount,type_", [
+    ("3", "1.5", "Payment In Lieu Of Dividends"), ("450", "45.1", "Dividends"),
+    ("1", "0.25", "Dividends"), ("0.125", "0.5", "Dividends"),
+    ("1.0000000000000000000000000001", "1", "Dividends"),
+])
+def test_dividend_structured_quantity_association_preserves_exact_evidence(quantity, amount, type_):
+    [dividend] = structured_dividend([structured_cash(amount, type_=type_)], [structured_accrual(quantity)])
+    assert m.dividend_structured_quantity(dividend) == Decimal(quantity)
+    activity = m.convert_dividend_to_activity(dividend, "ghost-account", {}, {})
+    assert activity["quantity"] == float(quantity)
+    assert activity["quantity"] * activity["unitPrice"] == pytest.approx(float(amount))
+    assert activity["accountId"] == "ghost-account"
+    assert activity["comment"] == "dividend#US1912161007#2026-07-15"
+    assert activity["date"] == "2026-07-15T00:00:00+00:00"
+
+
+@pytest.mark.parametrize("dates", [
+    {"date": "20260701", "reportDate": "20260715"},
+    {"date": "20260715", "reportDate": "20260720"},
+])
+def test_dividend_structured_quantity_matches_date_or_report_date(dates):
+    [dividend] = structured_dividend([structured_cash()], [structured_accrual(**dates)])
+    assert m.dividend_structured_quantity(dividend) == Decimal(100)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"accountId": "other"}, {"conid": "other"}, {"currency": "EUR"}, {"actionID": "other"},
+    {"exDate": "20260702"}, {"payDate": "20260716"}, {"date": "20260701", "reportDate": "20260720"},
+    {"code": "Po"}, {"quantity": ""}, {"quantity": "invalid"}, {"quantity": "0"},
+    {"quantity": "-1"}, {"quantity": "NaN"}, {"quantity": "Infinity"},
+])
+def test_dividend_structured_quantity_rejects_wrong_or_invalid_evidence(overrides, caplog):
+    [dividend] = structured_dividend([structured_cash()], [structured_accrual(**overrides)])
+    assert m.convert_dividend_to_activity(dividend, "ghost-account", {}, {}) is None
+    assert any("not imported" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("field", ["accountId", "conid", "currency", "actionID", "exDate"])
+def test_dividend_structured_quantity_requires_nonempty_association_keys(field):
+    for source in ("cash", "accrual"):
+        payment = structured_cash(**{field: ""}) if source == "cash" else structured_cash()
+        accrual = structured_accrual(**{field: ""}) if source == "accrual" else structured_accrual()
+        [dividend] = structured_dividend([payment], [accrual])
+        assert m.dividend_structured_quantity(dividend) is None
+
+
+@pytest.mark.parametrize("extra", [
+    structured_accrual(), structured_accrual("101", code="Po", date="20260701"),
+    structured_accrual("", code="Po", date="20260701"),
+])
+def test_dividend_structured_quantity_rejects_multiple_re_or_conflicting_revisions(extra):
+    [dividend] = structured_dividend([structured_cash()], [structured_accrual(), extra])
+    assert m.dividend_structured_quantity(dividend) is None
+
+
+def test_dividend_structured_quantity_agrees_across_revisions_and_ignores_unrelated_keys():
+    evidence = [structured_accrual("100.00", code="Po", date="20260701"), structured_accrual("1e2"),
+                structured_accrual("invalid", action="unrelated")]
+    [dividend] = structured_dividend([structured_cash()], evidence)
+    assert m.dividend_structured_quantity(dividend) == Decimal(100)
+
+
+def test_dividend_structured_quantity_re_without_cash_creates_no_payment():
+    assert structured_dividend([], [structured_accrual()]) == []
+    [dividend] = structured_dividend([structured_cash()], [])
+    assert m.dividend_structured_quantity(dividend) is None
+
+
+@pytest.mark.parametrize("bonus_rate", ["0.25", "0.1"])
+def test_dividend_structured_components_split_pil_and_bonus_use_common_quantity_and_cash(bonus_rate):
+    payments = [structured_cash("20", description="USD 0.25 PER SHARE"),
+                structured_cash("5", type_="Payment In Lieu Of Dividends"),
+                structured_cash("10", action="bonus", description=f"USD {bonus_rate} PER SHARE"),
+                structured_cash("-4", type_="Withholding Tax", action="")]
+    evidence = [structured_accrual(grossAmount="999", tax="-999", rate="999"),
+                structured_accrual(action="bonus", grossAmount="0.01", tax="0", rate=bonus_rate)]
+    expected = None
+    for ordered_cash in permutations(payments):
+        for ordered_accruals in permutations(evidence):
+            [dividend] = structured_dividend(ordered_cash, ordered_accruals)
+            activity = m.convert_dividend_to_activity(dividend, "ghost-account", {}, {})
+            assert (dividend["amount"], dividend["tax"]) == (35, -4)
+            assert (activity["quantity"], activity["unitPrice"], activity["fee"]) == (100, 0.35, 4)
+            assert activity["quantity"] * activity["unitPrice"] - activity["fee"] == pytest.approx(31)
+            if expected is None:
+                expected = activity
+            assert activity == expected
+
+
+@pytest.mark.parametrize("extra_cash,extra_evidence", [
+    ([structured_cash("1", action="bonus")], [structured_accrual("101", action="bonus")]),
+    ([structured_cash("-1", action="correction")], []),
+    ([structured_cash("1", currency="EUR")], [structured_accrual(currency="EUR")]),
+    ([structured_cash("-1", type_="Withholding Tax", currency="EUR")], []),
+])
+def test_dividend_structured_components_reject_unequal_negative_or_mixed_actions(extra_cash, extra_evidence):
+    [dividend] = structured_dividend([structured_cash(), *extra_cash], [structured_accrual(), *extra_evidence])
+    assert m.convert_dividend_to_activity(dividend, "ghost-account", {}, {}) is None
+
+
+def test_dividend_structured_components_zero_net_action_provides_no_quantity():
+    payments = [structured_cash(), structured_cash("5", action="cancelled"),
+                structured_cash("-5", action="cancelled")]
+    evidence = [structured_accrual(), structured_accrual("invalid", action="cancelled")]
+    [dividend] = structured_dividend(payments, evidence)
+    assert m.dividend_structured_quantity(dividend) == Decimal(100)
+    [cancelled] = structured_dividend(payments[1:], evidence[1:])
+    assert m.convert_dividend_to_activity(cancelled, "ghost-account", {}, {}) is None
+
+
+def test_dividend_structured_components_signed_cash_is_exact_and_order_independent():
+    payments = [structured_cash("10000000000000000"), structured_cash("1"),
+                structured_cash("-10000000000000000")]
+    for ordered in permutations(payments):
+        [dividend] = structured_dividend(ordered, [structured_accrual("3")])
+        assert dividend["amount"] == 1
+        activity = m.convert_dividend_to_activity(dividend, "ghost-account", {}, {})
+        assert activity["quantity"] == 3
+        assert activity["quantity"] * activity["unitPrice"] == pytest.approx(1)
+
+
+@pytest.mark.parametrize("other", ["1.0000000000000000000000000001", "100.000000000000000000000001"])
+def test_dividend_structured_numeric_decimal_conflict_precedes_float_conversion(other):
+    first = "1" if other.startswith("1.") else "100"
+    assert float(first) == float(other)
+    [dividend] = structured_dividend([structured_cash()],
+                                    [structured_accrual(first), structured_accrual(other, code="Po")])
+    assert m.dividend_structured_quantity(dividend) is None
+
+
+
+def test_dividend_structured_quantity_enriched_selection_preserves_baseline():
+    payments = [structured_cash(), structured_cash("99", levelOfDetail="SUMMARY"),
+                structured_cash("99", type_="Other Fees"), structured_cash("-3.75", type_="Withholding Tax")]
+    xml = flex("".join(payments), '<Trade tradeID="T1"/><AssetSummary symbol="KO"/>').replace(
+        "</FlexStatement>", "<ChangeInDividendAccruals>" + structured_accrual() +
+        "</ChangeInDividendAccruals></FlexStatement>")
+    assert m.parse_trades(xml) == [{"tradeID": "T1"}]
+    [dividend] = m.parse_cash_dividends(xml)
+    activity = m.convert_dividend_to_activity(dividend, "ghost-account", {}, {})
+    assert (activity["quantity"], activity["unitPrice"], activity["fee"]) == (100, 0.25, 3.75)
+
+
+def test_dividend_structured_numeric_decimal_conflict_between_components():
+    [dividend] = structured_dividend([structured_cash(), structured_cash("10", action="bonus")],
+                                    [structured_accrual("100"),
+                                     structured_accrual("100.000000000000000000000001", action="bonus")])
+    assert m.dividend_structured_quantity(dividend) is None
