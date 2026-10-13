@@ -1,0 +1,30 @@
+schema: spec-driven
+
+context: |
+  Community Docker connector: Interactive Brokers Flex Web Service reports -> Ghostfolio.
+  Docker-first, every setting through ENV, unattended run with `docker compose up -d`
+  and an optional CRON. Single-file Python runtime, functional style, no classes, no type hints.
+  Sibling contract shared with ../ghostfolio-degiro-sync and ../ghostfolio-boursedirect-sync:
+  CRON, DRY_RUN, APPRISE_URLS, additive deduplicated import, ENV only.
+  This repository is the canonical source of the Ghostfolio helpers projected into
+  ghostfolio-degiro-sync; a change to them flags downstream propagation.
+  Imports are additive; existing activities are never changed automatically.
+  The product already runs with live writes; specs describe observed behavior before any change.
+  Readers: the operator (infrastructure expert, not a developer) and community users.
+  A changed decision is applied to proposal, specs, design and tasks before commit.
+
+rules:
+  proposal:
+    - Max 400 words. Plain English, no internal jargon.
+    - Include an in-scope / out-of-scope table that lists every IBKR Flex record type considered.
+    - Build that table from saved real or sanitized Flex reports; when the source changes, rebuild it.
+    - Include a "Non-goals" section.
+  specs:
+    - Every requirement has at least one WHEN/THEN scenario that a person can check by running one command and reading its output.
+    - A baseline requirement describes behavior observed in production logs, the README or an existing offline test; cite which.
+    - Never state IBKR or Ghostfolio behavior that is not observed; mark unknowns as open questions.
+  design:
+    - Max 400 words. Name the existing function or sibling mechanism reused for each part.
+  tasks:
+    - One task = one vertical slice that ends with a runnable check, about one hour of work.
+    - No task for internal tooling, lab proofs or process automation; docs tasks only for README or user docs the spec requires.
