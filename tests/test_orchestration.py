@@ -1,5 +1,6 @@
 """Offline tests: orchestration (process_account, main, load_config) and the IBKR Flex fetch."""
 from collections import defaultdict
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -31,6 +32,7 @@ def trade_xml(tid, side="BUY", qty=10, symbol="KO", isin=ISIN_KO, date="20260801
 
 def div_xml(amount="25.00", date="20260715", isin=ISIN_KO, symbol="KO"):
     return (f'<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="{amount}" dateTime="{date}" '
+            'accountId="broker-account" conid="1" actionID="A1" exDate="20260701" '
             f'isin="{isin}" symbol="{symbol}" currency="USD" description="X CASH DIVIDEND USD 0.25 PER SHARE"/>')
 
 
@@ -38,7 +40,17 @@ def report(trades="", divs="", cash="100.5", cash_section=True):
     cash_xml = (f'<CashReport><CashReportCurrency currency="BASE_SUMMARY" endingCash="{cash}"/></CashReport>'
                 if cash is not None else "")
     ct = f"<CashTransactions>{divs}</CashTransactions>" if cash_section else ""
-    return (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trades}</Trades>{ct}{cash_xml}"
+    # Enrich existing fixtures; input compatibility scenarios belong to task 2.1.
+    accruals = []
+    for row in ET.fromstring(f"<R>{divs}</R>"):
+        if row.get("type") != "Dividends":
+            continue
+        attrs = {key: row.get(key, "") for key in ("accountId", "conid", "currency", "actionID", "exDate")}
+        attrs.update(quantity="100", code="Re", payDate=row.get("dateTime"),
+                     date=row.get("dateTime"), reportDate=row.get("dateTime"))
+        accruals.append(ET.tostring(ET.Element("ChangeInDividendAccrual", attrs), encoding="unicode"))
+    evidence = "<ChangeInDividendAccruals>" + "".join(accruals) + "</ChangeInDividendAccruals>"
+    return (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trades}</Trades>{ct}{cash_xml}{evidence}"
             f"</FlexStatement></FlexStatements></FlexQueryResponse>")
 
 

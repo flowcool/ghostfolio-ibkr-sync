@@ -13,6 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal, DecimalException, localcontext
 from math import ceil, isfinite
 from urllib.parse import quote, quote_plus, urlsplit
 
@@ -368,17 +369,19 @@ def parse_cash_dividends(xml_text):
     """Parse dividend payments from the Cash Transactions section.
 
     Structure: FlexQueryResponse > FlexStatements > FlexStatement > CashTransactions > CashTransaction
-    Dividend accruals are not used: IBKR marks corrections, cancellations and
-    payouts alike with code "Re", so an accrual cannot tell a payment apart.
+    Cash establishes payments and monetary totals. Accruals are retained only
+    as quantity evidence; they cannot create a payment. No quantity is checked
+    here so callers can deduplicate before validating a new candidate.
 
     Rows are summed per (ISIN or symbol, date): dividends and payments in lieu
     into "amount", withholding tax (negative, refunds positive) into "tax".
     Returns None if the report has no Cash Transactions section, else a list
-    of dicts with isin, symbol, currency, date, amount, tax, description.
+    of dicts with cash identity/totals plus payment rows and accrual evidence.
     """
     root = ET.fromstring(xml_text)
     if next(root.iter("CashTransactions"), None) is None:
         return None
+    accruals = [dict(el.attrib) for el in root.iter("ChangeInDividendAccrual")]
     groups = {}
     for el in root.iter("CashTransaction"):
         row = el.attrib
@@ -398,19 +401,117 @@ def parse_cash_dividends(xml_text):
         group = groups.setdefault(key, {
             "isin": row.get("isin", ""), "symbol": row.get("symbol", ""),
             "currency": row.get("currency", ""), "date": date_iso[:10],
-            "amount": 0.0, "tax": 0.0, "description": ""})
-        if row.get("currency", "") != group["currency"]:
-            log.warning("Dividend %s %s: rows in %s and %s summed as %s — check by hand",
-                        group["symbol"], group["date"], group["currency"],
-                        row.get("currency", ""), group["currency"])
-        if tx_type == WITHHOLDING_CASH_TYPE:
-            group["tax"] += amount
-        else:
-            group["amount"] += amount
-            # the last payment row carries the current rate after a correction
+            "amount": 0.0, "tax": 0.0, "description": "",
+            "payments": [], "cash_rows": [], "accruals": accruals})
+        group["cash_rows"].append(dict(row))
+        if tx_type != WITHHOLDING_CASH_TYPE:
+            group["payments"].append(dict(row))
+            # Retain descriptions for callers; they never establish quantity.
             if amount > 0:
                 group["description"] = row.get("description", "")
+    for group in groups.values():
+        gross = _dividend_cash_sum(group["payments"])
+        tax = _dividend_cash_sum([row for row in group["cash_rows"]
+                                 if row.get("type") == WITHHOLDING_CASH_TYPE])
+        group["gross"] = gross
+        group["amount"] = float(gross) if gross is not None else float("nan")
+        group["tax"] = float(tax) if tax is not None else float("nan")
     return list(groups.values())
+
+
+def _dividend_decimal(value):
+    """Parse exact finite broker evidence without rounding through a float."""
+    try:
+        number = Decimal(str(value))
+    except DecimalException:
+        return None
+    return number if number.is_finite() else None
+
+
+def _dividend_cash_sum(rows):
+    """Sum cash exactly and independently of row order within Decimal limits."""
+    values = [_dividend_decimal(row.get("amount")) for row in rows]
+    if any(value is None for value in values):
+        return None
+    values = [value for value in values if value]
+    if not values:
+        return Decimal(0)
+    with localcontext() as context:
+        # Check Decimal's exponent range before allocating precision. Financial
+        # outputs still undergo their separate float checks after conversion.
+        if any(abs(value.adjusted()) > context.Emax
+               or value.as_tuple().exponent < context.Emin for value in values):
+            return None
+        context.prec = max(28, max(value.adjusted() for value in values)
+                           - min(value.as_tuple().exponent for value in values)
+                           + len(str(len(values))) + 2)
+        try:
+            return sum(values, Decimal(0))
+        except DecimalException:
+            return None
+
+
+def dividend_structured_quantity(dividend):
+    """Return the common exact quantity for net-positive cash actions, or None.
+
+    Match account/contract/currency/action/ex-date, then require one payment
+    reversal and agreement across all associated revisions and components.
+    Cash totals stay authoritative. Validation is separate from cash parsing.
+    """
+    def reject(reason):
+        log.warning("Dividend %s %s: %s — not imported",
+                    dividend["symbol"], dividend["date"], reason)
+        return None
+
+    cash_rows = dividend.get("cash_rows", [])
+    if len({row.get("currency", "") for row in cash_rows}) > 1:
+        return reject("contradictory cash currencies")
+    actions = defaultdict(list)
+    keys = ("accountId", "conid", "currency", "actionID", "exDate")
+    for row in dividend.get("payments", []):
+        key = tuple(row.get(field, "") for field in keys)
+        if not all(key):
+            return reject("missing payment association keys")
+        actions[key].append(row)
+    common_quantity = None
+    for key, payments in actions.items():
+        net = _dividend_cash_sum(payments)
+        if net is None:
+            return reject("incompatible numeric cash amount")
+        if net < 0:
+            return reject("contradictory negative-net cash action")
+        if net == 0:
+            continue
+        associated = [row for row in dividend.get("accruals", [])
+                      if all(not row.get(field) or row[field] == value
+                             for field, value in zip(keys, key))]
+        if not associated:
+            return reject("missing structured quantity evidence")
+        if any(not all(row.get(field) for field in keys) for row in associated):
+            return reject("missing accrual association keys")
+        reversals = [row for row in associated if row.get("code") == "Re"
+                     and _dividend_day(row.get("payDate")) == dividend["date"]
+                     and dividend["date"] in (_dividend_day(row.get("date")),
+                                               _dividend_day(row.get("reportDate")))]
+        if len(reversals) != 1:
+            return reject("missing or contradictory payment reversal evidence")
+        quantities = [_dividend_decimal(row.get("quantity")) for row in associated]
+        if any(quantity is None or quantity <= 0 for quantity in quantities):
+            return reject("incompatible structured quantity")
+        quantity = quantities[0]
+        if any(other != quantity for other in quantities[1:]):
+            return reject("contradictory structured quantities")
+        if common_quantity is not None and common_quantity != quantity:
+            return reject("contradictory component quantities")
+        common_quantity = quantity
+    if common_quantity is None:
+        return reject("missing net-positive quantity evidence")
+    return common_quantity
+
+
+def _dividend_day(value):
+    parsed = parse_ibkr_datetime(value or "")
+    return parsed[:10] if parsed else None
 
 
 # ---------------------------------------------------------------------------
@@ -1014,7 +1115,9 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     isin = dividend["isin"]
     ibkr_symbol = dividend["symbol"]
     currency = dividend["currency"]
-    amount = dividend["amount"]
+    amount = dividend.get("gross")
+    if amount is None:
+        amount = dividend["amount"]
 
     if amount <= 0:
         if amount < 0:
@@ -1041,22 +1144,38 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
         return None
 
     # IBKR reports withholding as a negative amount; a net refund is not a fee
-    wht = max(0.0, -dividend["tax"])
     if dividend["tax"] > 0:
         log.warning("Dividend %s %s: net withholding refund %.4g %s — recorded as 0",
                     ibkr_symbol, dividend["date"], dividend["tax"], currency)
 
-    # Quantity and rate from the description ("... USD 0.25 PER SHARE ..."),
-    # else book the whole amount as one unit
-    match = re.search(r"\b[A-Z]{3}\s+([0-9]+(?:\.[0-9]+)?)\s+PER SHARE", dividend["description"])
-    rate = _parse_float(match.group(1)) if match else None
-    qty = amount / rate if rate else 1.0
-    # amount is rounded to cents: snap to whole shares when within 1 %, and
-    # derive the price from the amount so quantity x price equals the payment
-    if round(qty) >= 1 and abs(qty - round(qty)) / round(qty) < 0.01:
-        qty = float(round(qty))
-    qty = round(qty, 6) or 1.0
-    unit_price = amount / qty
+    quantity = dividend_structured_quantity(dividend)
+    if quantity is None:
+        return None
+    qty = float(quantity)
+    if not isfinite(qty) or qty <= 0:
+        log.warning("Dividend %s %s: incompatible numeric quantity — not imported",
+                    ibkr_symbol, dividend["date"])
+        return None
+    # Cash totals, not accrual gross/tax/rate, establish price and fee.
+    cash_rows = dividend.get("cash_rows", [])
+    gross = _dividend_cash_sum(dividend.get("payments", []))
+    tax = _dividend_cash_sum([row for row in cash_rows
+                             if row.get("type") == WITHHOLDING_CASH_TYPE])
+    if gross is None or tax is None or gross <= 0:
+        log.warning("Dividend %s %s: incompatible numeric cash totals — not imported",
+                    ibkr_symbol, dividend["date"])
+        return None
+    try:
+        with localcontext() as context:
+            context.prec = 50
+            unit_price_decimal = gross / quantity
+    except DecimalException:
+        log.warning("Dividend %s %s: incompatible numeric price — not imported",
+                    ibkr_symbol, dividend["date"])
+        return None
+    unit_price = float(unit_price_decimal)
+    fee_decimal = tax.copy_negate() if tax < 0 else Decimal(0)
+    wht = float(fee_decimal)
 
     # Minor-unit markets (.L GBp, .JO ZAc, .TA ILA): IBKR reports the major
     # unit, YAHOO quotes the sub-cent unit. Scale rate AND withholding tax
@@ -1067,6 +1186,12 @@ def convert_dividend_to_activity(dividend, ghost_account_id, mapping, unmapped):
     currency = minor_currency
     unit_price *= minor_factor
     wht *= minor_factor
+
+    if (not isfinite(unit_price) or unit_price <= 0
+            or not isfinite(wht) or wht < 0 or (fee_decimal > 0 and wht == 0)):
+        log.warning("Dividend %s %s: incompatible numeric price or fee after scaling — not imported",
+                    ibkr_symbol, dividend["date"])
+        return None
 
     # Key uses ISIN (stable) rather than the resolved Yahoo symbol (changes with mapping updates).
     # Fallback to the raw IBKR symbol only when ISIN is absent.
