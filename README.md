@@ -98,6 +98,13 @@ Follow the [Flex Web Service and query setup guide](docs/ibkr-setup.md):
 enable the service, create one 365-day query per sub-account with the required
 trade and cash fields, and obtain its Query ID.
 
+To prepare for structured dividend quantities, follow
+[the enriched Flex setup](docs/ibkr-setup.md#prepare-for-structured-dividend-quantities).
+The current connector still derives quantities from payment descriptions and
+ignores dividend accruals. Adding the fields is compatible with current behavior;
+requiring them in a future version would change the input contract and require
+explicit upgrade instructions. That future behavior is not implemented yet.
+
 ## Ghostfolio Setup
 
 ### 1. Choose how the sync authenticates
