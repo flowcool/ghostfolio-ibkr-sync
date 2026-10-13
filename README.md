@@ -104,8 +104,16 @@ before upgrading. Cash Transactions still establish payments and withholding;
 Change in Dividend Accruals supplies quantity evidence only. The connector no
 longer infers quantity from descriptions or falls back to one unit. Missing,
 conflicting or unsafe evidence rejects the affected payment with a warning.
-Extra fields remain compatible with the previous runtime. Existing Ghostfolio
-activities are never corrected automatically.
+Missing required attributes block new account dividends; empty or conflicting
+evidence rejects only the affected payment. Trades and cash continue. These
+rejections do not change the exit code or send failure notifications. Rejected
+payments retry on later runs; existing dividends are deduplicated first and stay
+untouched and unverified.
+
+Before upgrading, back up Ghostfolio and record the previous image digest. Keep
+ENV and mounts unchanged. For runtime rollback, restore that digest and recreate
+the connector. Extra fields remain compatible with the previous runtime. Rollback
+does not undo financial writes. See the [upgrade procedure](docs/ibkr-setup.md#prepare-for-structured-dividend-quantities).
 
 ## Ghostfolio Setup
 

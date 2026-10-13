@@ -240,3 +240,26 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
     assert time.monotonic() - start < 10
     assert calls == ["U111", "U222", "U333"]
     assert any("timed out" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("mode", ["old", "missing", "empty", "conflict", "short"])
+def test_dividend_structured_input_rejections_preserve_exit_and_notifications(env, mode):
+    from test_orchestration import World, structured_input_xml
+
+    w = World(env, structured_input_xml(mode))
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    sent = spy_send(env)
+    assert m.main() == 0
+    assert sent == []
+    assert len(w.cash_calls) == 3
+    assert any(a["type"] == "BUY" for a in w.activities)
+
+
+def test_dividend_structured_input_other_failures_still_notify(env):
+    from test_orchestration import World, structured_input_xml
+
+    World(env, structured_input_xml("old"), cash_ok=False)
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    sent = spy_send(env)
+    assert m.main() == 1
+    assert len(sent) == 1 and "Accounts failed: 3 of 3." in sent[0]["body"]

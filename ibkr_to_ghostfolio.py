@@ -402,7 +402,8 @@ def parse_cash_dividends(xml_text):
             "isin": row.get("isin", ""), "symbol": row.get("symbol", ""),
             "currency": row.get("currency", ""), "date": date_iso[:10],
             "amount": 0.0, "tax": 0.0, "description": "",
-            "payments": [], "cash_rows": [], "accruals": accruals})
+            "payments": [], "cash_rows": [], "accruals": accruals,
+            "accrual_section": next(root.iter("ChangeInDividendAccruals"), None) is not None})
         group["cash_rows"].append(dict(row))
         if tx_type != WITHHOLDING_CASH_TYPE:
             group["payments"].append(dict(row))
@@ -449,6 +450,35 @@ def _dividend_cash_sum(rows):
             return sum(values, Decimal(0))
         except DecimalException:
             return None
+
+
+def dividend_input_compatible(candidates):
+    """Check schema only for new payments and potentially associated accruals.
+
+    Attribute absence blocks account dividends. Empty values remain local
+    quantity rejections. A nonempty mismatching key proves a row unrelated.
+    """
+    keys = ("accountId", "conid", "currency", "actionID", "exDate")
+    required = keys + ("quantity", "code", "date", "payDate", "reportDate")
+    for dividend in candidates:
+        if not dividend.get("accrual_section"):
+            log.warning("Incompatible dividend input: missing ChangeInDividendAccruals section "
+                        "— account dividends not imported; enrich the Flex query")
+            return False
+        for payment in dividend["payments"]:
+            if any(field not in payment for field in keys):
+                log.warning("Incompatible dividend input: missing payment attributes "
+                            "— account dividends not imported; enrich the Flex query")
+                return False
+            for row in dividend["accruals"]:
+                if any(row.get(field) and payment.get(field)
+                       and row[field] != payment[field] for field in keys):
+                    continue
+                if any(field not in row for field in required):
+                    log.warning("Incompatible dividend input: missing relevant accrual attributes "
+                                "— account dividends not imported; enrich the Flex query")
+                    return False
+    return True
 
 
 def dividend_structured_quantity(dividend):
@@ -1515,33 +1545,43 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     log.info("New trade activities: %d, duplicates skipped: %d, other skipped: %d",
              len(activities), skipped_dup, skipped_other)
 
-    # Convert and filter dividends
+    # Establish identity and deduplicate before checking quantity or schema.
     div_activities = []
     div_skipped_dup = 0
-
-    # Cash Transactions only pay shares actually held, so a symbol without a
-    # buy in the 365-day window (long-held, partly sold) still gets its dividends
+    candidates = []
     for div in dividends:
-        activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
-        if activity and not activity_date_is_current(activity):
-            log.error("Future or invalid dividend date; deferred until a later run")
-            ok = False
+        if not div["payments"] or div["amount"] <= 0:
+            # Preserve existing diagnostics for reversals and tax-only rows.
+            convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
             continue
-        if activity:
-            date_part = activity["comment"].rsplit("#", 1)[-1]
-            old_comment = f"dividend#{activity['symbol']}#{date_part}"
-            acct = activity["accountId"]
-            if ((acct, activity["comment"]) in existing_dividend_comments
-                    or (acct, old_comment) in existing_dividend_comments):
-                div_skipped_dup += 1
+        symbol = resolve_symbol(div["isin"], div["symbol"], mapping)
+        identity = {
+            "accountId": ghost_account_id, "symbol": symbol,
+            "date": f"{div['date']}T00:00:00+00:00",
+            "comment": f"dividend#{div['isin'] or div['symbol']}#{div['date']}",
+        }
+        old_comment = f"dividend#{symbol}#{div['date']}"
+        if ((ghost_account_id, identity["comment"]) in existing_dividend_comments
+                or (ghost_account_id, old_comment) in existing_dividend_comments):
+            div_skipped_dup += 1
+            continue
+        matched = _dividend_date_matches(positions, identity) if symbol else None
+        if matched:
+            log.info("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, "
+                     "treated as the same payment (not imported)", symbol, div["date"], matched)
+            div_skipped_dup += 1
+            continue
+        candidates.append(div)
+
+    # A schema mismatch blocks only account dividends, not trades or cash.
+    if dividend_input_compatible(candidates):
+        for div in candidates:
+            activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
+            if activity and not activity_date_is_current(activity):
+                log.error("Future or invalid dividend date; deferred until a later run")
+                ok = False
                 continue
-            matched = _dividend_date_matches(positions, activity)
-            if matched:
-                log.info("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, "
-                         "treated as the same payment (not imported)",
-                         activity["symbol"], date_part, matched)
-                div_skipped_dup += 1
-            else:
+            if activity:
                 div_activities.append(activity)
 
     log.info("New dividend activities: %d, duplicates skipped: %d",

@@ -8,4 +8,4 @@ Future implementation after approval; sequential fresh sessions, synthetic input
 
 ## 2. Input and integration
 
-- [ ] 2.1 Deliver compatibility/isolation/upgrade scenarios in ibkr_to_ghostfolio.py, tests/test_orchestration.py, tests/test_finalize.py, README and docs/ibkr-setup.md. Run `.venv/bin/python -m pytest -v tests -k dividend_structured_input` and inspection. Cover identity→dedup→quantity/relevant schema/unrelated rows/empty/short windows/local outcomes/retry/migration/rollback.
+- [x] 2.1 Deliver compatibility/isolation/upgrade scenarios in ibkr_to_ghostfolio.py, tests/test_orchestration.py, tests/test_finalize.py, README and docs/ibkr-setup.md. Run `.venv/bin/python -m pytest -v tests -k dividend_structured_input` and inspection. Cover identity→dedup→quantity/relevant schema/unrelated rows/empty/short windows/local outcomes/retry/migration/rollback.
