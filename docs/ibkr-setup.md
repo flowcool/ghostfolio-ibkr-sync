@@ -97,7 +97,7 @@ In the section options, tick only these types: **Dividends**, **Payment In Lieu 
 - Type
 - LevelOfDetail (if listed)
 
-Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so accruals produce phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. The **Change in Dividend Accruals** section is no longer used and can be removed from the query.
+Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. The current connector ignores **Change in Dividend Accruals**; retain it when preparing the enriched query described below.
 
 > **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or by any dividend of the same symbol in the same account within 3 days, so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
 
@@ -106,6 +106,42 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
    Currency-rate rows are not used by this tool. It does not convert the cash balance or commissions between currencies.
 
 6. Save the query and note the Query ID (click the info icon next to the query to find it)
+
+### Prepare for structured dividend quantities
+
+This preparation is optional for the current connector. It still infers dividend
+quantities from payment descriptions. An enriched query can supply structured
+quantity evidence for a future version without changing today's conversion.
+
+In **Performance & Reports > Flex Queries**, edit the existing **Activity Flex
+Query** used by the connector:
+
+1. Open **Cash Transactions**. Keep **Dividends**, **Payment In Lieu Of Dividends**,
+   **Withholding Tax**, and **Detail**. Select **all available fields**, including
+   action ID, contract ID, dividend type, ex-date and report date. These appear in
+   XML as `actionID`, `conid`, `dividendType`, `exDate` and `reportDate`. Click **Save**.
+2. Add **Change in Dividend Accruals** and select **all available fields**. Include
+   account, currency, symbol, ISIN, contract/action IDs, **Quantity**, **Gross Rate**,
+   **Gross Amount**, **Tax**, **Fee**, **Net Amount**, **Code**, **Date**, **Ex Date**,
+   **Pay Date** and **Report Date**. Click **Save**.
+3. Preserve **Account Information**, **Trades (Execution)** and **Cash Report**.
+   Keep the same single account, **XML**, and **Last 365 Calendar Days**. Preserve
+   date formatting and other existing settings. Click **Continue** and save.
+
+Structured accruals can support quantity and component identity. They do not
+replace Cash Transactions as the source of paid gross amounts and withholding.
+Accrual amounts and tax can differ from cash, and `Re` also marks corrections and
+cancellations. Do not import accrual rows directly as dividend payments.
+
+**Future compatibility change:** if a version requires these sections or fields,
+update the query before upgrading the image. Its specification and release notes
+must define required fields, missing/conflicting evidence behavior, and migration
+for existing queries. No such requirement or failure behavior is active yet.
+
+Before that upgrade, back up Ghostfolio and record the previous image digest as
+described in [Releasing](releasing.md). Runtime rollback restores that image;
+it does not undo written activities. The extra Flex fields can remain because the
+current connector ignores them. Historical repairs require separate review.
 
 ## 3. Multi-account setup
 
