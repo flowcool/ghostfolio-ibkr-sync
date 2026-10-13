@@ -2,24 +2,24 @@
 
 ## Context
 
-One account/annual window supports the proposed associations, not universal IBKR semantics.
+One account/annual window observed; others unverified.
 
 ## Goals / Non-Goals
 
-Preserve payment evidence; no historical certification/persistence.
+Preserve cash; no historical certification/persistence.
 
 ## Decisions
 
-Extend `parse_cash_dividends` with signed action totals/accrual revisions; compare decimal quantities before numeric conversion. Remove unreliable description inference.
+`parse_cash_dividends` retains cash identity/signed totals/accruals without quantity validation. `process_account` deduplicates by account/comment and `_dividend_date_matches`, then validates new candidates.
 
-Reuse `convert_dividend_to_activity`, `minor_unit_conversion` and source totals; derive price from cash.
+Check candidate payments/relevant accruals; nonempty key mismatches exclude accruals, missing keys do not. Withholding retains cash grouping. Missing/empty attributes retain distinct rejection scopes.
 
-In `process_account`, distinguish missing attributes from empty values. Reuse account/comment deduplication and `_dividend_date_matches` before quantity checks. Local rejection logs SHALL NOT affect account outcome/finalization. Other failures remain unchanged. Shared helpers remain unchanged.
+Compare quantities as decimals before numeric conversion. `convert_dividend_to_activity`/`minor_unit_conversion` derive price from cash; check final quantity/price/fee for overflow/positive underflow, including GBP→GBp. Remove inference. Rejections stay local; other failures/shared helpers remain unchanged.
 
 ## Risks / Trade-offs
 
-Short windows/quantity revisions → reject/retry. Unobserved accounts/windows require evidence, not relaxed matching.
+Short windows/revisions → reject/retry; retain matching rules.
 
 ## Migration Plan
 
-README/setup SHALL follow docs/releasing.md compatibility notices. Enrich the query, preserve existing sections/settings, back up Ghostfolio, record prior digest, then upgrade. Rollback restores the image; extra fields remain; financial recovery is separate.
+README/setup follow docs/releasing.md: enrich query, preserve sections/settings, back up Ghostfolio, record prior digest, upgrade. Rollback restores image; extra fields remain; financial recovery is separate.
