@@ -46,5 +46,15 @@ reviews:
         Require synthetic financial data and mocked HTTP with no credentials
         or live IBKR/Ghostfolio access. Cover repeated runs, account isolation,
         partial failures and dry-run behavior when relevant to the change.
+    - path: "renovate.json"
+      instructions: >-
+        Check the update schedule, manager-specific release ages, approval for
+        major updates, manual merges and separate security ownership. Flag
+        settings that duplicate Dependabot security updates or enable automerge.
+    - path: ".github/dependabot.yml"
+      instructions: >-
+        Dependabot owns security updates. Ordinary update limits stay at zero
+        only after the Renovate Dependency Dashboard is open. Preserve all
+        package ecosystems and repository security fixes.
 chat:
   art: false

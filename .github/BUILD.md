@@ -23,11 +23,14 @@ not advance the base digest; base-image fixes require merging a digest update.
 Images include provenance and an SBOM. High/critical image vulnerabilities with
 available fixes fail CI; unfixed findings do not block publication.
 
-Runtime requirements pin the complete dependency closure. Dependabot proposes
-weekly Python, Actions and Docker updates; security alerts and security repair
-PRs are enabled. Supercronic is a separate upstream binary: updating its version
-also requires both architecture checksums. Never auto-merge dependency changes
-without the required checks.
+Runtime requirements pin the complete dependency closure. Once enabled for this
+repository, Renovate proposes weekly Python, GitHub Actions and Docker updates
+after 14 days for Python and 3 days for Actions and images. Major updates require
+Dependency Dashboard approval; merges stay manual. Dependabot owns security
+alerts and repair PRs. Its ordinary update limits become zero after the
+Dependency Dashboard is open. Supercronic is a separate upstream binary:
+updating its version also requires both architecture checksums. Never auto-merge
+dependency changes without the required checks.
 
 ## Rollback
 

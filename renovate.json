@@ -1,0 +1,62 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "enabledManagers": ["pip_requirements", "github-actions", "dockerfile", "docker-compose"],
+  "timezone": "Europe/Zurich",
+  "schedule": ["* * * * 1"],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "automerge": false,
+  "platformAutomerge": false,
+  "dependencyDashboard": true,
+  "ignoreUnstable": true,
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "ignoreDeps": ["ghcr.io/flowcool/ghostfolio-ibkr-sync", "ghostfolio-ibkr-sync"],
+  "packageRules": [
+    {
+      "description": "Keep the complete pinned Python dependency closure together after the review window.",
+      "matchManagers": ["pip_requirements"],
+      "minimumReleaseAge": "14 days",
+      "rangeStrategy": "pin"
+    },
+    {
+      "matchManagers": ["pip_requirements"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "python-minor-patch"
+    },
+    {
+      "description": "Preserve the review window for image and CI changes.",
+      "matchManagers": ["github-actions", "dockerfile", "docker-compose"],
+      "minimumReleaseAge": "3 days",
+      "pinDigests": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags", "github-digest"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Python interpreter migration is a separate reviewed change.",
+      "matchManagers": ["dockerfile"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "/^3\\.12(?:\\.|-|$)/"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": ">=3.12 <3.13"
+    },
+    {
+      "description": "Major upgrades require approval before creating a branch or PR.",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": false
+  },
+  "osvVulnerabilityAlerts": false
+}
