@@ -829,3 +829,136 @@ def test_future_dividend_is_not_created_as_draft(monkeypatch):
     w = World(monkeypatch, report(divs=div_xml(date="20990801")))
     assert w.run()[1] is False
     assert w.activities == []
+
+
+# --- structured input: schema scope, dedup order and retries ------------------
+
+def structured_input_xml(mode="valid", field="quantity"):
+    root = ET.fromstring(report(trade_xml("INPUT-T"),
+                                div_xml() + div_xml(isin=ISIN_PEP, symbol="PEP")))
+    section = root.find(".//ChangeInDividendAccruals")
+    # Distinct securities must have distinct broker contract/action identities.
+    root.findall(".//CashTransaction")[1].set("conid", "2")
+    section[1].set("conid", "2")
+    first = section[0]
+    if mode == "old":
+        root.find(".//FlexStatement").remove(section)
+    elif mode == "empty":
+        section.clear()
+    elif mode == "missing":
+        del first.attrib[field]
+    elif mode == "blank":
+        first.set(field, "")
+    elif mode == "payment_missing":
+        del root.find(".//CashTransaction").attrib[field]
+    elif mode == "payment_blank":
+        root.find(".//CashTransaction").set(field, "")
+    elif mode == "conflict":
+        row = ET.SubElement(section, "ChangeInDividendAccrual", dict(first.attrib))
+        row.set("code", "Po")
+        row.set("quantity", "99")
+    elif mode == "short":
+        first.set("date", "20260701")
+        first.set("reportDate", "20260701")
+    elif mode == "unrelated":
+        ET.SubElement(section, "ChangeInDividendAccrual", {field: "unrelated"})
+        ET.SubElement(root.find(".//CashTransactions"), "CashTransaction", {
+            "type": "Other Fees", "amount": "bad"})
+    return ET.tostring(root, encoding="unicode")
+
+
+@pytest.mark.parametrize("mode,reason", [
+    ("old", "missing ChangeInDividendAccruals section"),
+    ("missing", "missing relevant accrual attributes"),
+    ("payment_missing", "missing payment attributes"),
+])
+def test_dividend_structured_input_schema_blocks_account_only(monkeypatch, caplog, mode, reason):
+    field = "actionID" if mode == "payment_missing" else "quantity"
+    w = World(monkeypatch, structured_input_xml(mode, field))
+    assert w.run()[1] is True
+    assert [a["comment"] for a in w.activities] == ["IBKR#INPUT-T"]
+    assert w.comments == set() and dict(w.pos["dividend_dates"]) == {}
+    assert w.cash_calls == [(ACC, 100.5)]
+    assert reason in caplog.text and "account dividends not imported" in caplog.text
+
+
+@pytest.mark.parametrize("field", ["accountId", "conid", "currency", "actionID", "exDate",
+                                   "quantity", "code", "date", "payDate", "reportDate"])
+def test_dividend_structured_input_all_relevant_attributes_required(monkeypatch, field):
+    w = World(monkeypatch, structured_input_xml("missing", field))
+    assert w.run()[1] is True
+    assert [a["type"] for a in w.activities] == ["BUY"]
+
+
+@pytest.mark.parametrize("mode,field,reason", [
+    ("blank", "quantity", "incompatible structured quantity"),
+    ("blank", "actionID", "missing accrual association keys"),
+    ("payment_blank", "actionID", "missing payment association keys"),
+    ("conflict", "quantity", "contradictory structured quantities"),
+    ("short", "quantity", "missing or contradictory payment reversal evidence"),
+])
+def test_dividend_structured_input_local_rejection(monkeypatch, caplog, mode, field, reason):
+    w = World(monkeypatch, structured_input_xml(mode, field))
+    assert w.run()[1] is True
+    assert [a["type"] for a in w.activities] == ["BUY", "DIVIDEND"]
+    assert w.comments == {(ACC, f"dividend#{ISIN_PEP}#2026-07-15")}
+    assert w.cash_calls == [(ACC, 100.5)] and reason in caplog.text
+
+
+@pytest.mark.parametrize("field", ["accountId", "conid", "currency", "actionID", "exDate"])
+def test_dividend_structured_input_nonempty_mismatch_excludes_unrelated(monkeypatch, field):
+    w = World(monkeypatch, structured_input_xml("unrelated", field))
+    assert w.run()[1] is True
+    assert [a["type"] for a in w.activities] == ["BUY", "DIVIDEND", "DIVIDEND"]
+
+
+@pytest.mark.parametrize("mode", ["old", "missing", "conflict", "blank"])
+@pytest.mark.parametrize("dedup", ["comment", "legacy", "proximity"])
+def test_dividend_structured_input_dedup_before_evidence(monkeypatch, caplog, mode, dedup):
+    root = ET.fromstring(structured_input_xml(mode))
+    # Keep only the invalid KO payment, so no new candidate requires schema.
+    root.find(".//CashTransactions").remove(root.findall(".//CashTransaction")[1])
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    pos = positions()
+    comments = set()
+    if dedup == "proximity":
+        pos["dividend_dates"][(ACC, "KO")].append("2026-07-17")
+    else:
+        key = ISIN_KO if dedup == "comment" else "KO"
+        comments.add((ACC, f"dividend#{key}#2026-07-15"))
+    monkeypatch.setattr(m, "dividend_structured_quantity", lambda div: pytest.fail("dedup must run first"))
+    assert w.run(comments=comments, pos=pos)[1] is True
+    assert [a["type"] for a in w.activities] == ["BUY"]
+    assert "Incompatible dividend input" not in caplog.text
+
+
+def test_dividend_structured_input_empty_evidence_and_retry(monkeypatch, caplog):
+    w = World(monkeypatch, structured_input_xml("empty"))
+    assert w.run()[1] is True
+    assert w.comments == set() and "missing structured quantity evidence" in caplog.text
+    ids, comments, pos = w.ids, w.comments, w.pos
+    monkeypatch.setattr(m, "fetch_flex_report", w._fetch(structured_input_xml()))
+    w.imported.clear()
+    assert w.run(ids=ids, comments=comments, pos=pos)[1] is True
+    assert [a["type"] for a in w.activities] == ["DIVIDEND", "DIVIDEND"]
+    assert len(w.comments) == 2
+
+
+@pytest.mark.parametrize("section", [True, False])
+def test_dividend_structured_input_no_payments_is_valid(monkeypatch, section):
+    root = ET.fromstring(report(trade_xml("EMPTY-T")))
+    if not section:
+        root.find(".//FlexStatement").remove(root.find(".//ChangeInDividendAccruals"))
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    assert w.run()[1] is True
+    assert [a["type"] for a in w.activities] == ["BUY"]
+
+
+def test_dividend_structured_input_withholding_needs_no_accrual_keys(monkeypatch):
+    root = ET.fromstring(report(divs=div_xml()))
+    ET.SubElement(root.find(".//CashTransactions"), "CashTransaction", {
+        "type": "Withholding Tax", "amount": "-5", "dateTime": "20260715",
+        "isin": ISIN_KO, "symbol": "KO", "currency": "USD"})
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    assert w.run()[1] is True
+    assert w.activities[0]["fee"] == 5
