@@ -46,7 +46,8 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   implements one task per session, not every task until done. Change names are
   lowercase kebab-case; stop before any shell command if a selected change name
   is not, and pass values read from OpenSpec output as quoted arguments, never
-  as shell source.
+  as shell source. Never read or write a path under `openspec/` that is a symlink or resolves
+  outside `openspec/`.
 - **Done = the item's scenario replayed for real** (command and observed output in
   the closing note). Green offline tests alone are not done.
 - **Tests:** offline pytest with synthetic inputs and mocked HTTP for logic changes.
