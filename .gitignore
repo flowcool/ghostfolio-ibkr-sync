@@ -44,7 +44,7 @@ mapping.yaml
 .claude/settings.local.json
 
 # Private local agent guidance; never publish deployment details.
-CLAUDE.md
+CLAUDE.local.md
 .claude/skills/review-pr/SKILL.md
 
 # OS cruft
