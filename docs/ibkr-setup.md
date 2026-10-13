@@ -97,7 +97,7 @@ In the section options, tick only these types: **Dividends**, **Payment In Lieu 
 - Type
 - LevelOfDetail (if listed)
 
-Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. The current connector ignores **Change in Dividend Accruals**; retain it when preparing the enriched query described below.
+Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. **Change in Dividend Accruals** supplies quantity evidence only; include it with the fields below.
 
 > **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or by any dividend of the same symbol in the same account within 3 days, so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
 
@@ -109,9 +109,8 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 
 ### Prepare for structured dividend quantities
 
-This preparation is optional for the current connector. It still infers dividend
-quantities from payment descriptions. An enriched query can supply structured
-quantity evidence for a future version without changing today's conversion.
+Enrich the query before upgrading. Dividend quantities now require structured
+accrual evidence. Description inference and the one-unit fallback are removed.
 
 In **Performance & Reports > Flex Queries**, edit the existing **Activity Flex
 Query** used by the connector:
@@ -133,15 +132,30 @@ replace Cash Transactions as the source of paid gross amounts and withholding.
 Accrual amounts and tax can differ from cash, and `Re` also marks corrections and
 cancellations. Do not import accrual rows directly as dividend payments.
 
-**Future compatibility change:** if a version requires these sections or fields,
-update the query before upgrading the image. Its specification and release notes
-must define required fields, missing/conflicting evidence behavior, and migration
-for existing queries. No such requirement or failure behavior is active yet.
+Required payment keys are `accountId`, `conid`, `currency`, `actionID` and
+`exDate`. Relevant accrual rows require these keys plus `quantity`, `code`,
+`date`, `payDate` and `reportDate`. Withholding rows keep their cash fields;
+they do not need accrual association keys.
 
-Before that upgrade, back up Ghostfolio and record the previous image digest as
-described in [Releasing](releasing.md). Runtime rollback restores that image;
-it does not undo written activities. The extra Flex fields can remain because the
-current connector ignores them. Historical repairs require separate review.
+A missing accrual section or required attribute on a new payment or relevant
+accrual blocks new dividends for that account with an incompatibility warning.
+Trades and cash still run, and these dividend rejections do not change the exit
+code or trigger failure notifications. Present but empty values, missing evidence
+in a short report window, and conflicting quantities reject only the affected
+payment. Rejected payments are not marked imported and can retry after the query
+or report window is corrected. Empty sections without payments are valid.
+Unrelated rows do not block valid payments. Existing dividends are deduplicated
+before evidence checks and remain untouched and unverified.
+
+Before upgrading, back up Ghostfolio with your deployment's backup procedure and
+record the previous image digest as described in [Releasing](releasing.md).
+Keep the existing ENV, credentials and mounted configuration files. Upgrade the
+image only after saving the enriched query. For runtime rollback, restore the
+previous image digest with the same ENV and mounts and recreate the connector.
+The extra Flex fields can remain because the previous runtime ignores them.
+Runtime rollback does not restore financial data or undo written activities.
+Historical repairs require separate operator review; this upgrade does not
+certify previously imported dividend quantities.
 
 ## 3. Multi-account setup
 
