@@ -243,7 +243,7 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
 
 
 @pytest.mark.parametrize("mode", ["old", "missing", "empty", "conflict", "short"])
-def test_dividend_structured_input_rejections_preserve_exit_and_notifications(env, mode):
+def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifications(env, mode):
     from test_orchestration import World, structured_input_xml
 
     w = World(env, structured_input_xml(mode))
@@ -253,6 +253,12 @@ def test_dividend_structured_input_rejections_preserve_exit_and_notifications(en
     assert sent == []
     assert len(w.cash_calls) == 3
     assert any(a["type"] == "BUY" for a in w.activities)
+    dividends = [a for a in w.activities if a["type"] == "DIVIDEND"]
+    if mode in ("old", "missing", "empty"):
+        assert dividends == []
+    else:
+        # Local rejections keep the other security's valid payment importable.
+        assert len(dividends) == 1 and dividends[0]["symbol"] == "PEP"
 
 
 def test_dividend_structured_input_other_failures_still_notify(env):

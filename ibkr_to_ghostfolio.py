@@ -382,6 +382,7 @@ def parse_cash_dividends(xml_text):
     if next(root.iter("CashTransactions"), None) is None:
         return None
     accruals = [dict(el.attrib) for el in root.iter("ChangeInDividendAccrual")]
+    accrual_section = next(root.iter("ChangeInDividendAccruals"), None) is not None
     groups = {}
     for el in root.iter("CashTransaction"):
         row = el.attrib
@@ -403,7 +404,7 @@ def parse_cash_dividends(xml_text):
             "currency": row.get("currency", ""), "date": date_iso[:10],
             "amount": 0.0, "tax": 0.0, "description": "",
             "payments": [], "cash_rows": [], "accruals": accruals,
-            "accrual_section": next(root.iter("ChangeInDividendAccruals"), None) is not None})
+            "accrual_section": accrual_section})
         group["cash_rows"].append(dict(row))
         if tx_type != WITHHOLDING_CASH_TYPE:
             group["payments"].append(dict(row))
