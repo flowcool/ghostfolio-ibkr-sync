@@ -1,47 +1,57 @@
 # Spec Delta
 
-Commands below are future offline acceptance checks: require selected passing assertions, not empty selections. Inputs SHALL be synthetic; private evidence stays outside Git.
+Future checks SHALL select passing assertions with synthetic inputs/mocked HTTP, never empty selections.
 
 ## MODIFIED Requirements
 
 ### Requirement: Flex selection and conversion
 
-The connector SHALL select Trade children, exclude CASH/OPT, aggregate DETAIL dividend/payments-in-lieu/withholding by security/day, and select BASE_SUMMARY cash. Other cash types/levels and AssetSummary SHALL be ignored. Trade type SHALL be BUY for exact BUY, otherwise SELL. Quantities/prices SHALL be absolute; commission/withholding costs become fees, refunds/rebates clamp to zero. Nonpositive payments SHALL skip.
+The connector SHALL select Trade children, exclude CASH/OPT, aggregate DETAIL dividend/PIL/withholding by security/day, and select BASE_SUMMARY cash. Other cash types/levels and AssetSummary SHALL be ignored. Trade type SHALL be BUY for exact BUY, otherwise SELL. Quantities/prices SHALL be absolute; commission/withholding costs become fees; refunds/rebates clamp to zero. Nonpositive payments SHALL skip.
 
-Dividend rates SHALL be positive finite complete `<CCY> <rate> PER SHARE` tokens, with optional decimals and correctly grouped comma thousands separators, matching payment currency. Unrated PIL SHALL NOT erase usable evidence from unambiguously associated portions.
+Cash Transactions SHALL establish payments, gross and withholding. Conversion SHALL preserve account, currency/minor-unit scaling, cash-day UTC date and comment identity. Description inference and one-unit fallback SHALL be removed.
 
-Ordinary/bonus distributions SHALL derive quantities separately from surviving portion totals/rates, including equal-rate distributions. Their quantities SHALL agree after existing rounding: snap to nearest positive integer only within strictly 1%, then six decimals. Use that common quantity once and derive price from total gross. Derived quantity/price SHALL be positive, finite and representable.
+For each net-positive action, association SHALL require identical nonempty `accountId/conid/currency/actionID/exDate`, one unique `Re` with `payDate` equal to cash day, and `date` OR `reportDate` equal to that day. All associated revisions SHALL agree numerically on one positive finite representable IBKR `quantity`, without rounding/tolerance. `Re` alone SHALL NOT establish payment.
 
-Signed rows SHALL cancel only unique opposite rows matching absolute amount, type, distribution label, currency and rate. Cancelled rates SHALL NOT support replacements. Ambiguous association/cancellation, partial reversals, conflicting rates, incompatible quantities, mixed currencies or missing/unrepresentable evidence SHALL cause quantity 1 with total-derived price and a reasoned WARNING. Results SHALL be row-order independent for unambiguous groups. A reliably inferred one-share result SHALL NOT warn as fallback.
-
-Conversion SHALL preserve gross, withholding, minor-unit scaling, account, currency, UTC date and comment identity. Inferred quantities SHALL NOT certify entitlement. Fallback SHALL remain warning-only under existing outcome/notification rules.
+Dividends/PIL sharing an action SHALL use quantity once. Distinct ordinary/bonus actions SHALL share one quantity, never sum quantities. Zero-net actions SHALL provide no quantity; negative-net actions, mixed currencies or incompatible evidence SHALL reject the group. Results SHALL be row-order independent. Price SHALL be paid gross/quantity, positive/finite/representable, irrespective of accrual amounts, tax or gross rate.
 
 #### Scenario: Selected records
-- **WHEN** Flex rows are parsed/converted
-- **THEN** selection/aggregation applies; London GBP price/fee scale together to GBp.
+- **WHEN** baseline selection/conversion is replayed with enriched fixtures
+- **THEN** selection, gross, fees, scaling, date and identity remain unchanged.
 
 Baseline: README conversion table. Check: `python3 -m pytest -q tests/test_parsing.py tests/test_conversion.py`.
 
-#### Scenario: Rates and portions
-- **WHEN** rates include commas, malformed numbers, currency mismatches, overflow or dividend 20/0.25 plus unrated PIL 5 in either order
-- **THEN** valid evidence derives quantity; that portion group yields quantity 100 and gross 25; unusable evidence falls back without crashing.
+#### Scenario: Quantity association
+- **WHEN** fixtures exercise unrated PIL (3 shares, gross 1.5), quantity 450 versus inferred 451, fractional/one-share quantities, earlier date, late reportDate, incorrect keys/dates, multiple Re, missing/invalid/conflicting quantities or Re without cash
+- **THEN** only exact supported associations yield unchanged IBKR quantities; unsupported groups reject; Re creates no payment.
 
-Check: `python3 -m pytest -v tests/test_parsing.py tests/test_conversion.py -k dividend_forward_rates`.
+Check: `python3 -m pytest -v tests -k dividend_structured_quantity`.
 
-#### Scenario: Components and uncertainty
-- **WHEN** ordinary 25/0.25 accompanies bonus 75/0.75 or 25/0.25; unique reversal/replacement changes ordinary to 30/0.30; or evidence is uncertain
-- **THEN** quantities are 100, gross 100/50/105; uncertainty falls back. One-share, rounding-boundary, fee, identity and scaling assertions pass.
+#### Scenario: Components and money
+- **WHEN** fixtures include split PIL, ordinary/bonus at equal/different rates, unequal quantities, signed zero/negative actions, mixed currencies and differing accrual gross/tax/rate
+- **THEN** valid groups use quantity once and cash totals; invalid groups reject; permutation, accounting and identity assertions pass.
 
-Check: `python3 -m pytest -v tests/test_parsing.py tests/test_conversion.py -k dividend_forward_components`.
+Check: `python3 -m pytest -v tests -k dividend_structured_components`.
 
 ## ADDED Requirements
 
+### Requirement: Enriched dividend input and local rejection
+
+ChangeInDividendAccruals SHALL be mandatory. Required attributes SHALL be association keys on payment/accrual rows, plus `quantity/code/date/payDate/reportDate` on accrual rows. Missing section/attributes SHALL block account dividends; present-but-empty evidence SHALL reject only affected groups. Empty sections without payments SHALL be valid.
+
+Deduplication SHALL precede quantity checks. Existing activities SHALL remain untouched/unverified. Rejections SHALL log distinct incompatibility/missing/contradiction reasons, never mark rejected payments imported, leave trades/cash operating, and SHALL NOT change global success, exit status or notifications.
+
+#### Scenario: Compatibility and isolation
+- **WHEN** old exports, empty sections with/without payments, short-window omissions, rejected groups beside valid entries, and existing dividends with changed quantities are processed
+- **THEN** scope, logs, retries, deduplication and unchanged outcomes are asserted.
+
+Check: `python3 -m pytest -v tests -k dividend_structured_input`.
+
 ### Requirement: Forward dividend upgrade guidance
 
-README SHALL explain inference/fallback, compatibility impact, backup and prior-image-digest rollback. Existing activities and repeated income SHALL NOT be repaired by conversion. Historical dates/identities need explicit provenance; monetary reconciliation tolerances belong to the separate read-only change. Runtime rollback SHALL NOT be presented as financial restoration.
+README/setup SHALL require query enrichment before upgrade, distinguish rejection cases, remove inference compatibility, and explain backup/prior-image-digest rollback without financial restoration. Additional fields SHALL remain compatible with the prior runtime.
 
 #### Scenario: Upgrade inspection
-- **WHEN** operators inspect dividend guidance
-- **THEN** affected inputs, unchanged deployment settings, backup, rollback and historical limits are explicit.
+- **WHEN** guidance is inspected
+- **THEN** preparation, unchanged ENV/mounts and separate historical reconciliation/maintenance are explicit.
 
-Check: `sed -n '/^## How activities are converted/,/^## /p' README.md`.
+Check: `rg -n -A 35 'structured|enrich|rollback' README.md docs/ibkr-setup.md`.

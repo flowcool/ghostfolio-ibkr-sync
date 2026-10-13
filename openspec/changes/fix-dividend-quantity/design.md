@@ -2,24 +2,24 @@
 
 ## Context
 
-Three coherent destination component sets and eight overlapping representations preclude treating quantity correction as historical recovery.
+One account/annual window supports the proposed associations, not universal IBKR semantics.
 
 ## Goals / Non-Goals
 
-Preserve source payment evidence; no destination proof, new journals or service access.
+Preserve payment evidence; no historical certification/persistence.
 
 ## Decisions
 
-Extend `parse_cash_dividends` to retain signed portions/labels. Reuse totals; replace last-description selection with complete currency/rate validation. Unique cancellation precedes inference; reject ambiguous associations.
+Extend `parse_cash_dividends` with signed action totals/accrual revisions; compare decimal quantities before numeric conversion. Remove unreliable description inference.
 
-`convert_dividend_to_activity` reuses rounding, `minor_unit_conversion` and WARNING logging. Ordinary/bonus quantities must agree after rounding; summed rates lose distribution meaning. Shared helpers remain unchanged.
+Reuse `convert_dividend_to_activity`, `minor_unit_conversion` and source totals; derive price from cash.
 
-Acceptance gross/fee arithmetic uses absolute/relative tolerances 1e-12 for floating-point noise, never destination discrepancies. Quantity agreement uses existing rounding.
+In `process_account`, distinguish missing attributes from empty values. Reuse account/comment deduplication and `_dividend_date_matches` before quantity checks. Local rejection logs SHALL NOT affect account outcome/finalization. Other failures remain unchanged. Shared helpers remain unchanged.
 
 ## Risks / Trade-offs
 
-Missing entitlement → label inference, retain fallback. Reversals, mixed currencies and incompatible components were not observed → conservative synthetic coverage. Existing repeated income → separate reconciliation and maintenance decisions; monetary discrepancies retain their existing owner.
+Short windows/quantity revisions → reject/retry. Unobserved accounts/windows require evidence, not relaxed matching.
 
 ## Migration Plan
 
-README identifies stricter interpretation and affected inputs under docs/releasing.md. No mount/configuration migration. Before an authorized upgrade, back up destination data and pin an image version: latest follows main. Restore the recorded prior image digest for runtime rollback; written activities require separate reviewed recovery.
+README/setup SHALL follow docs/releasing.md compatibility notices. Enrich the query, preserve existing sections/settings, back up Ghostfolio, record prior digest, then upgrade. Rollback restores the image; extra fields remain; financial recovery is separate.
