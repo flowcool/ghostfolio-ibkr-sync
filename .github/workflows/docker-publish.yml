@@ -51,6 +51,7 @@ jobs:
         run: pip-audit
 
   container-check:
+    name: container-check (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
