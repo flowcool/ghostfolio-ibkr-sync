@@ -1557,7 +1557,7 @@ def _dividend_date_matches(positions, activity):
     return None
 
 
-ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW"}
+ZERO_DECIMAL_CURRENCIES = {"JPY"}
 
 
 def _historical_currency(currency):

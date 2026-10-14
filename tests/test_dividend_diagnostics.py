@@ -698,4 +698,4 @@ def test_dividend_readable_classes_strongest_class_wins():
     assert classify("USD", [zero], [Decimal("0.001")], [Decimal("0.01")]) == "minimal"
     assert classify("USD", [zero], [Decimal("0.01")], [Decimal("0.5")]) == "other"
     assert classify("USD", [Decimal("1")], [Decimal("0.001")], [zero]) == "quantity"
-    assert classify("KRW", [zero], [Decimal("0.4")], [zero]) == "noise"
+    assert classify("JPY", [zero], [Decimal("0.4")], [zero]) == "noise"
