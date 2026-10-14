@@ -15,6 +15,6 @@ the 3.0 prerequisite policy.
 | [0005](0005-flex-window-and-corporate-actions.md) | 365-day history and no corporate-action processing |
 | [0006](0006-latest-follows-main.md) | Latest image follows stable releases; release-candidate channel |
 | [0007](0007-pinned-degiro-core.md) | Reviewed propagation to the pinned DEGIRO core |
-| [0008](0008-fail-account-on-missing-flex-prerequisite.md) | Account fails before any write when a Flex prerequisite is missing |
+| [0008](0008-fail-account-on-missing-flex-prerequisite.md) | Missing Flex prerequisites fail the account; currency is checked after imports |
 
 [Back to development guidance](../../README.md#development).
