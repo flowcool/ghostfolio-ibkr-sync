@@ -79,3 +79,12 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   authorization envelope. Start each question with `Décision n/N`; anything
   else (new question, spec, contract or code change, action outside the
   envelope) is `HORS CHEMIN`: note it in the item and stop.
+- **Operation items.** An item labelled `operation` acts on real state (host, container,
+  Ghostfolio, IBKR, journal, shared volume).
+  Execute it only from the `Operation plan:` in its design, validated once by
+  the operator: numbered phases, each with exact command, target, expected proof,
+  authorization envelope, stop conditions and rollback. No plan: stop; an
+  offline item labelled `operation-plan` writes it. Live steps run repository
+  code only, versioned and tested, never a `tmp/` script; a missing tool is a
+  code item first. A failed or uncertain step is `HORS CHEMIN`: record the
+  evidence in the item and stop.
