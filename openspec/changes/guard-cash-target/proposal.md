@@ -1,6 +1,6 @@
 ## Why
 
-The cash stage writes IBKR's ending cash into the Ghostfolio account as-is. Two setups give a wrong balance silently: two IBKR accounts mapped to one Ghostfolio account (the last write wins), and a Ghostfolio account whose currency differs from the IBKR base currency (the amount is stored in the wrong currency). The product rule is one IBKR account per Ghostfolio account; nothing enforces it. ADR 0004 says the currencies "must match" but does not enforce it.
+The cash stage writes IBKR's ending cash as-is. Two setups silently give a wrong balance: two IBKR accounts on one Ghostfolio account (last write wins), and a Ghostfolio account currency different from the IBKR base currency. The rule is one IBKR account per Ghostfolio account, and ADR 0004 says currencies "must match"; nothing enforces either.
 
 ## What changes
 
@@ -23,4 +23,4 @@ Source: one saved real Flex report.
 
 - Summing cash from several sources into one target.
 - Currency conversion or a new FX dependency.
-- Real-data reproduction: none exists, accepted by the operator. Proof is offline synthetic tests.
+- Real-data reproduction (none exists, operator accepted); proof is offline synthetic tests.

@@ -2,10 +2,10 @@
 
 ### Requirement: Cash target guard
 
-Configuration SHALL refuse a `GHOST_ACCOUNT_NAMES` list where two entries, after trimming, name the same Ghostfolio account. The error SHALL name the duplicated target, and the run SHALL stop with a non-zero exit before any network call or write. Before a cash write, the IBKR base currency (the `AccountInformation` `currency` attribute) SHALL equal the `currency` of the Ghostfolio account returned by the existing account GET. On a difference the connector SHALL log an error naming both currencies, send no cash PUT, and mark the account failed. An absent base currency SHALL skip the cash update with a warning and not fail the account. Matching currencies SHALL behave as before. Under `DRY_RUN` the GET and the check SHALL still run; no PUT is sent.
+Configuration SHALL refuse a `GHOST_ACCOUNT_NAMES` list where two effective targets, after trimming, are the same; when `GHOST_ACCOUNT_NAMES` is empty the targets are the IBKR account ids. The error SHALL name the duplicated target, and the run SHALL stop with a non-zero exit before any network call or write. Before a cash write, the IBKR base currency (the `AccountInformation` `currency` attribute) SHALL equal the `currency` of the Ghostfolio account returned by the existing account GET. On a difference the connector SHALL log an error naming both currencies, send no cash PUT, and mark the account failed. An absent base currency SHALL log an error naming the missing Flex field, send no cash PUT, and mark the account failed. Matching currencies SHALL behave as before. Under `DRY_RUN` the GET and the check SHALL still run; no PUT is sent.
 
 #### Scenario: Duplicate target refused
-- **WHEN** `.venv/bin/python -m pytest -q tests -k 'cash_target_duplicate'` runs with two IBKR accounts naming one Ghostfolio account
+- **WHEN** `.venv/bin/python -m pytest -q tests -k 'cash_target_duplicate'` runs with two IBKR accounts naming one Ghostfolio account, and with a repeated IBKR id and no names
 - **THEN** configuration fails naming that target; no HTTP call is made.
 
 #### Scenario: Currency mismatch
@@ -18,7 +18,7 @@ Configuration SHALL refuse a `GHOST_ACCOUNT_NAMES` list where two entries, after
 
 #### Scenario: Base currency absent
 - **WHEN** `.venv/bin/python -m pytest -q tests -k 'base_currency_parse'` runs on a report without `AccountInformation` currency
-- **THEN** none is returned; the account warns and skips cash, not failed.
+- **THEN** none is returned; one error names the missing field, no PUT is sent and the account is failed.
 
 ## MODIFIED Requirements
 
