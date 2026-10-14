@@ -72,6 +72,8 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   writes the bead close note and merges when allowed. It never edits code and
   returns only the verdict and the threads that need a code change (global
   Delegation rule).
+  In Claude Code the implementing agent runs this lifecycle itself, without a
+  subagent: a nested PR subagent stops right after creating the PR.
 - **Ask the operator only for:** an IBKR or Ghostfolio fact missing from the spec,
   a run against real services, a Ghostfolio write, a scope change. One question at
   a time, in plain French, with your recommended answer.
