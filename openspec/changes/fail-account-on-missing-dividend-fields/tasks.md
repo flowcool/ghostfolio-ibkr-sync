@@ -5,4 +5,4 @@
 
 ## 2. Setup guide
 
-- [ ] 2.1 In `docs/ibkr-setup.md`, replace the last paragraph (blocks new dividends with a warning) with the account-failure rule and the field-name list. Check: `rg -n -A6 'Required payment keys' docs/ibkr-setup.md`.
+- [x] 2.1 In `docs/ibkr-setup.md`, replace the last paragraph (blocks new dividends with a warning) with the account-failure rule and the field-name list. Check: `rg -n -A6 'Required payment keys' docs/ibkr-setup.md`.
