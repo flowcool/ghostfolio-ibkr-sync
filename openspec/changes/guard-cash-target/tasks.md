@@ -8,5 +8,5 @@
 
 ## 3. Currency guard
 
-- [ ] 3.1 Add `parse_base_currency` (`AccountInformation` `currency`) and extend the `report()` fixture. Check: `.venv/bin/python -m pytest -q tests -k 'base_currency_parse'`.
+- [x] 3.1 Add `parse_base_currency` (`AccountInformation` `currency`) and extend the `report()` fixture. Check: `.venv/bin/python -m pytest -q tests -k 'base_currency_parse'`.
 - [ ] 3.2 Compare currencies in `ghost_update_cash_balance` (error naming both, no PUT, account failed, GET kept under `DRY_RUN`, absent currency: error, no PUT, account failed); update the README. Check: `.venv/bin/python -m pytest -q tests -k 'cash_currency_guard'`.
