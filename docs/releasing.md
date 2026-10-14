@@ -100,7 +100,8 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
    `release-image.yml` runs the same checks and the same single-publication
    guard as for stable, and publishes only `:X.Y.Z-rc.N`.
 2. **Validate.** Validation in production is a separate operator-validated
-   operation. This guide does not describe it. A fix creates a new RC
+   operation. This guide does not describe it. Users can try a candidate with the
+   [user procedure](upgrading-to-3.0.md#try-a-release-candidate). A fix creates a new RC
    (`N + 1`); never replace a published RC tag.
 3. **Promote.** Tag stable `vX.Y.Z` on the same commit as the highest RC, then
    follow [Publish](#publish). Pass `--notes-start-tag <previous stable>` to
