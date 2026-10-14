@@ -1046,7 +1046,7 @@ def test_historical_diagnostic_coherent_dry_run_before_dedup_zero_writes(monkeyp
     assert comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
     assert ids == set()
     if category == "differences":
-        assert "gross_delta" in caplog.text and "dividend-1" in caplog.text
+        assert "Difference (Ghostfolio minus IBKR)" in caplog.text and "dividend-1" in caplog.text
 
 
 def test_historical_diagnostic_coherent_live_pipeline_unchanged(monkeypatch):
@@ -1070,9 +1070,9 @@ def test_historical_diagnostic_report_window_and_unmatched_coverage(monkeypatch,
     monkeypatch.setattr(m, "ghost_find_account_id", lambda *args: ACC)
     for verb in ("post", "put", "patch", "delete"):
         monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.DEBUG)
     assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
-    assert "outside_window" in caplog.text and "older" in caplog.text
+    assert "outside report window" in caplog.text and "older" in caplog.text
     assert "source_groups=1 unmatched_destination=1" in caplog.text
 
 

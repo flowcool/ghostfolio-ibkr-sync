@@ -5,7 +5,7 @@
 
 ## 2. Report text
 
-- [ ] 2.1 Rewrite the finding blocks (plain reason, values, action line, no-write statement, no Python text) and the summary line. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_readable_report'`.
+- [x] 2.1 Rewrite the finding blocks (plain reason, values, action line, no-write statement, no Python text) and the summary line. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_readable_report'`.
 
 ## 3. Real validation
 
