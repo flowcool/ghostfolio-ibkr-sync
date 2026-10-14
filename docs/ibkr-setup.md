@@ -96,8 +96,29 @@ In the section options, tick only these types: **Dividends**, **Payment In Lieu 
 - Amount
 - Type
 - LevelOfDetail (if listed)
+- ConID (Contract ID)
+- ActionID
+- Ex Date
+- Report Date
 
-Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. **Change in Dividend Accruals** supplies quantity evidence only; include it with the fields below.
+ConID, ActionID and Ex Date are mandatory: a report without them fails the account (see [Prepare for structured dividend quantities](#prepare-for-structured-dividend-quantities)).
+
+**Change in Dividend Accruals:**
+
+Mandatory as soon as the report has dividend, payment-in-lieu or withholding cash rows. Select **all available fields**, including:
+
+- ClientAccountID
+- CurrencyPrimary
+- ConID (Contract ID)
+- ActionID
+- Quantity
+- Code
+- Date
+- Ex Date
+- Pay Date
+- Report Date
+
+Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. **Change in Dividend Accruals** supplies quantity evidence only; include it with the fields above.
 
 > **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or by any dividend of the same symbol in the same account within 3 days, so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
 
@@ -105,7 +126,8 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 
    Currency-rate rows are not used by this tool. It does not convert the cash balance or commissions between currencies.
 
-   Set the date format to **YYYYMMDD** and the time format to **HHmmss TimeZone**.
+   Set the date format to **YYYYMMDD** and the time format to **HHmmss TimeZone**,
+   and keep the date/time separator as a semicolon (`;`).
    DETAIL dividend, payment-in-lieu and withholding Cash Transactions must emit
    `dateTime` as `YYYYMMDD;HHmmss TimeZone`, such as `20260115;120000 EST`
    or `20260715;120000 EDT`. A missing or invalid timezone suffix fails that

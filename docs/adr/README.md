@@ -12,7 +12,7 @@ operational guides remain authoritative; revisit these records when behavior cha
 | [0003](0003-additive-imports.md) | Additive activity imports only |
 | [0004](0004-independent-cash-update.md) | Cash updates independent of import success |
 | [0005](0005-flex-window-and-corporate-actions.md) | 365-day history and no corporate-action processing |
-| [0006](0006-latest-follows-main.md) | Latest image follows main |
+| [0006](0006-latest-follows-main.md) | Latest image follows stable releases; release-candidate channel |
 | [0007](0007-pinned-degiro-core.md) | Reviewed propagation to the pinned DEGIRO core |
 
 [Back to development guidance](../../README.md#development).
