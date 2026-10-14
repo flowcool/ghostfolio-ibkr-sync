@@ -518,6 +518,51 @@ def test_flex_fetch_send_request_failure_is_reported(monkeypatch):
         m.fetch_flex_report("TOK", "1")
 
 
+def send_error(code, msg="boom"):
+    code_xml = "" if code is None else f"<ErrorCode>{code}</ErrorCode>"
+    return f"<R><Status>Fail</Status>{code_xml}<ErrorMessage>{msg}</ErrorMessage></R>"
+
+
+RETRY_CODES = ["1001", "1004", "1005", "1006", "1007", "1008", "1009", "1018", "1019", "1021"]
+IMMEDIATE_CODES = ["1003", "1010", "1011", "1012", "1013", "1014", "1015", "1016", "1017", "1020",
+                   None, "9999", "abc"]
+
+
+def test_flex_transient_send_recovery(monkeypatch):
+    urls, sleeps = script_flex(monkeypatch, send_error("1004"), SEND_OK, READY)
+    assert m.fetch_flex_report("TOK", "1") == READY
+    assert sleeps == [60]
+    assert [u[0] for u in urls] == [m.IBKR_SEND_URL, m.IBKR_SEND_URL,
+                                    "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement"]
+    assert urls[2][1] == {"q": "REF1", "t": "TOK", "v": "3"}
+
+
+def test_flex_transient_send_exhaustion(monkeypatch):
+    msg = "Server busy TOK"
+    urls, sleeps = script_flex(monkeypatch, *[send_error("1018", msg)] * 5)
+    with pytest.raises(RuntimeError) as exc:
+        m.fetch_flex_report("TOK", "1")
+    assert "SendRequest failed: Server busy ***" in str(exc.value) and "TOK" not in str(exc.value)
+    assert len(urls) == 5 and all(u[0] == m.IBKR_SEND_URL for u in urls)
+    assert sleeps == [60, 120, 300, 600]
+
+
+@pytest.mark.parametrize("code", RETRY_CODES)
+def test_flex_transient_send_classification_retries(monkeypatch, code):
+    urls, sleeps = script_flex(monkeypatch, send_error(code, "Please try again later"), SEND_OK, READY)
+    assert m.fetch_flex_report("TOK", "1") == READY
+    assert sleeps == [60] and len(urls) == 3
+
+
+@pytest.mark.parametrize("code", IMMEDIATE_CODES)
+def test_flex_transient_send_classification_immediate(monkeypatch, code):
+    # the message advises retrying, but only the ErrorCode may decide
+    urls, sleeps = script_flex(monkeypatch, send_error(code, "Please try again shortly"))
+    with pytest.raises(RuntimeError, match="SendRequest failed: Please try again shortly"):
+        m.fetch_flex_report("TOK", "1")
+    assert len(urls) == 1 and sleeps == []
+
+
 def test_flex_fetch_statement_error_status_is_reported(monkeypatch):
     script_flex(monkeypatch, SEND_OK, "<R><Status>Fail</Status><ErrorCode>1003</ErrorCode>"
                                       "<ErrorMessage>Statement unavailable</ErrorMessage></R>")

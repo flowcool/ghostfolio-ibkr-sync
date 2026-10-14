@@ -432,6 +432,26 @@ docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBU
 
 Look for lines starting with `[DRY RUN]`; when there is nothing to import the log simply says `No new activities to import`. Replace `your-ghostfolio-network` with the Docker network shared with Ghostfolio. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
 
+## Flex retry policy
+
+IBKR sometimes answers the Flex SendRequest step with a transient error. The
+connector retries it by `ErrorCode`, never by message text.
+
+- **Retried:** `1001`, `1004`, `1005`, `1006`, `1007`, `1008`, `1009`, `1018`,
+  `1019`, `1021`.
+- **Fail at once:** `1003`, `1010` to `1017` (including expired or invalid token
+  `1012`/`1015`), `1020`, and any missing or unknown code.
+- **Schedule:** at most five SendRequest attempts, with waits of 60, 120, 300 and
+  600 seconds between them: 18 minutes of scheduled waiting. Network timeouts and
+  connection retries come on top of that.
+- **Exhaustion:** the run fails with the last IBKR message (token redacted), the
+  statement is never requested, and nothing is written.
+
+No ENV change is needed. This is connector policy based on IBKR's
+[Version 3 error table](https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm),
+not a guarantee that IBKR recovers. The GetStatement polling window is unchanged
+by this section.
+
 ## Failure notifications (Apprise)
 
 Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends one
