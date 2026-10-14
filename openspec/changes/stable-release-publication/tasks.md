@@ -2,7 +2,7 @@
 
 ## 1. Native validation
 
-- [ ] 1.1 Move `docker-publish.yml` container checks to native amd64/arm64 runners; retain weekly scans, remove publication, update BUILD guarantees. Verify `gh run view <PR-run-id> --log`: both isolated runtime checks/scans pass, no publishing.
+- [x] 1.1 Move `docker-publish.yml` container checks to native amd64/arm64 runners; retain weekly scans, remove publication, update BUILD guarantees. Verify `gh run view <PR-run-id> --log`: both isolated runtime checks/scans pass, no publishing.
 
 ## 2. Stable publication
 

@@ -2,26 +2,26 @@
 
 Every pull request to `main`, including documentation-only changes, runs Python
 regression tests, an audit of the complete Python CI environment and container builds/scans for
-amd64 and arm64. PR builds never log in to GHCR or publish images. CodeQL
+amd64 and arm64 on native Ubuntu runners. Container runtime checks use synthetic
+inputs with no network access, including a real scheduled tick. Validation runs
+never log in to GHCR or publish images. CodeQL
 analyzes Python independently. Dependency Review rejects newly introduced
 moderate or worse dependency vulnerabilities, including development scope.
 The native CodeQL merge rule rejects new medium or worse security findings
 and error-level findings; a successful analysis alone is insufficient.
 The mandatory checks must pass before merging.
 
-Only `main`, `staging` and `v*` tag refs may publish. `latest` is selected only
-for `refs/heads/main`; a release tag publishes its full and minor versions.
-A tag build first checks that the tag is exactly `vMAJOR.MINOR.PATCH` (no
-pre-release suffix, no leading zeros) and that its commit is on `main`; otherwise
-it fails before login and push, so no misleading image tag is published.
-Manual builds use GitHub's selected ref without a separate checkout override.
-Builds for the same ref are serialized. The Python base is pinned by its
-multiarchitecture digest; Dependabot proposes reviewed Docker digest updates.
-A weekly `main` run pulls that pinned base and rebuilds without cache, so
-package updates available to the build are not hidden by old layers. It does
-not advance the base digest; base-image fixes require merging a digest update.
-Images include provenance and an SBOM. High/critical image vulnerabilities with
-available fixes fail CI; unfixed findings do not block publication.
+`docker-publish.yml` validates main, staging, tag pushes, pull requests and
+manual runs without publishing. Its publication job is removed. Existing GHCR
+images and aliases remain untouched; stable release publication is delivered
+separately. Builds for the same ref are serialized. The Python base is pinned by
+its multiarchitecture digest; Dependabot proposes reviewed Docker digest updates.
+A weekly `main` run pulls that pinned base and rebuilds without cache, then runs
+the same isolated runtime checks and security scans on both native architectures.
+It does not advance the base digest or publish an image; base-image fixes require
+merging a digest update. High/critical image vulnerabilities with available fixes
+fail CI. The supercronic binary is excluded from the blocking scan and remains
+covered by a separate advisory scan that never blocks.
 
 Runtime requirements pin the complete dependency closure. Once enabled for this
 repository, Renovate proposes weekly Python, GitHub Actions and Docker updates

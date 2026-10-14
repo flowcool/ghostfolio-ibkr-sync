@@ -1,4 +1,4 @@
-name: Build and publish Docker image
+name: Validate Docker image
 
 on:
   push:
@@ -11,10 +11,7 @@ on:
   pull_request:
     branches:
       - main
-  # Manual re-trigger of the build on the selected branch. No 'ref' input: the
-  # tags from docker/metadata-action are computed from github.ref, so building a
-  # different checked-out ref would mislabel the image (e.g. publish :latest from
-  # a non-default branch). Push to 'staging' to build :staging.
+  # Manual validation uses the selected ref and never publishes.
   workflow_dispatch:
   schedule:
     - cron: "23 4 * * 1"
@@ -54,15 +51,19 @@ jobs:
         run: pip-audit
 
   container-check:
-    runs-on: ubuntu-latest
+    name: container-check (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Build without publishing
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -79,7 +80,8 @@ jobs:
       - name: Check isolated read-only runtime modes
         run: |
           docker load --input "${{ runner.temp }}/image.tar"
-          bash scripts/check_container_runtime.sh sync-check:ci
+          # Trace the synthetic outputs and scheduled container logs for evidence.
+          bash -x scripts/check_container_runtime.sh sync-check:ci
       # Blocking gate: fixable HIGH/CRITICAL in packages we can act on (base image
       # OS packages, plus our Python layer). The supercronic binary is excluded
       # here because its Go-stdlib CVEs are not fixable by us until upstream ships
@@ -109,83 +111,3 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "0"
-
-  build-and-push:
-    needs: [test, dependency-audit, container-check]
-    if: >-
-      github.event_name != 'pull_request' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging' ||
-       startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0  # git describe needs tags and history
-
-      # A tag that is not vMAJOR.MINOR.PATCH, or not on main, would publish
-      # misleading image tags. Fail before login and push.
-      - name: Validate release tag
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::Tag '$TAG' must look like vMAJOR.MINOR.PATCH (e.g. v2.1.1)"
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::Tag '$TAG' points to a commit that is not on main"
-            exit 1
-          fi
-
-      - name: Compute version
-        id: version
-        run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
-        with:
-          images: ghcr.io/${{ github.repository }}
-          flavor: latest=false
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build and push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          pull: true
-          no-cache: ${{ github.event_name == 'schedule' }}
-          sbom: true
-          provenance: mode=max
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            APP_VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
