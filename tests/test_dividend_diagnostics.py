@@ -493,7 +493,7 @@ def test_historical_diagnostic_actionable_anomaly_block_and_failed_check_counts(
     assert "Dividend to check: uncertain" in text
     assert f"Security: KO (ISIN {ISIN_KO}), dividend date 2026-07-15" in text
     assert "Identity check symbol fail for activity dividend-1: expected KO, found PEP" in text
-    assert "Identity check date fail" in text and "found 2026-07-16" in text
+    assert "Identity check date fail" in text and "UTC date 2026-07-16" in text and "local date" in text
     assert "Ghostfolio: activity dividend-1 (PEP) on 2026-07-16" in text
     assert "quantity 100, gross 25.00 USD, fee 0 USD" in text and "Nothing was written." in text
     assert "failed_checks={'date': 1, 'symbol': 1}" in text

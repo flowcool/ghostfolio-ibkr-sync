@@ -2122,7 +2122,7 @@ READABLE_ACTIONS = {
     "quantity difference": "Compare the quantity in Ghostfolio with the IBKR statement; fix the activity by hand if IBKR is right.",
     "minimal difference, cause unknown": "Check whether IBKR revised the amount after the import; the gap is one minor unit.",
     "amount difference": "Compare the amounts with the IBKR statement; fix the activity by hand if IBKR is right.",
-    "repeated representation": "Keep one representation of this dividend in Ghostfolio; delete the others by hand.",
+    "repeated representation": "Compare each representation with the IBKR statement; delete by hand only the ones confirmed as duplicates.",
     "probable duplicate": "Check whether this row repeats the IBKR dividend; delete it by hand if it does.",
     "possibly missing in Ghostfolio": "Check whether the dividend is missing in Ghostfolio; add it by hand if it is.",
     "uncertain": "Read the reason and compare both sides by hand.",
@@ -2175,7 +2175,8 @@ def format_historical_dividend_finding(finding, account_id):
         if check["status"] != "pass":
             observed = check["observed"]
             if isinstance(observed, dict):
-                observed = observed.get("utc")
+                observed = (f"local date {_plain(observed.get('local'))} "
+                            f"(UTC date {_plain(observed.get('utc'))})")
             lines.append(f"  Identity check {check['check']} {check['status']} for activity "
                          f"{check['activity_id']}: expected {check['expected']}, found {observed}"
                          + (f" ({check['reason']})" if check.get("reason") else ""))
