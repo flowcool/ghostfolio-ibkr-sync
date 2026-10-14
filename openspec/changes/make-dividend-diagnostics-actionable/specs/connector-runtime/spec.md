@@ -41,3 +41,19 @@ Baseline: the v2.5.0 dry run emitted 114 opaque findings. Saved evidence measure
 #### Scenario: Real read-only acceptance
 - **WHEN** the operator-authorized `DRY_RUN=1 LOG_LEVEL=DEBUG .venv/bin/python ibkr_to_ghostfolio.py` runs with the approved real-data ENV and private log capture
 - **THEN** zero financial writes occur, all 44 previously blocked groups reach amount comparison, every remaining anomaly is explainable from the log, and both proximity skips are reconciled with evidence.
+
+## MODIFIED Requirements
+
+### Requirement: Notifications
+
+Configured notifications SHALL send at most one failure/legacy-expiry/forced-preview summary per completed run, without affecting exit status. A run forced into `DRY_RUN` by missing or invalid IANA `TZ` SHALL send that summary even when every account succeeds, and the summary SHALL name the reason. Success/warnings without expiry, operator-chosen simulation and interruptions SHALL send nothing.
+
+#### Scenario: Consolidated outcome
+- **WHEN** accounts finish with failure/expiry
+- **THEN** fixed-code summaries omit identifiers/amounts/secrets; reminders can repeat.
+
+#### Scenario: Forced preview notifies
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_finalize.py -k 'historical_diagnostic_preflight'` runs with absent/invalid `TZ`, valid `TZ`, and operator-set `DRY_RUN`
+- **THEN** the forced preview sends one summary naming the reason even on success; a live run without failure and an operator-chosen `DRY_RUN` send nothing.
+
+Evidence: `python -m pytest -q tests/test_finalize.py tests/test_token_expiry.py -k 'test_several_failed_accounts_make_one_dispatch_after_every_account_ran or test_summary_carries_no_secret_identifier_host_or_amount or test_notification_problems_keep_exit_code_and_account_processing or test_success_notifies_once_after_both_accounts_and_preserves_exit or test_reminder_is_run_local_and_multiple_runs_can_repeat_it or historical_diagnostic_preflight'`.
