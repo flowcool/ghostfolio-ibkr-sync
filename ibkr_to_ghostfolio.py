@@ -1100,7 +1100,7 @@ def ghost_import_activities(config, activities):
     return [], False
 
 
-def ghost_update_cash_balance(config, account_id, balance):
+def ghost_update_cash_balance(config, account_id, balance, base_currency):
     """Update the cash balance on a Ghostfolio account.  Returns True on success.
 
     The GET response carries far more than the update DTO accepts (aggregations,
@@ -1114,11 +1114,16 @@ def ghost_update_cash_balance(config, account_id, balance):
     omitting them preserves the stored values.  For isExcluded that also keeps
     the payload portable: it was a deprecated DTO field up to Ghostfolio 3.38.0
     and removed in 3.39.0, so sending it fails outright on newer instances.
+
+    The balance is the IBKR base-currency figure with no conversion, so the
+    Ghostfolio account must have the same currency: a mismatch, or a report
+    without a base currency, sends no PUT and returns False.  A dry run still
+    does the read-only GET and the check, so the preview matches a live run.
     """
-    if config.get("dry_run"):
-        log.info("[DRY RUN] would set cash balance for account %s to %.2f (no PUT sent)",
-                 account_id, balance)
-        return True
+    if not base_currency:
+        log.error("Cash balance not updated for account %s: the report has no base currency "
+                  "(Account Information CurrencyPrimary missing from the Flex Query)", account_id)
+        return False
     url = f"{config['ghost_host']}/api/v1/account/{account_id}"
     resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=30,
                         allow_redirects=False)
@@ -1126,6 +1131,16 @@ def ghost_update_cash_balance(config, account_id, balance):
         raise RuntimeError(GHOST_REDIRECT_ERROR)
     resp.raise_for_status()
     account_data = resp.json()
+
+    if account_data["currency"] != base_currency:
+        log.error("Cash balance not updated for account %s: IBKR base currency %s differs "
+                  "from Ghostfolio account currency %s", account_id, base_currency,
+                  account_data["currency"])
+        return False
+    if config.get("dry_run"):
+        log.info("[DRY RUN] would set cash balance for account %s to %.2f (no PUT sent)",
+                 account_id, balance)
+        return True
 
     payload = {
         "balance": balance,
@@ -2476,7 +2491,8 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     try:
         cash_balance = parse_cash_report(xml_text)
         if cash_balance is not None:
-            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance):
+            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance,
+                                         parse_base_currency(xml_text)):
                 ok = False
         else:
             log.warning("No BASE_SUMMARY cash balance found in report")

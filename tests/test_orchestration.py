@@ -92,7 +92,7 @@ class World:
         self.imported.append(list(acts))
         return (list(acts), True) if self.import_ok else ([], False)
 
-    def _cash(self, cfg, acc, balance):
+    def _cash(self, cfg, acc, balance, base_currency):
         if isinstance(self.cash_ok, Exception):
             raise self.cash_ok
         self.cash_calls.append((acc, balance))
@@ -384,7 +384,7 @@ def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, 
     env.setattr(m, "fetch_flex_report", lambda token, qid, *a, **k: fetched.append(qid) or report(trade_xml("T1")))
     env.setattr(m, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
     env.setattr(m, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
-    env.setattr(m, "ghost_update_cash_balance", lambda cfg, acc, bal: cash.append(acc) or True)
+    env.setattr(m, "ghost_update_cash_balance", lambda cfg, acc, bal, cur: cash.append(acc) or True)
     real = m.convert_trade_to_activity
     calls = []
     def flaky(*a, **k):
@@ -714,8 +714,13 @@ def test_ibkr_get_rejects_redirects_without_following_them(monkeypatch):
 
 # --- end to end through the real functions ------------------------------------
 
-class ForbiddenHttp:
-    """requests stand-in that fails the test on any Ghostfolio call."""
+class ReadOnlyHttp:
+    """requests stand-in: only the cash step's account GET is allowed; any other call fails the test."""
+    def get(self, url, **k):
+        assert url.endswith(f"/api/v1/account/{ACC}")
+        return type("R", (), {"status_code": 200, "raise_for_status": lambda self: None,
+                              "json": lambda self: {"currency": "USD", "name": "IBKR"}})()
+
     def __getattr__(self, name):
         def call(*a, **k):
             pytest.fail(f"unexpected HTTP {name} in dry run")
@@ -723,10 +728,10 @@ class ForbiddenHttp:
 
 
 def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch):
-    # real ghost_import_activities / ghost_update_cash_balance, HTTP forbidden
+    # real ghost_import_activities / ghost_update_cash_balance, only the account GET allowed
     monkeypatch.setattr(m, "fetch_flex_report", lambda *a, **k: report(trade_xml("T1"), div_xml()))
     monkeypatch.setattr(m, "ghost_find_account_id", lambda *a: ACC)
-    monkeypatch.setattr(m, "requests", ForbiddenHttp())
+    monkeypatch.setattr(m, "requests", ReadOnlyHttp())
     ids, comments, pos = set(), set(), positions()
     _, ok = m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
     assert ok is True and ids == {"T1"} and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
@@ -1088,6 +1093,7 @@ def test_historical_diagnostic_coherent_dry_run_before_dedup_zero_writes(monkeyp
     for verb in ("post", "put", "patch", "delete"):
         monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.INFO)
+    monkeypatch.setattr(m, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
     assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
     assert category in caplog.text
     assert "Historical dividends" in caplog.text
@@ -1120,6 +1126,7 @@ def test_historical_diagnostic_report_window_and_unmatched_coverage(monkeypatch,
     for verb in ("post", "put", "patch", "delete"):
         monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(m, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
     assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
     assert "outside report window" in caplog.text and "older" in caplog.text
     assert "source_groups=1 unmatched_destination=1" in caplog.text
@@ -1146,6 +1153,7 @@ def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monk
     for verb in ("post", "put", "patch", "delete"):
         monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.INFO)
+    monkeypatch.setattr(m, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
     assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, ids, comments, pos) == ({}, True)
     warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
     assert len(warnings) == (0 if existing else 1)
