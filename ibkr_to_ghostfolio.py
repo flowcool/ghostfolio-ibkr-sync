@@ -2072,6 +2072,9 @@ def classify_dividend_findings(findings):
             if context and context["source"] and _historical_currency(context["source"]) is None:
                 result = _readable_set("unsupported currency", "information", finding["reason"])
             elif (len(destination) > 1 and "source_gross" in finding and all(values)
+                  and not any(check["status"] == "fail" for check in finding.get("identity_checks", []))
+                  and finding["reason"] not in ("contested destination ownership",
+                                                "duplicate destination activity identity")
                   and {v[2] for v in values} == {finding["source_currency"]}
                   and sum(v[0] for v in values) == finding["source_gross"]
                   and sum(v[1] for v in values) == finding["source_fee"]):

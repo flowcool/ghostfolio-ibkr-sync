@@ -779,3 +779,10 @@ def test_dividend_readable_pairs_other_classes_and_catch_all(monkeypatch):
     assert far["readable"]["label"] == "quantity difference"
     noise = readable(monkeypatch, [destination(unitPrice=0.250001)])[0]
     assert noise["readable"]["class"] == "noise"
+
+
+def test_dividend_readable_pairs_equal_total_needs_accepted_identity(monkeypatch):
+    rows = [destination(id=f"dividend-{i}", unitPrice=0.125, isDraft=True) for i in (1, 2)]
+    finding = readable(monkeypatch, rows)[0]
+    assert finding["category"] == "uncertain"
+    assert finding["readable"]["class"] == "to_check" and finding["readable"]["label"] == "uncertain"
