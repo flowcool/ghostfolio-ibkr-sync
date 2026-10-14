@@ -542,3 +542,31 @@ def test_historical_diagnostic_actionable_levels_and_privacy(monkeypatch, caplog
     m.log_historical_dividend_comparison(coherent, ACC)
     assert "category=coherent_single" in caplog.text
     assert CFG["ghost_host"] not in caplog.text
+
+
+def test_historical_diagnostic_actionable_proximity_lists_every_weak_candidate_with_local_date(monkeypatch):
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    rows = [destination(id="near-1", comment="legacy", date="2026-07-16T22:00:00Z"),
+            destination(id="near-2", comment="legacy", date="2026-07-18T00:00:00Z"),
+            destination(id="far", comment="legacy", date="2026-07-25T00:00:00Z")]
+    proximity = comparison(monkeypatch, rows)[0]["proximity"]
+    assert [item["activity_id"] for item in proximity["candidates"]] == ["near-1", "near-2"]
+    assert proximity["candidates"][0]["utc_date"] == "2026-07-16"
+    assert proximity["candidates"][0]["local_date"] == "2026-07-17"
+
+
+def test_historical_diagnostic_actionable_source_values_survive_failed_identity(monkeypatch):
+    profile = {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO", "currency": "USD"}
+    finding = comparison(monkeypatch, [destination(assetProfile=profile)])[0]
+    assert finding["category"] == "uncertain"
+    assert (finding["source_quantity"], finding["source_gross"], finding["source_fee"],
+            finding["source_currency"]) == (Decimal(100), Decimal("25.00"), Decimal(0), "USD")
+    text = m.format_historical_dividend_finding(finding, ACC)
+    assert "source values: quantity=100 gross=25.00 fee=0 currency=USD" in text
+
+
+def test_historical_diagnostic_actionable_destination_before_duplicate_identity_early_return(monkeypatch):
+    finding = comparison(monkeypatch, [destination(id="dup"), destination(id="dup")])[0]
+    assert finding["reason"] == "duplicate destination activity identity"
+    assert [item["activity_id"] for item in finding["destination"]] == ["dup", "dup"]
+    assert all(item["utc_date"] == "2026-07-15" for item in finding["destination"])

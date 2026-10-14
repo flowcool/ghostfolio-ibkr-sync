@@ -1658,13 +1658,33 @@ def _historical_destination(item, checks=None):
         try:
             instant = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
             if instant.tzinfo is not None:
-                dates = {"utc": instant.astimezone(timezone.utc).date().isoformat(), "local": None}
+                local = None
+                if timezone_preview_reason() is None:
+                    local = instant.astimezone(ZoneInfo(os.environ.get("TZ", "").strip())).date().isoformat()
+                dates = {"utc": instant.astimezone(timezone.utc).date().isoformat(), "local": local}
         except (ValueError, TypeError, AttributeError):
             pass
     values, reason = _historical_values(item)
     return {"activity_id": row.get("id"), "symbol": profile.get("symbol"), "isin": profile.get("isin") or None,
             "utc_date": dates["utc"], "local_date": dates["local"],
             "values": values if values is not None else {"unavailable": reason}}
+
+
+def _historical_source_values(dividend):
+    """Source-only quantity/gross/fee, available whatever the identity checks say."""
+    unit = _historical_currency(dividend.get("currency"))
+    gross = _dividend_cash_sum(dividend["payments"])
+    tax = _dividend_cash_sum([row for row in dividend.get("cash_rows", [])
+                              if row.get("type") == WITHHOLDING_CASH_TYPE])
+    if unit is None or gross is None or tax is None:
+        return {}
+    quantity = (dividend_structured_quantity(dividend, quiet=True)
+                if dividend_input_compatible([dividend], quiet=True) else None)
+    try:
+        return {"source_quantity": quantity, "source_gross": gross * unit[1],
+                "source_fee": max(Decimal(0), tax.copy_negate()) * unit[1], "source_currency": unit[0]}
+    except DecimalException:
+        return {}
 
 
 def _historical_proximity(positions, account_id, evidence, symbol, dividend):
@@ -1674,6 +1694,7 @@ def _historical_proximity(positions, account_id, evidence, symbol, dividend):
     """
     if not symbol:
         return None
+    source_day = datetime.strptime(dividend["date"], "%Y-%m-%d")
     matched = _dividend_date_matches(positions, {"accountId": account_id, "symbol": symbol,
                                                  "date": f"{dividend['date']}T00:00:00+00:00"})
     if not matched:
@@ -1682,8 +1703,14 @@ def _historical_proximity(positions, account_id, evidence, symbol, dividend):
     for item in evidence:
         row = item["activity"]
         profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
-        if (item["active"] and profile.get("dataSource") == "YAHOO" and profile.get("symbol") == symbol
-                and (row.get("date") or "")[:10] == matched):
+        if not (item["active"] and profile.get("dataSource") == "YAHOO" and profile.get("symbol") == symbol
+                and row.get("accountId") == account_id):
+            continue
+        try:
+            near = abs((datetime.strptime((row.get("date") or "")[:10], "%Y-%m-%d") - source_day).days)
+        except ValueError:
+            continue
+        if near <= DIVIDEND_MATCH_DAYS:
             candidates.append({**_historical_destination(item), "comment": row.get("comment") or None})
     return {"matched_date": matched, "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates}
 
@@ -1717,7 +1744,7 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         finding = {"source": reference, "activity_ids": [item["activity"].get("id") for item in candidates],
                    "category": "uncertain", "reason": "destination identity not proven",
                    "security": {"symbol": symbol, "isin": dividend["isin"] or None},
-                   "source_date": dividend["date"]}
+                   "source_date": dividend["date"], **_historical_source_values(dividend)}
         findings.append(finding)
         if not candidates:
             finding["category"] = "absent"
@@ -1728,15 +1755,15 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
                 finding["reason"] += "; skipped by proximity (non-certifying)"
             continue
         claimed.update(item["index"] for item in candidates)
+        checks = [check for item in candidates for check in _historical_identity_checks(item, dividend, symbol)]
+        finding["identity_checks"] = checks
+        finding["destination"] = [_historical_destination(item, checks) for item in candidates]
         if any(len(owners[item["activity"].get("id")]) != 1 for item in candidates):
             finding["reason"] = "contested destination ownership"
             continue
         if len({item["activity"].get("id") for item in candidates}) != len(candidates):
             finding["reason"] = "duplicate destination activity identity"
             continue
-        checks = [check for item in candidates for check in _historical_identity_checks(item, dividend, symbol)]
-        finding["identity_checks"] = checks
-        finding["destination"] = [_historical_destination(item, checks) for item in candidates]
         valid = not any(check["status"] == "fail" for check in checks)
         if not valid:
             finding["reason"] = "inactive, unsupported or conflicting security/date identity"
@@ -1868,7 +1895,8 @@ def format_historical_dividend_finding(finding, account_id):
                      f"isin={security['isin']} source_date={finding['source_date']}")
         if "source_gross" in finding:
             lines.append(f"  source values: quantity={finding['source_quantity']} "
-                         f"gross={finding['source_gross']} fee={finding['source_fee']}")
+                         f"gross={finding['source_gross']} fee={finding['source_fee']} "
+                         f"currency={finding['source_currency']}")
     else:
         lines.append("  source: none (destination outside proven source coverage)")
     lines.append(f"  reason: {finding['reason']}")
@@ -1891,7 +1919,8 @@ def format_historical_dividend_finding(finding, account_id):
                      "not certify identity")
         for item in proximity["candidates"]:
             lines.append(f"    weak candidate: id={item['activity_id']} comment={item['comment']} "
-                         f"utc_date={item['utc_date']} " + _historical_money(item["values"]))
+                         f"utc_date={item['utc_date']} local_date={item['local_date']} "
+                         + _historical_money(item["values"]))
     return "\n".join(lines)
 
 
