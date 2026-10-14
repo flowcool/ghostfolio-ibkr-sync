@@ -421,3 +421,29 @@ def test_dividend_structured_numeric_decimal_conflict_between_components():
                                     [structured_accrual("100"),
                                      structured_accrual("100.000000000000000000000001", action="bonus")])
     assert m.dividend_structured_quantity(dividend) is None
+
+
+# --- parse_base_currency --------------------------------------------------
+
+def _info_xml(info):
+    return f"<FlexQueryResponse><FlexStatements><FlexStatement>{info}</FlexStatement></FlexStatements></FlexQueryResponse>"
+
+
+def test_base_currency_parse_reads_account_information():
+    assert m.parse_base_currency(_info_xml('<AccountInformation accountId="a" currency="EUR"/>')) == "EUR"
+
+
+@pytest.mark.parametrize("info", [
+    "",
+    '<AccountInformation accountId="a"/>',
+    '<AccountInformation accountId="a" currency=""/>',
+    '<AccountInformation accountId="a" currency="  "/>',
+])
+def test_base_currency_parse_absent_is_none(info):
+    assert m.parse_base_currency(_info_xml(info)) is None
+
+
+def test_base_currency_parse_report_fixture():
+    from test_orchestration import report
+    assert m.parse_base_currency(report()) == "USD"
+    assert m.parse_base_currency(report(base_currency=None)) is None

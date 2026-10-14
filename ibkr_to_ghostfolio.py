@@ -388,6 +388,21 @@ def parse_cash_report(xml_text):
     return None
 
 
+def parse_base_currency(xml_text):
+    """Return the account base currency code from a Flex Query XML.
+
+    Structure: FlexQueryResponse > FlexStatements > FlexStatement > AccountInformation
+    Reads the currency attribute of the first AccountInformation entry.
+    Returns a string, or None if the entry or the attribute is absent or empty.
+    """
+    root = ET.fromstring(xml_text)
+    for entry in root.iter("AccountInformation"):
+        currency = entry.attrib.get("currency", "").strip()
+        if currency:
+            return currency
+    return None
+
+
 def parse_cash_dividends(xml_text):
     """Parse dividend payments from the Cash Transactions section.
 
