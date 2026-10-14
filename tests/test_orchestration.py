@@ -30,7 +30,13 @@ def trade_xml(tid, side="BUY", qty=10, symbol="KO", isin=ISIN_KO, date="20260801
     return "<Trade " + " ".join(f'{k}="{v}"' for k, v in attrs.items()) + "/>"
 
 
+def flex_datetime(date):
+    """Cash rows carry the mandatory Flex form YYYYMMDD;HHmmss TimeZone."""
+    return date if ";" in date else f"{date};120000 EST"
+
+
 def div_xml(amount="25.00", date="20260715", isin=ISIN_KO, symbol="KO"):
+    date = flex_datetime(date)
     return (f'<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="{amount}" dateTime="{date}" '
             'accountId="broker-account" conid="1" actionID="A1" exDate="20260701" '
             f'isin="{isin}" symbol="{symbol}" currency="USD" description="X CASH DIVIDEND USD 0.25 PER SHARE"/>')
@@ -46,8 +52,8 @@ def report(trades="", divs="", cash="100.5", cash_section=True):
         if row.get("type") != "Dividends":
             continue
         attrs = {key: row.get(key, "") for key in ("accountId", "conid", "currency", "actionID", "exDate")}
-        attrs.update(quantity="100", code="Re", payDate=row.get("dateTime"),
-                     date=row.get("dateTime"), reportDate=row.get("dateTime"))
+        attrs.update(quantity="100", code="Re", payDate=row.get("dateTime", "")[:8],
+                     date=row.get("dateTime", "")[:8], reportDate=row.get("dateTime", "")[:8])
         accruals.append(ET.tostring(ET.Element("ChangeInDividendAccrual", attrs), encoding="unicode"))
     evidence = "<ChangeInDividendAccruals>" + "".join(accruals) + "</ChangeInDividendAccruals>"
     return (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trades}</Trades>{ct}{cash_xml}{evidence}"
@@ -957,7 +963,7 @@ def test_dividend_structured_input_no_payments_is_valid(monkeypatch, section):
 def test_dividend_structured_input_withholding_needs_no_accrual_keys(monkeypatch):
     root = ET.fromstring(report(divs=div_xml()))
     ET.SubElement(root.find(".//CashTransactions"), "CashTransaction", {
-        "type": "Withholding Tax", "amount": "-5", "dateTime": "20260715",
+        "type": "Withholding Tax", "amount": "-5", "dateTime": "20260715;120000 EST",
         "isin": ISIN_KO, "symbol": "KO", "currency": "USD"})
     w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
     assert w.run()[1] is True
@@ -1038,3 +1044,52 @@ def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monk
         assert "uncertain" in caplog.text and "not imported" not in caplog.text
     else:
         assert "not imported" in caplog.text
+
+
+# --- Flex provenance: mandatory "YYYYMMDD;HHmmss TimeZone" on cash rows ------------
+
+def _cash_row(type_, date_time, **extra):
+    attrs = {"type": type_, "levelOfDetail": "DETAIL", "amount": "25" if type_ != "Withholding Tax" else "-5",
+             "isin": ISIN_KO, "symbol": "KO", "currency": "USD", "description": "X"}
+    if date_time is not None:
+        attrs["dateTime"] = date_time
+    attrs.update(extra)
+    return "<CashTransaction " + " ".join(f'{k}="{v}"' for k, v in attrs.items()) + "/>"
+
+
+@pytest.mark.parametrize("type_", ["Dividends", "Payment In Lieu Of Dividends", "Withholding Tax"])
+@pytest.mark.parametrize("bad", [None, "", "20260715", "20260715;120000", "20260715;120000 ", "20260715;120000 E S T",
+                                 "20260715;120000 EST5EDT1", "20261301;120000 EST", "20260715;256100 EST", "20260715 120000 EST"])
+def test_historical_diagnostic_preflight_bad_suffix_fails_account_before_any_write(monkeypatch, type_, bad):
+    xml = report(trades=trade_xml("T1"), divs=_cash_row(type_, bad))
+    w = World(monkeypatch, xml)
+    assert w.run() == ({}, False)
+    assert w.imported == [] and w.cash_calls == []
+    assert CFG.get("dry_run") is not True
+
+
+@pytest.mark.parametrize("type_", ["Dividends", "Payment In Lieu Of Dividends", "Withholding Tax"])
+def test_historical_diagnostic_preflight_valid_suffix_is_accepted(type_):
+    xml = report(divs=_cash_row(type_, "20260715;120000 EDT"))
+    assert m.flex_provenance_failures(xml) == {}
+
+
+def test_historical_diagnostic_preflight_other_cash_types_and_summary_rows_are_exempt():
+    xml = report(divs=_cash_row("Deposits/Withdrawals", "20260715")
+                 + _cash_row("Dividends", "20260715", levelOfDetail="SUMMARY"))
+    assert m.flex_provenance_failures(xml) == {}
+
+
+def test_historical_diagnostic_preflight_failure_counts_per_type():
+    xml = report(divs=_cash_row("Dividends", "20260715") + _cash_row("Dividends", None)
+                 + _cash_row("Withholding Tax", "20260715;120000 EST")
+                 + _cash_row("Payment In Lieu Of Dividends", "x"))
+    assert m.flex_provenance_failures(xml) == {"Dividends": 2, "Payment In Lieu Of Dividends": 1}
+
+
+def test_historical_diagnostic_preflight_bad_suffix_does_not_enable_dry_run_and_other_accounts_run(monkeypatch):
+    bad = World(monkeypatch, report(trades=trade_xml("T1"), divs=_cash_row("Dividends", "20260715")))
+    assert bad.run() == ({}, False)
+    good = World(monkeypatch, report(trades=trade_xml("T1"), divs=div_xml()))
+    good_result = good.run()
+    assert good_result[1] is True and good.imported and good.cash_calls
