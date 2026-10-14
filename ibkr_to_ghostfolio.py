@@ -244,6 +244,11 @@ def resolve_symbol(isin, ibkr_symbol, mapping):
 # ---------------------------------------------------------------------------
 
 IBKR_NETWORK_RETRY_DELAYS = (10, 30)
+# SendRequest ErrorCodes that IBKR's Flex v3 error table advises retrying; every
+# other code (including missing or unknown) fails at once. Classified by code only.
+IBKR_SEND_RETRY_CODES = frozenset(
+    {"1001", "1004", "1005", "1006", "1007", "1008", "1009", "1018", "1019", "1021"})
+IBKR_SEND_RETRY_DELAYS = (60, 120, 300, 600)
 
 
 def _ibkr_get(url, params, timeout):
@@ -287,16 +292,22 @@ def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
     """Fetch a Flex Query report from IBKR (two-step process)."""
     log.debug("Requesting Flex Query %s from IBKR...", query_id)
 
-    # Step 1 - send request
-    resp = _ibkr_get(IBKR_SEND_URL, {"t": token, "q": query_id, "v": "3"}, timeout=30)
-    if len(resp.content) > IBKR_MAX_XML_BYTES:
-        raise RuntimeError("IBKR Flex response exceeds XML size limit")
-    root = ET.fromstring(resp.text)
-
-    status = root.findtext("Status")
-    if status != "Success":
-        error_msg = root.findtext("ErrorMessage", "unknown error")
-        raise RuntimeError(f"IBKR SendRequest failed: {error_msg}")
+    # Step 1 - send request, retrying only ErrorCodes IBKR documents as transient
+    for attempt in range(len(IBKR_SEND_RETRY_DELAYS) + 1):
+        resp = _ibkr_get(IBKR_SEND_URL, {"t": token, "q": query_id, "v": "3"}, timeout=30)
+        if len(resp.content) > IBKR_MAX_XML_BYTES:
+            raise RuntimeError("IBKR Flex response exceeds XML size limit")
+        root = ET.fromstring(resp.text)
+        if root.findtext("Status") == "Success":
+            break
+        error_msg = _redact(root.findtext("ErrorMessage", "unknown error"), token)
+        error_code = (root.findtext("ErrorCode") or "").strip()
+        if error_code not in IBKR_SEND_RETRY_CODES or attempt == len(IBKR_SEND_RETRY_DELAYS):
+            raise RuntimeError(f"IBKR SendRequest failed: {error_msg}")
+        delay = IBKR_SEND_RETRY_DELAYS[attempt]
+        log.warning("IBKR SendRequest error %s (attempt %d/%d), retrying in %ds: %s",
+                    error_code, attempt + 1, len(IBKR_SEND_RETRY_DELAYS) + 1, delay, error_msg)
+        time.sleep(delay)
 
     ref_code = root.findtext("ReferenceCode")
     base_url = root.findtext("Url")
