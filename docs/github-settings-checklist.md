@@ -24,6 +24,10 @@ Chemin général : dépôt > **Settings**.
 - [ ] *Require status checks* : `test`, `dependency-audit`,
       `container-check (amd64)`, `container-check (arm64)`, `analyze` (CodeQL),
       `dependency-review`. **Ne pas** y mettre `label` : il est consultatif.
+      *Require branches to be up to date before merging* reste **décoché** :
+      avec plusieurs PR en parallèle, il force une mise à jour et une nouvelle
+      revue après chaque fusion. La CI qui tourne sur `main` après chaque
+      fusion détecte un conflit entre deux PR.
 - [ ] **General > Pull Requests** : seul *Allow merge commits* est coché
       (squash et rebase décochés), *Automatically delete head branches* coché.
 
