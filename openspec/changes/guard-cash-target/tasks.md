@@ -4,7 +4,7 @@
 
 ## 2. Duplicate target
 
-- [ ] 2.1 Refuse a duplicated effective target in `load_config` (names, or IBKR ids when names are empty), naming the target; offline tests cover duplicate names, a repeated id without names, and distinct targets. Check: `.venv/bin/python -m pytest -q tests -k 'cash_target_duplicate'`.
+- [x] 2.1 Refuse a duplicated effective target in `load_config` (names, or IBKR ids when names are empty), naming the target; offline tests cover duplicate names, a repeated id without names, and distinct targets. Check: `.venv/bin/python -m pytest -q tests -k 'cash_target_duplicate'`.
 
 ## 3. Currency guard
 
