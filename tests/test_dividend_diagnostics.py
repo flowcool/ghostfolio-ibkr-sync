@@ -699,3 +699,83 @@ def test_dividend_readable_classes_strongest_class_wins():
     assert classify("USD", [zero], [Decimal("0.01")], [Decimal("0.5")]) == "other"
     assert classify("USD", [Decimal("1")], [Decimal("0.001")], [zero]) == "quantity"
     assert classify("JPY", [zero], [Decimal("0.4")], [zero]) == "noise"
+
+
+def readable(monkeypatch, rows, comments=(), xml=None):
+    _, _, positions = read(monkeypatch, rows)
+    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
+    return m.historical_dividend_comparison(source, ACC, {}, positions, existing_dividend_comments=set(comments))
+
+
+def test_dividend_readable_pairs_probable_duplicate(monkeypatch):
+    group = destination(unitPrice=0.2501)
+    twin = destination(id="dividend-2", comment="legacy KO dividend", quantity=50, unitPrice=0.25)
+    findings = readable(monkeypatch, [group, twin])
+    by_source = {f["source"] is None: f for f in findings}
+    assert by_source[False]["readable"]["label"] == "minimal difference, cause unknown"
+    assert by_source[False]["readable"]["related"] == ["dividend-2"]
+    legacy = by_source[True]
+    assert legacy["category"] == "uncertain"
+    assert legacy["readable"]["class"] == "to_check" and legacy["readable"]["label"] == "probable duplicate"
+
+
+def test_dividend_readable_pairs_legacy_row_of_another_day_is_not_duplicate(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", date="2026-07-16T00:00:00Z")
+    findings = readable(monkeypatch, [destination(), twin])
+    legacy = [f for f in findings if f["source"] is None][0]
+    assert legacy["readable"]["label"] == "uncertain" and legacy["readable"]["class"] == "to_check"
+
+
+@pytest.mark.parametrize("prices,klass", [((0.125, 0.125), "information"), ((0.125, 0.126), "to_check")])
+def test_dividend_readable_pairs_equal_total_split(monkeypatch, prices, klass):
+    rows = [destination(id=f"dividend-{i}", quantity=100, unitPrice=price)
+            for i, price in enumerate(prices, 1)]
+    finding = readable(monkeypatch, rows)[0]
+    assert finding["category"] == "uncertain"
+    assert finding["readable"]["class"] == klass
+    if klass == "information":
+        assert finding["readable"]["label"] == "total equal to IBKR, split over 2 rows"
+        assert "proven" not in finding["readable"]["label"]
+
+
+def test_dividend_readable_pairs_absent_with_outside_coverage_twin(monkeypatch):
+    carrier = destination(id="dividend-9", comment="dividend#KO#2026-07-15")
+    findings = readable(monkeypatch, [carrier], comments=[(ACC, "dividend#KO#2026-07-15")])
+    absent, outside = findings[0], findings[1]
+    assert absent["category"] == "absent" and outside["category"] == "uncertain"
+    assert absent["readable"]["class"] == outside["readable"]["class"] == "information"
+    assert absent["readable"]["related"] == ["dividend-9"]
+    assert outside["readable"]["related"] == [absent["source"]]
+
+
+def test_dividend_readable_pairs_twin_with_other_amount_is_not_paired(monkeypatch):
+    carrier = destination(id="dividend-9", comment="dividend#KO#2026-07-15", unitPrice=0.26)
+    findings = readable(monkeypatch, [carrier], comments=[(ACC, "dividend#KO#2026-07-15")])
+    assert findings[0]["readable"]["class"] == "to_check"
+    assert findings[1]["readable"]["class"] == "to_check"
+
+
+def test_dividend_readable_pairs_unpaired_absent_is_to_check(monkeypatch):
+    finding = readable(monkeypatch, [])[0]
+    assert finding["category"] == "absent"
+    assert finding["readable"]["class"] == "to_check"
+    assert finding["readable"]["label"] == "possibly missing in Ghostfolio"
+
+
+def test_dividend_readable_pairs_other_classes_and_catch_all(monkeypatch):
+    coherent = readable(monkeypatch, [destination()])[0]
+    assert coherent["readable"]["class"] == "coherent"
+    old = destination(date="2025-07-15T00:00:00Z")
+    _, _, positions = read(monkeypatch, [old])
+    window = m.historical_dividend_comparison([], ACC, {}, positions, ("2026-07-01", "2026-07-31"))[0]
+    assert window["readable"]["class"] == "outside_window"
+    krw = readable(monkeypatch, [destination(currency="KRW")],
+                   xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))[0]
+    assert krw["readable"]["class"] == "information" and krw["readable"]["label"] == "unsupported currency"
+    missing = readable(monkeypatch, [destination(currency=None, assetProfile={
+        "symbol": "KO", "isin": ISIN_KO, "dataSource": "YAHOO"})])[0]
+    assert missing["readable"]["class"] == "to_check" and missing["readable"]["reason"]
+    far = readable(monkeypatch, [destination(quantity=101)])[0]
+    assert far["readable"]["label"] == "quantity difference"
+    noise = readable(monkeypatch, [destination(unitPrice=0.250001)])[0]
+    assert noise["readable"]["class"] == "noise"

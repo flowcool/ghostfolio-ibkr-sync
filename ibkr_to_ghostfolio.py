@@ -1984,6 +1984,107 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             findings.append({"source": None, "activity_ids": [item["activity"].get("id")],
                              "category": category, "reason": reason,
                              "destination": [_historical_destination(item)]})
+    return classify_dividend_findings(findings)
+
+
+def _readable_values(destination):
+    """Gross/fee/currency of one destination row, or None when unavailable."""
+    values = destination["values"]
+    if "unavailable" in values:
+        return None
+    return values["gross"], values["fee"], values["currency"]
+
+
+def _readable_set(label, kind, reason=None, related=()):
+    return {"class": kind, "label": label, "reason": reason, "related": list(related)}
+
+
+def classify_dividend_findings(findings):
+    """Attach finding["readable"] (class, label, reason, related ids) to every finding.
+
+    Classes: coherent, outside_window, noise, information, to_check. Pair detection
+    (probable duplicate, equal-total split, absent/outside-coverage pair) needs the
+    whole list; it never changes a finding's category. Every finding that is not
+    coherent, outside window, information or noise is "to_check" with its reason.
+    """
+    compared = [f for f in findings if f["source"] is not None and "representations" in f]
+    twins = defaultdict(list)
+    for finding in findings:
+        if (finding["source"] is not None or finding["category"] != "uncertain"
+                or finding["reason"] != "legacy destination comment cannot prove source identity"):
+            continue
+        row = finding["destination"][0]
+        for group in compared:
+            if row["symbol"] == group["security"]["symbol"] and row["local_date"] == group["source_date"]:
+                twins[id(group)].append(finding)
+                finding["readable"] = _readable_set(
+                    "probable duplicate", "to_check",
+                    "legacy-comment row with the same security and day as a compared dividend",
+                    group["activity_ids"])
+                break
+    outside = {}
+    for finding in findings:
+        if (finding["source"] is None and finding["category"] == "uncertain"
+                and "readable" not in finding):
+            outside[finding["activity_ids"][0]] = finding
+    for finding in findings:
+        if "readable" in finding:
+            continue
+        category = finding["category"]
+        if category in ("coherent_single", "coherent_components"):
+            result = _readable_set("coherent", "coherent")
+        elif category == "outside_window":
+            result = _readable_set("outside window", "outside_window", finding["reason"])
+        elif category == "differences" or category == "probable_repetition":
+            delta = finding.get("delta_class")
+            if category == "probable_repetition":
+                result = _readable_set("repeated representation", "to_check", finding["reason"])
+            elif delta == "noise":
+                result = _readable_set("rounding noise", "noise")
+            elif delta == "quantity":
+                result = _readable_set("quantity difference", "to_check")
+            elif delta == "minimal":
+                result = _readable_set("minimal difference, cause unknown", "to_check")
+            else:
+                result = _readable_set("amount difference", "to_check")
+        elif category == "absent":
+            result = _readable_set("possibly missing in Ghostfolio", "to_check", finding["reason"])
+            carriers = {item["activity_id"] for item in finding.get("historical_comment", [])}
+            for activity_id in carriers:
+                row = outside.get(activity_id)
+                if row is None or "readable" in row or "source_gross" not in finding:
+                    continue
+                values = _readable_values(row["destination"][0])
+                if (values is not None and row["destination"][0]["symbol"] == finding["security"]["symbol"]
+                        and row["destination"][0]["local_date"] == finding["source_date"]
+                        and values == (finding["source_gross"], finding["source_fee"],
+                                       finding["source_currency"])):
+                    reason = "skipped by historical comment; matching destination row outside proven coverage"
+                    result = _readable_set("absent source paired with outside-coverage row",
+                                           "information", reason, [activity_id])
+                    row["readable"] = _readable_set("outside-coverage row paired with absent source",
+                                                    "information", reason, [finding["source"]])
+                    break
+        elif category == "uncertain" and finding["source"] is not None:
+            context = finding.get("currency_context")
+            destination = finding.get("destination", [])
+            values = [_readable_values(row) for row in destination]
+            if context and context["source"] and _historical_currency(context["source"]) is None:
+                result = _readable_set("unsupported currency", "information", finding["reason"])
+            elif (len(destination) > 1 and "source_gross" in finding and all(values)
+                  and {v[2] for v in values} == {finding["source_currency"]}
+                  and sum(v[0] for v in values) == finding["source_gross"]
+                  and sum(v[1] for v in values) == finding["source_fee"]):
+                result = _readable_set(f"total equal to IBKR, split over {len(destination)} rows",
+                                       "information", finding["reason"])
+            else:
+                result = _readable_set("uncertain", "to_check", finding["reason"])
+        else:
+            result = _readable_set("uncertain", "to_check", finding["reason"])
+        finding["readable"] = result
+    for group in compared:
+        if twins[id(group)]:
+            group["readable"]["related"] = [tid for twin in twins[id(group)] for tid in twin["activity_ids"]]
     return findings
 
 
