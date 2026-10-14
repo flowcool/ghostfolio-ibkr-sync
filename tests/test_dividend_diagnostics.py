@@ -973,3 +973,46 @@ def test_dividend_match_weak_leaves_classes_categories_and_counts_unchanged(monk
     again = m.classify_dividend_findings(stripped)
     assert [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings] == \
         [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in again]
+
+
+def summary_of(findings):
+    return ([(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings],
+            sorted(f["readable"]["class"] for f in findings))
+
+
+def test_dividend_match_unchanged_strong_block_on_both_sides(monkeypatch, caplog):
+    twin = destination(id="dividend-2", comment="legacy KO dividend")
+    findings = readable(monkeypatch, [destination(), twin])
+    group = [f for f in findings if f["source"] is not None][0]
+    legacy = [f for f in findings if f["source"] is None][0]
+    for finding in (group, legacy):
+        block = m.format_historical_dividend_finding(finding, ACC)
+        assert "Proposed match (strong: same security, local day, gross and fee)" in block
+        assert "IBKR " in block and "quantity 100, gross 25.00 USD, fee 0 USD" in block
+        assert "Keep: activity dividend-1 (KO), local day 2026-07-15, UTC date 2026-07-15" in block
+        assert "Duplicate: activity dividend-2 (KO)" in block
+        assert "Proposed action: Check whether activity dividend-2 repeats" in block
+        assert block.endswith("Nothing was written.")
+        assert_plain(block)
+
+
+def test_dividend_match_unchanged_weak_and_none_blocks(monkeypatch):
+    weak = readable(monkeypatch, [destination(unitPrice=0.2501)])[0]
+    block = m.format_historical_dividend_finding(weak, ACC)
+    assert "Proposed match (weak:" in block and "Differs: activity dividend-1" in block
+    assert "Keep:" not in block and "no row is proposed to keep" in block
+    none = m.format_historical_dividend_finding(readable(monkeypatch, [])[0], ACC)
+    assert "Proposed match: no confident match" in none and none.endswith("Nothing was written.")
+    assert_plain(block + none)
+
+
+def test_dividend_match_unchanged_classes_categories_summary_and_exits(monkeypatch, caplog):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", unitPrice=0.26)
+    findings = readable(monkeypatch, [destination(unitPrice=0.2501), twin])
+    before = summary_of(findings)
+    stripped = [{k: v for k, v in f.items() if k not in ("match", "match_source", "readable")}
+                for f in findings]
+    assert summary_of(m.classify_dividend_findings(stripped)) == before
+    text = report_text(findings, caplog)
+    assert "Dividend report: 2 to check, 0 informational, 0 noise" in text
+    assert "categories=" in text and "Proposed match" in text
