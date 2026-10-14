@@ -442,6 +442,40 @@ def test_load_config_count_mismatch_is_rejected(env, var, value):
         m.load_config()
 
 
+def test_cash_target_duplicate_names_are_refused(env):
+    env.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
+    env.setenv("GHOST_ACCOUNT_NAMES", "Shared, Shared ")
+    with pytest.raises(RuntimeError, match="Duplicate.*'Shared'"):
+        m.load_config()
+
+
+def test_cash_target_duplicate_ids_without_names_are_refused(env):
+    env.setenv("IBKR_ACCOUNT_IDS", "U1, U1")
+    env.setenv("IBKR_QUERY_IDS", "q1,q2")
+    env.delenv("GHOST_ACCOUNT_NAMES", raising=False)
+    with pytest.raises(RuntimeError, match="Duplicate.*'U1'"):
+        m.load_config()
+
+
+def test_cash_target_duplicate_check_makes_no_http_call(env):
+    def boom(*a, **k):
+        raise AssertionError("no request expected")
+    env.setattr(m.requests, "get", boom)
+    env.setattr(m.requests, "post", boom)
+    env.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,A")
+    with pytest.raises(RuntimeError):
+        m.load_config()
+
+
+def test_cash_target_duplicate_check_accepts_distinct_targets(env):
+    env.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    assert m.load_config()["account_names"] == ["A", "B"]
+    env.delenv("GHOST_ACCOUNT_NAMES")
+    assert m.load_config()["account_names"] == []
+
+
 @pytest.mark.parametrize("value,expected", [("1", True), ("true", True), ("YES", True), ("on", True),
                                             ("0", False), ("", False), ("nope", False)])
 def test_load_config_dry_run_truthy_values(env, value, expected):

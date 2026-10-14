@@ -140,6 +140,12 @@ def load_config():
     if account_names != [""] and len(account_names) != len(account_ids):
         raise RuntimeError("GHOST_ACCOUNT_NAMES must match the number of IBKR_ACCOUNT_IDS")
 
+    # Effective targets: the names, or the IBKR ids when no names are set (run_sync)
+    targets = [n.strip() for n in account_names] if account_names != [""] else [a.strip() for a in account_ids]
+    for target in targets:
+        if targets.count(target) > 1:
+            raise RuntimeError(f"Duplicate Ghostfolio target '{target}': each IBKR account needs its own target")
+
     return {
         "ibkr_token": os.environ["IBKR_TOKEN"],
         "account_ids": [a.strip() for a in account_ids],
