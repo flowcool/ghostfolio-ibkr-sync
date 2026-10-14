@@ -18,10 +18,12 @@ Each task is one vertical slice of about one hour. Run offline checks with synth
 
 - [x] 4.1 Render security/date/value anomaly blocks, failed-check counts, outside-window values, and non-certifying `skipped by proximity` explanations for both absent groups. Test levels, privacy, and notification compatibility. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_actionable'` and `.venv/bin/python -m pytest -q tests/test_finalize.py`.
 
+- [ ] 4.2 Name the absent-group skip path in import-selection order (`skipped by historical comment` for an old `dividend#<symbol>#<date>` comment, else `skipped by proximity`), and show the observed currency when currency context is unsupported. Do not change import selection or the supported currency list. Align the README and `docs/ibkr-setup.md` label text. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_skip_cause or historical_diagnostic_actionable'`.
+
 ## 5. README and user docs
 
 - [x] 5.1 Update README, `docs/ibkr-setup.md`, and configuration examples with `TZ` forced-preview behavior, WARNING/final notification, mandatory `HHmmss TimeZone` and account failure, staged activation, privacy, and rollback. Verify `rg -n 'HHmmss TimeZone|TZ|DRY_RUN|WARNING|notification|rollback' README.md docs/ibkr-setup.md`.
 
 ## 6. Real dry-run acceptance
 
-- [ ] 6.1 With operator authorization and approved real-data ENV, run `DRY_RUN=1 LOG_LEVEL=DEBUG .venv/bin/python ibkr_to_ghostfolio.py` with private log capture. Verify zero financial writes and all 44 previously blocked groups reaching amount comparison; explain remaining anomalies, reconcile both proximity skips, and record the command and bounded observed evidence in the closing note.
+- [ ] 6.1 With operator authorization and approved real-data ENV, run `DRY_RUN=1 LOG_LEVEL=DEBUG .venv/bin/python ibkr_to_ghostfolio.py` with private log capture. Verify zero financial writes; all 44 previously blocked groups passing identity, then reaching exact amount comparison or staying uncertain with an explicit logged cause permitted by the evidence rules (no component assignment from amounts); explain remaining anomalies; reconcile the skip path of both absent groups; and record the command and bounded observed evidence in the closing note.
