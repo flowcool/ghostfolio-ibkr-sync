@@ -4,4 +4,4 @@
 
 ## 2. Run behavior and docs
 
-- [ ] 2.1 Offline `run_sync` test with a synthetic `SELL (Ca.)` beside valid rows: error logged, account not ok, row absent from the holdings gate, valid rows imported. Update the README Trade conversion row. Check: `.venv/bin/python -m pytest -q tests -k 'unknown_trade_side_run'`.
+- [x] 2.1 Offline `run_sync` test with a synthetic `SELL (Ca.)` beside valid rows: error logged, account not ok, row absent from the holdings gate, valid rows imported. Update the README Trade conversion row. Check: `.venv/bin/python -m pytest -q tests -k 'unknown_trade_side_run'`.
