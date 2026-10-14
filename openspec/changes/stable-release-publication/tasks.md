@@ -10,4 +10,4 @@
 
 ## 3. Operator migration
 
-- [ ] 3.1 Update README, BUILD, releasing guide and ADR 0006 coherently. Verify the spec's operator-guidance command shows frozen aliases, next-release cutover, security releases and digest recovery.
+- [x] 3.1 Update README, BUILD, releasing guide and ADR 0006 coherently. Verify the spec's operator-guidance command shows frozen aliases, next-release cutover, security releases and digest recovery.

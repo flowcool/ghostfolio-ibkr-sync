@@ -12,10 +12,8 @@ and error-level findings; a successful analysis alone is insufficient.
 The mandatory checks must pass before merging.
 
 `docker-publish.yml` validates main, staging, tag pushes, pull requests and
-manual runs without publishing. Its publication job is removed. Existing GHCR
-images and aliases remain untouched; stable release publication is delivered
-separately. Builds for the same ref are serialized. The Python base is pinned by
-its multiarchitecture digest; Dependabot proposes reviewed Docker digest updates.
+manual runs without publishing. Builds for the same ref are serialized.
+The Python base is pinned by its multiarchitecture digest; Dependabot proposes reviewed Docker digest updates.
 A weekly `main` run pulls that pinned base and rebuilds without cache, then runs
 the same isolated runtime checks and security scans on both native architectures.
 It does not advance the base digest or publish an image; base-image fixes require
@@ -32,6 +30,29 @@ Dependency Dashboard is open. Supercronic is a separate upstream binary:
 updating its version also requires both architecture checksums. Never auto-merge
 dependency changes without the required checks.
 
+## Stable publication
+
+The next published stable release starts the stable channel. Existing minor
+`:X.Y` and staging aliases stay frozen without deletion. `release-image.yml`
+requires a published, non-draft, non-prerelease GitHub Release with an exact
+`vX.Y.Z` tag without leading zeros whose commit is on main. Only `:X.Y.Z` is
+published; only the current stable release advances `:latest`. Main, staging,
+tag pushes, manual runs and schedules never publish images.
+
+Release publication is serialized. It refuses existing version manifests and
+uncertain registry responses, then rechecks absence before manifest creation.
+Both native architectures must pass security and isolated runtime checks. Their
+published configuration digests must match the checked images, and the assembled
+manifest must contain those amd64 and arm64 images before `latest` promotion.
+SBOM and provenance accompany the published native images.
+
+Weekly security checks do not refresh tags. Maintainers must merge fixes and
+select a new release; compatibility-neutral security fixes increment PATCH.
+A rerun refuses an existing version even if its `latest` promotion failed.
+Explicit recovery may promote only the verified manifest digest of the current
+stable release, as described in [Releasing](../docs/releasing.md#recover-a-failed-latest-promotion).
+Publication does not deploy or recreate a running container.
+
 ## Rollback
 
 Revert a maintenance merge through a PR and wait for all required checks.
@@ -40,7 +61,9 @@ a broken required workflow prevents its own repair; restore them after the
 repair passes. To roll back an image operationally, use the recorded digest of
 a previous good build. GHCR version tags are mutable and are not an immutable
 rollback record. Git tag protections do not make container tags immutable.
-No GitHub change deploys or recreates a running container.
+Record the installed digest before upgrading, and preserve ENV and mounts when
+selecting it for rollback. Image rollback does not restore financial records or
+undo cash updates. No GitHub change deploys or recreates a running container.
 
 ## Ghostfolio release watch
 
