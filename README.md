@@ -67,9 +67,35 @@ balance update. ISIN remains optional, as some assets do not have one.
 ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
-Multi-arch image (linux/amd64 and linux/arm64). New images are published automatically on every push to main.
+Multi-arch image (linux/amd64 and linux/arm64). The next published stable
+[GitHub Release](https://github.com/flowcool/ghostfolio-ibkr-sync/releases) starts
+the stable channel: `vX.Y.Z` publishes `:X.Y.Z`, and only the current stable
+release updates `:latest`. Existing `:X.Y` and staging aliases remain frozen;
+they are not deleted. Main, tag pushes, manual runs and weekly checks publish
+nothing. Weekly security checks remain; compatible security fixes require a new
+PATCH release selected by the maintainer.
 
-Tagged releases (see [Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)) are also published as `:X.Y.Z` and `:X.Y`. Select a full version for controlled upgrades; record the deployed image digest for a reproducible rollback, since container tags are mutable. `:latest` always follows main. CI also refreshes the main image weekly. See [build and release guarantees](.github/BUILD.md).
+Before upgrading, record the installed image digest, rather than inspecting a
+tag that may have moved. For a Compose service named `ibkr-sync`:
+
+```bash
+docker inspect --format '{{.Image}}' "$(docker compose ps -q ibkr-sync)"
+docker image inspect --format '{{json .RepoDigests}}' <image-id-from-above>
+```
+
+Save the matching `ghcr.io/flowcool/ghostfolio-ibkr-sync@sha256:...` reference
+with the existing ENV and mounts. If no repository digest is recorded, stop and
+identify the installed artifact before upgrading. Select a full version for
+controlled upgrades or pin its digest for exact artifact selection. Container
+tags remain mutable outside the workflow's overwrite guards.
+
+To roll back, select the saved digest and recreate the connector with the same
+ENV and mounts. This does not restore financial records or undo cash updates.
+Image publication does not deploy or recreate a container. A failed `latest`
+promotion requires explicit operator recovery using the verified manifest digest
+of the current stable release; never rebuild or overwrite its version tag. See
+[release and recovery steps](docs/releasing.md) and
+[build and release guarantees](.github/BUILD.md).
 
 The running version is logged at container start and at the beginning of every sync:
 
@@ -78,7 +104,8 @@ ghostfolio-ibkr-sync version v2.2.0
 2026-10-09 06:05:00 [INFO] Starting IBKR to Ghostfolio sync (version v2.2.0)
 ```
 
-`:latest` reports `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
+New stable images, including `:latest`, report `vX.Y.Z`. Older main-built images
+may report `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
 
 ### Upgrading to 2.2
 
@@ -520,8 +547,9 @@ Use a **published** image containing the `/tmp` crontab change: older images
 writing `/app/crontab` cannot run this hardened example. Merging the runtime
 change is not enough: wait for its image publication workflow to succeed, then
 pull and recreate the container. `:latest` remains the example's choice and
-follows `main`; operators may instead select an available full version or a
-recorded digest for controlled upgrades. No deployment is changed automatically.
+follows the current stable release after the next-stable cutover; operators may
+instead select an available full version or a recorded digest for controlled
+upgrades. No deployment is changed automatically.
 
 This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml` and give it owner `10001:10001` with mode `0600` as described above. The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
 
