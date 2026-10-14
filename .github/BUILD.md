@@ -46,6 +46,13 @@ published configuration digests must match the checked images, and the assembled
 manifest must contain those amd64 and arm64 images before `latest` promotion.
 SBOM and provenance accompany the published native images.
 
+A published, non-draft GitHub prerelease with an exact `vX.Y.Z-rc.N` tag
+(`N >= 1`, no leading zeros) on main publishes only `:X.Y.Z-rc.N`, with the same
+checks and publication guard. It never creates or moves `latest`, `X.Y.Z` or
+`X.Y`. A stable `vX.Y.Z` is refused unless it is on the commit of its highest
+RC, when one exists. RC tags are not for normal use; see
+[Releasing](../docs/releasing.md#release-candidate-optional).
+
 Weekly security checks do not refresh tags. Maintainers must merge fixes and
 select a new release; compatibility-neutral security fixes increment PATCH.
 A rerun refuses an existing version even if its `latest` promotion failed.
