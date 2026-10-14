@@ -59,7 +59,8 @@ def test_compose_credentials_require_operator_values_not_inline_secrets():
         assert 'GHOST_TOKEN' not in env
 
 
-IMAGE_REF = re.compile(r'ghcr\.io/flowcool/ghostfolio-ibkr-sync([:@][^\s`\'"]*)')
+# The suffix is optional so a bare reference (implicit tag) is caught and rejected.
+IMAGE_REF = re.compile(r'ghcr\.io/flowcool/ghostfolio-ibkr-sync(?![\w.-])([:@][^\s`\'"]*)?')
 # Release CI moves :latest only to the current stable release, so it never needs a
 # bump PR; a digest pins one exact artifact. A version tag in the README would age.
 ALLOWED_REF = re.compile(r':latest|@sha256:(?:[0-9a-f]{64}|\.\.\.|<[^>]+>)')
@@ -77,3 +78,8 @@ def test_readme_image_refs_use_latest_or_digest():
 
 def test_readme_version_tag_is_rejected():
     assert stale_image_refs('image: ghcr.io/flowcool/ghostfolio-ibkr-sync:2.4.1\n') == [':2.4.1']
+
+
+def test_readme_bare_reference_is_rejected():
+    text = 'image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest\nimage: ghcr.io/flowcool/ghostfolio-ibkr-sync\n'
+    assert stale_image_refs(text) == ['']
