@@ -376,6 +376,13 @@ date, and exactly equal quantity, gross and fee. Gross comes from broker cash;
 accruals establish quantity. Component quantities are never summed. Several
 activities with the same group comment do not prove a component partition,
 even when their amounts sum correctly; that comparison stays uncertain.
+An independently identified component set must cover every source component
+exactly once. Each component keeps its own quantity and monetary comparison.
+The reader does not invent component identities for historical activities.
+Two or more identity-proven complete representations indicate probable repetition,
+even if their quantities or amounts differ. Incomplete partitions and contested
+ownership remain uncertain. Matching amounts never establish completeness, and
+the diagnostic never searches arbitrary subsets of activities.
 
 The diagnostic retains original JSON decimals from the existing activities GET.
 It never reconstructs exact evidence from floats. Activity currency determines
@@ -384,6 +391,11 @@ its provenance retained. Supported denominations are USD, EUR, GBP, CHF, JPY,
 CAD, AUD, NZD, HKD, SGD, SEK, NOK, DKK, PLN, CZK, HUF, ILS, ZAR and the existing
 GBp, ZAc and ILA minor units. Missing or unsupported context stays uncertain.
 Gross and fee differences use destination minus source, without a tolerance.
+Every nonzero exact delta remains visible, including differences smaller than
+float precision. Source fee is the positive part of the negative net cash
+withholding; signed withholding and refund rows and their total remain separate
+evidence. Coherence requires exact quantity, gross and fee agreement; a complete
+representation with a discrepancy is not coherent.
 The diagnostic adds no reads, writes, files or settings. Findings do not change
 import selection, cash updates, exit codes or notifications. Live runs do not
 run this comparison. Use the one-off command below without `CRON`.

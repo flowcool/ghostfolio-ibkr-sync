@@ -1507,6 +1507,34 @@ def _historical_values(evidence):
             "denomination": currency, "currency_provenance": provenance}, None
 
 
+def _historical_representations(candidates, components):
+    """Partition only independently identified evidence, never by amount.
+
+    Optional component/representation identities belong to retained diagnostic
+    evidence, not the API activity or its comment. The reader does not invent
+    these identities for ordinary historical rows.
+    """
+    if len(candidates) == 1 and "representation" not in candidates[0]:
+        return [candidates], None
+    partitions = defaultdict(list)
+    for item in candidates:
+        representation = item.get("representation")
+        if not isinstance(representation, str) or not representation:
+            return [], "component partition identity not proven"
+        partitions[representation].append(item)
+    complete = []
+    for rows in partitions.values():
+        identities = [row.get("component") for row in rows]
+        if len(rows) == 1 and identities == [None]:
+            complete.append(rows)
+        elif (all(isinstance(key, tuple) and key in components for key in identities)
+              and len(identities) == len(set(identities)) == len(components)):
+            complete.append(rows)
+        else:
+            return [], "incomplete or conflicting component coverage"
+    return complete, None
+
+
 def historical_dividend_comparison(dividends, account_id, mapping, positions):
     """Compare retained history conservatively, independently of import selection.
 
@@ -1517,6 +1545,15 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
     findings = []
     evidence = [item for item in positions.get("dividend_evidence", [])
                 if item["activity"].get("accountId") == account_id]
+    # Resolve all claims first. Neither input order nor repeated IDs may allow
+    # one destination activity to certify several source groups.
+    owners = defaultdict(set)
+    for group_index, dividend in enumerate(dividends):
+        if dividend.get("payments"):
+            reference = f"dividend#{dividend['isin'] or dividend['symbol']}#{dividend['date']}"
+            for item in evidence:
+                if item["activity"].get("comment") == reference:
+                    owners[item["activity"].get("id")].add(group_index)
     claimed = set()
     for dividend in dividends:
         if not dividend.get("payments"):
@@ -1530,6 +1567,12 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
             finding["category"] = "absent"
             continue
         claimed.update(item["index"] for item in candidates)
+        if any(len(owners[item["activity"].get("id")]) != 1 for item in candidates):
+            finding["reason"] = "contested destination ownership"
+            continue
+        if len({item["activity"].get("id") for item in candidates}) != len(candidates):
+            finding["reason"] = "duplicate destination activity identity"
+            continue
         symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
         valid = True
         for item in candidates:
@@ -1548,9 +1591,6 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
         if not valid:
             finding["reason"] = "inactive, unsupported or conflicting security/date identity"
             continue
-        if len(candidates) != 1:
-            finding["reason"] = "component partition identity not proven"
-            continue
         if not dividend_input_compatible([dividend], quiet=True):
             finding["reason"] = "incompatible source quantity schema"
             continue
@@ -1558,37 +1598,84 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
         if quantity is None:
             finding["reason"] = "missing or conflicting source quantity evidence"
             continue
-        values, reason = _historical_values(candidates[0])
-        if values is None:
+        keys = ("accountId", "conid", "currency", "actionID", "exDate")
+        components = defaultdict(list)
+        for row in dividend["payments"]:
+            components[tuple(row.get(key, "") for key in keys)].append(row)
+        representations, reason = _historical_representations(candidates, components)
+        if reason:
+            finding["reason"] = reason
+            continue
+        decoded = {}
+        for item in candidates:
+            values, reason = _historical_values(item)
+            if reason:
+                break
+            decoded[item["index"]] = values
+        if reason:
             finding["reason"] = reason
             continue
         unit = _historical_currency(dividend.get("currency"))
         gross = _dividend_cash_sum(dividend["payments"])
-        tax = _dividend_cash_sum([row for row in dividend.get("cash_rows", [])
-                                 if row.get("type") == WITHHOLDING_CASH_TYPE])
-        if unit is None or unit[0] != values["currency"] or gross is None or tax is None or gross <= 0:
+        tax_rows = [row for row in dividend.get("cash_rows", [])
+                    if row.get("type") == WITHHOLDING_CASH_TYPE]
+        tax = _dividend_cash_sum(tax_rows)
+        if (unit is None or any(unit[0] != value["currency"] for value in decoded.values())
+                or gross is None or tax is None or gross <= 0):
             finding["reason"] = "missing, conflicting or unsupported source money evidence"
             continue
         with localcontext() as context:
-            numbers = [gross, tax, values["gross"], values["fee"], quantity, values["quantity"]]
+            numbers = [gross, tax, quantity] + [value[field] for value in decoded.values()
+                                               for field in ("gross", "fee", "quantity")]
             context.prec = max(28, max(value.adjusted() for value in numbers)
                                - min(value.as_tuple().exponent for value in numbers) + 4)
             try:
                 source_gross = gross * unit[1]
                 source_fee = max(Decimal(0), tax.copy_negate()) * unit[1]
-                differences = {"quantity_delta": values["quantity"] - quantity,
-                               "gross_delta": values["gross"] - source_gross,
-                               "fee_delta": values["fee"] - source_fee}
+                signed_tax_total = tax * unit[1]
+                comparisons = []
+                for rows in representations:
+                    values = [decoded[item["index"]] for item in rows]
+                    differences = {"quantity_deltas": [value["quantity"] - quantity for value in values],
+                                   "gross_delta": sum(value["gross"] for value in values) - source_gross,
+                                   "fee_delta": sum(value["fee"] for value in values) - source_fee}
+                    component_deltas = []
+                    for item, value in zip(rows, values):
+                        key = item.get("component")
+                        if key is not None:
+                            component_gross = _dividend_cash_sum(components[key]) * unit[1]
+                            component_tax = _dividend_cash_sum([row for row in tax_rows
+                                if tuple(row.get(field, "") for field in keys) == key])
+                            component_deltas.append({"component": key,
+                                "gross_delta": value["gross"] - component_gross,
+                                "fee_delta": value["fee"] - max(Decimal(0), -component_tax) * unit[1]})
+                    coherent = (not any(differences["quantity_deltas"])
+                                and not differences["gross_delta"] and not differences["fee_delta"]
+                                and not any(delta["gross_delta"] or delta["fee_delta"]
+                                            for delta in component_deltas))
+                    comparisons.append({"activity_ids": [item["activity"].get("id") for item in rows],
+                                        "kind": "single" if len(rows) == 1 and rows[0].get("component") is None else "components",
+                                        "coherent": coherent, **differences,
+                                        "component_deltas": component_deltas,
+                                        "values": values})
             except DecimalException:
                 finding["reason"] = "unsupported decimal range"
                 continue
-        finding.update(values)
-        finding.update(differences)
+        finding["representations"] = comparisons
+        finding["signed_tax_rows"] = [dict(row) for row in tax_rows]
+        finding["signed_tax_total"] = signed_tax_total
+        if len(comparisons) == 1:
+            finding.update({key: value for key, value in comparisons[0].items()
+                            if key in ("gross_delta", "fee_delta", "quantity_deltas")})
+            if len(comparisons[0]["values"]) == 1:
+                finding.update(comparisons[0]["values"][0])
+                finding["quantity_delta"] = comparisons[0]["quantity_deltas"][0]
         finding["source_quantity"] = quantity
         finding["source_gross"] = source_gross
         finding["source_fee"] = source_fee
-        finding["category"] = "differences" if any(differences.values()) else "coherent_single"
-        finding["reason"] = "exact whole-payment comparison"
+        finding["category"] = ("probable_repetition" if len(comparisons) > 1 else
+                               "coherent_" + comparisons[0]["kind"] if comparisons[0]["coherent"] else "differences")
+        finding["reason"] = "exact identity-proven representation comparison"
     for item in evidence:
         if item["index"] not in claimed:
             findings.append({"source": None, "activity_ids": [item["activity"].get("id")],
@@ -1601,7 +1688,7 @@ def log_historical_dividend_comparison(findings, account_id):
     counts = defaultdict(int)
     for finding in findings:
         counts[finding["category"]] += 1
-        if finding["category"] != "coherent_single":
+        if finding["category"] not in ("coherent_single", "coherent_components"):
             log.info("[DRY RUN] Historical dividend detail: %s", finding)
         else:
             log.debug("[DRY RUN] Historical dividend detail: %s", finding)

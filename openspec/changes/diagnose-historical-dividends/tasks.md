@@ -8,7 +8,7 @@ Execution order: 1.1 → 2.1 → 3.1. Synthetic inputs/mocked HTTP only; README 
 
 ## 2. Repetition and differences
 
-- [ ] 2.1 Deliver representation/quantity/money details and README categories in the same runtime/diagnostic test files. Check `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k representations`; cover identity-proven whole-payment/component completeness, exact coherence, ordinary/bonus, PIL, competing complete sets with discrepancies, incomplete partitions and globally unique assignment; contested ownership stays uncertain in either order, with no arbitrary subset search. Include fractional quantities, sub-float exact deltas with destination-minus-source sign, fee=max(0,-cash withholding), separate signed tax/refund evidence, null activity currency fallback, GBP/GBp denomination differences and unsupported currency context.
+- [x] 2.1 Deliver representation/quantity/money details and README categories in the same runtime/diagnostic test files. Check `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k representations`; cover identity-proven whole-payment/component completeness, exact coherence, ordinary/bonus, PIL, competing complete sets with discrepancies, incomplete partitions and globally unique assignment; contested ownership stays uncertain in either order, with no arbitrary subset search. Include fractional quantities, sub-float exact deltas with destination-minus-source sign, fee=max(0,-cash withholding), separate signed tax/refund evidence, null activity currency fallback, GBP/GBp denomination differences and unsupported currency context.
 
 ## 3. Uncertainty and compatibility
 
