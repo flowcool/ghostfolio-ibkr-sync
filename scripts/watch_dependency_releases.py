@@ -1,19 +1,14 @@
-"""Open one deduplicated review issue per new release of a pinned dependency.
+"""Open deduplicated review issues for the pinned Supercronic binary.
 
-Watches the runtime closure pinned in requirements.txt (PyPI) and the
-supercronic binary pinned in the Dockerfile (GitHub releases, which Dependabot
-does not track). Every stable release newer than the current pin gets an issue
-so breaking changes are reviewed before Dependabot proposes the bump.
+Python dependency updates belong to Renovate. Supercronic requires a manual
+version bump together with both architecture checksums in the Dockerfile.
 """
 
-import json
 import os
 import re
 import sys
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from watch_ghostfolio_releases import GitHubAPI  # noqa: E402
@@ -25,15 +20,8 @@ LABELS = ["dependency-release"]
 MAX_NEW_ISSUES_PER_RUN = 10
 # Final releases only: pre-, post- and dev releases are not proposed for pins.
 STABLE_VERSION = re.compile(r"\d+(\.\d+){0,5}")
-PACKAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-# An exact pin, optionally followed by an environment marker or a comment.
-PIN = re.compile(r"(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*(?P<version>[^\s;#]+)\s*([;#].*)?")
 MARKER = re.compile(r"<!-- dependency-release:(?P<ecosystem>[a-z]+):(?P<name>[^:\s]+):(?P<version>\d+(\.\d+)*) -->")
 SUPERCRONIC_PIN = re.compile(r"^ARG SUPERCRONIC_VERSION=v(?P<version>\S+)$", re.M)
-# Changelog links come from untrusted package metadata: keep plain https URLs
-# without markup characters, and only for changelog-like labels.
-SAFE_URL = re.compile(r"https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/%#?=&+-]*)?")
-CHANGELOG_LABEL = re.compile(r"change|release|history|news", re.I)
 TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?")
 
 
@@ -47,51 +35,10 @@ def version_key(version):
 
 def read_pins(root=ROOT):
     """Return the watched pins: [{"ecosystem", "name", "version"}]."""
-    pins = []
-    for line in (root / "requirements.txt").read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # Anything but an exact pin would silently drop out of the watch.
-        match = PIN.fullmatch(line)
-        if not match:
-            raise ValueError(f"Unsupported requirement in requirements.txt: {line[:60]}")
-        if not STABLE_VERSION.fullmatch(match["version"]):
-            raise ValueError(f"Unsupported pin in requirements.txt: {match['name']}")
-        pins.append({"ecosystem": "pypi", "name": match["name"].lower(), "version": match["version"]})
     supercronic = SUPERCRONIC_PIN.search((root / "Dockerfile").read_text())
     if not supercronic or not STABLE_VERSION.fullmatch(supercronic["version"]):
         raise ValueError("SUPERCRONIC_VERSION pin not found in Dockerfile")
-    pins.append({"ecosystem": "github", "name": "aptible/supercronic", "version": supercronic["version"]})
-    if not pins[:-1]:
-        raise ValueError("No pins found in requirements.txt")
-    return pins
-
-
-def fetch_json(url):
-    request = Request(url, headers={"Accept": "application/json",
-                                    "User-Agent": "ghostfolio-ibkr-sync-dependency-watch"})
-    try:
-        with urlopen(request, timeout=30) as response:
-            return json.load(response)
-    except HTTPError as error:
-        raise RuntimeError(f"GET {url} returned HTTP {error.code}") from None
-
-
-def pypi_releases(name, fetch=fetch_json):
-    """Stable, non-yanked releases of a PyPI project, plus its changelog links."""
-    data = fetch(f"https://pypi.org/pypi/{quote(name, safe='')}/json")
-    if not isinstance(data, dict) or not isinstance(data.get("releases"), dict):
-        raise RuntimeError(f"PyPI response for {name} has no releases mapping")
-    releases = []
-    for version, files in data["releases"].items():
-        if not STABLE_VERSION.fullmatch(version) or not files or all(f.get("yanked") for f in files):
-            continue
-        releases.append({"version": version,
-                         "published_at": min(f.get("upload_time_iso_8601") or "" for f in files)})
-    links = [url for label, url in ((data.get("info") or {}).get("project_urls") or {}).items()
-             if isinstance(url, str) and CHANGELOG_LABEL.search(label or "") and SAFE_URL.fullmatch(url)]
-    return releases, links[:3]
+    return [{"ecosystem": "github", "name": "aptible/supercronic", "version": supercronic["version"]}]
 
 
 def github_releases(api, repository):
@@ -109,8 +56,6 @@ def release_marker(pin, version):
 
 
 def release_page(pin, version):
-    if pin["ecosystem"] == "pypi":
-        return f"https://pypi.org/project/{quote(pin['name'], safe='')}/{quote(version, safe='')}/"
     return f"https://github.com/{pin['name']}/releases/tag/v{quote(version, safe='')}"
 
 
@@ -127,7 +72,7 @@ def notice_body(pin, release, links):
         release_marker(pin, release["version"]),
         "A new release of a pinned dependency needs a breaking-change review before it is adopted.",
         "",
-        f"- Dependency: `{pin['name']}` ({'PyPI' if pin['ecosystem'] == 'pypi' else 'GitHub release'})",
+        f"- Dependency: `{pin['name']}` (GitHub release)",
         f"- Pinned: `{pin['version']}` → released: `{release['version']}` ({level})",
         f"- Published: {published if TIMESTAMP.fullmatch(published) else 'unknown'}",
         f"- Release page: {release_page(pin, release['version'])}",
@@ -135,8 +80,8 @@ def notice_body(pin, release, links):
         "",
         "Review:",
         "- [ ] Read the release notes / changelog for removals, renamed options and behaviour changes.",
-        "- [ ] Check whether this sync or the notification worker uses anything that changed.",
-        "- [ ] Decide: adopt (Dependabot proposes the bump after its 14-day cooldown; security fixes come at once) or hold, and record why.",
+        "- [ ] Check whether the scheduler uses anything that changed.",
+        "- [ ] Decide: adopt (update SUPERCRONIC_VERSION and both architecture SHA256 pins together in a reviewed PR) or hold, and record why.",
         "",
         "This notice does not change any pin, build or deployment.",
         "Closing it acknowledges the review; the watcher never reopens or duplicates it.",
@@ -144,17 +89,15 @@ def notice_body(pin, release, links):
     return "\n".join(lines)
 
 
-def monitor(api, repository, pins, fetch_pypi=pypi_releases, limit=MAX_NEW_ISSUES_PER_RUN):
+def monitor(api, repository, pins, limit=MAX_NEW_ISSUES_PER_RUN):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Invalid GitHub repository name")
     pending = []
     for pin in pins:
-        if pin["ecosystem"] == "pypi":
-            if not PACKAGE_NAME.fullmatch(pin["name"]):
-                raise ValueError("Invalid package name")
-            releases, links = fetch_pypi(pin["name"])
-        else:
-            releases, links = github_releases(api, pin["name"])
+        # Ignore Python and unrelated binaries even if a caller supplies them.
+        if (pin["ecosystem"], pin["name"]) != ("github", "aptible/supercronic"):
+            continue
+        releases, links = github_releases(api, pin["name"])
         current = version_key(pin["version"])
         # Keyed by version_key: equivalent spellings (3.11, 3.11.0) get one issue.
         newer = {version_key(r["version"]): r for r in releases if version_key(r["version"]) > current}

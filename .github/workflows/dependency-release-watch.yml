@@ -1,8 +1,8 @@
 name: Dependency release watch
 
-# Opens one review issue per new stable release of a pinned dependency
-# (requirements.txt on PyPI, supercronic on GitHub) so breaking changes are
-# checked before Dependabot proposes the bump. Never changes pins or builds.
+# Opens one review issue per new stable Supercronic release. Adoption requires
+# updating the version and both architecture checksums together in a reviewed PR.
+# Python dependencies are handled by Renovate. Never changes pins or builds.
 on:
   schedule:
     - cron: "29 7 * * *"
@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Open review issues for new dependency releases
+      - name: Open review issues for new Supercronic releases
         run: python scripts/watch_dependency_releases.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

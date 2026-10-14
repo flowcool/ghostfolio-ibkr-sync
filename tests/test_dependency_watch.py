@@ -11,23 +11,8 @@ watch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(watch)
 
 REPO = "flowcool/ghostfolio-ibkr-sync"
-PINS = [{"ecosystem": "pypi", "name": "markdown", "version": "3.10.3"},
-        {"ecosystem": "pypi", "name": "apprise", "version": "2.0.1"},
-        {"ecosystem": "github", "name": "aptible/supercronic", "version": "0.2.49"}]
-
-
-def files(day="2026-09-25T13:46:22Z", yanked=False):
-    return [{"upload_time_iso_8601": day, "yanked": yanked}]
-
-
-PYPI = {
-    "markdown": ({"releases": {"3.10.3": files(), "3.11": files(), "3.12rc1": files(),
-                               "3.12.post1": files(), "3.13": files(yanked=True), "3.14": []},
-                  "info": {"project_urls": {"Changelog": "https://python-markdown.github.io/changelog/",
-                                            "Homepage": "https://example.org/",
-                                            "Release notes": "https://evil.invalid/x)[y](z"}}}),
-    "apprise": ({"releases": {"1.13.1": files(), "2.0.1": files(), "3.0.0": files()}, "info": {}}),
-}
+SUPERCRONIC = {"ecosystem": "github", "name": "aptible/supercronic", "version": "0.2.49"}
+PINS = [SUPERCRONIC]
 
 
 class FakeAPI:
@@ -53,146 +38,133 @@ class FakeAPI:
         return issue
 
 
-def fetch(name):
-    return watch.pypi_releases(name, fetch=lambda url: PYPI[url.split("/")[-2]])
+
+def new_release_api(issues=None):
+    return FakeAPI(issues, supercronic=[{"tag_name": "v0.2.50", "published_at": "2026-10-01T00:00:00Z"}])
 
 
-def test_one_issue_per_newer_stable_release_ignoring_pre_post_yanked_and_empty():
-    api = FakeAPI()
-    assert watch.monitor(api, REPO, PINS, fetch_pypi=fetch) == [1, 2]
-    assert [p["title"] for p in api.writes] == ["Review markdown 3.11 (pinned 3.10.3)",
-                                                "Review apprise 3.0.0 (pinned 2.0.1)"]
-    assert all(p["labels"] == ["dependency-release"] for p in api.writes)
+def test_one_supercronic_notice_then_zero_on_second_run():
+    api = new_release_api()
+    assert watch.monitor(api, REPO, PINS) == [1]
+    assert watch.monitor(api, REPO, PINS) == []
+    assert len(api.writes) == 1
+    assert api.writes[0]["title"] == "Review aptible/supercronic 0.2.50 (pinned 0.2.49)"
+    assert api.writes[0]["labels"] == ["dependency-release"]
+    assert "both architecture SHA256 pins" in api.writes[0]["body"]
+    assert "Dependabot" not in api.writes[0]["body"]
 
 
-def test_major_bump_is_flagged_and_minor_is_not():
-    api = FakeAPI()
-    watch.monitor(api, REPO, PINS, fetch_pypi=fetch)
-    assert "minor version change" in api.writes[0]["body"]
-    assert "major version change: breaking changes are likely" in api.writes[1]["body"]
+def test_python_versions_produce_zero_notices_and_no_metadata_reads():
+    # Any PyPI metadata read or issue lookup fails through FakeAPI.list_all.
+    api = new_release_api()
+    python = [{"ecosystem": "pypi", "name": "markdown", "version": "3.10.3"}]
+    assert watch.monitor(api, REPO, python) == []
+    assert api.writes == []
+    assert watch.monitor(api, REPO, python + PINS) == [1]
+    assert len(api.writes) == 1
 
 
-def test_equivalent_versions_are_not_newer_and_open_a_single_issue():
-    pins = [{"ecosystem": "pypi", "name": "requests", "version": "2.34.2"}]
-    releases = {"2.34.2": files(), "2.34.2.0": files(), "2.35": files(), "2.35.0": files()}
-    pypi = lambda name: watch.pypi_releases(name, fetch=lambda url: {"releases": releases, "info": {}})
-    api = FakeAPI(supercronic=[])
-    watch.monitor(api, REPO, pins, fetch_pypi=pypi)
-    assert len(api.writes) == 1 and api.writes[0]["title"].startswith("Review requests 2.35")
-    assert "minor version change" in api.writes[0]["body"]
+def test_unrelated_binaries_are_not_watched():
+    api = new_release_api()
+    assert watch.monitor(api, REPO, [{"ecosystem": "github", "name": "other/binary", "version": "1"}]) == []
+    assert api.writes == []
 
 
-def test_patch_after_a_two_part_pin_is_a_patch():
-    pin = {"ecosystem": "pypi", "name": "x", "version": "2.0"}
-    assert "patch version change" in watch.notice_body(pin, {"version": "2.0.1"}, [])
-    assert "minor version change" in watch.notice_body(pin, {"version": "2.1"}, [])
+def test_closed_notices_never_duplicate_or_reopen():
+    api = new_release_api([{"number": 9, "state": "closed",
+                            "body": watch.release_marker(SUPERCRONIC, "0.2.50")}])
+    assert watch.monitor(api, REPO, PINS) == []
+    assert api.writes == []
 
 
-def test_repeated_runs_and_closed_issues_never_duplicate_or_reopen():
-    api = FakeAPI()
-    watch.monitor(api, REPO, PINS, fetch_pypi=fetch)
-    assert watch.monitor(api, REPO, PINS, fetch_pypi=fetch) == []
-    closed = FakeAPI([{"number": 9, "state": "closed",
-                       "body": watch.release_marker(PINS[0], "3.11") + watch.release_marker(PINS[1], "3.0.0")}])
-    assert watch.monitor(closed, REPO, PINS, fetch_pypi=fetch) == []
-    assert closed.writes == []
+def test_equivalent_versions_open_one_notice_and_closed_spelling_acknowledges_it():
+    api = FakeAPI(supercronic=[{"tag_name": "v0.2.49.0"}, {"tag_name": "v0.2.50"}, {"tag_name": "v0.2.50.0"}])
+    assert watch.monitor(api, REPO, PINS) == [1]
+    closed = new_release_api([{"state": "closed", "body": watch.release_marker(SUPERCRONIC, "0.2.50.0")}])
+    assert watch.monitor(closed, REPO, PINS) == []
 
 
-def test_a_marker_written_with_another_spelling_acknowledges_the_release():
-    api = FakeAPI([{"number": 1, "body": watch.release_marker(PINS[0], "3.11.0")}])
-    assert watch.monitor(api, REPO, PINS[:1], fetch_pypi=fetch) == []
-    other = FakeAPI([{"number": 1, "body": watch.release_marker(PINS[1], "3.11")}])
-    assert len(watch.monitor(other, REPO, PINS[:1], fetch_pypi=fetch)) == 1   # another package's marker
-
-
-@pytest.mark.parametrize("data", [{"info": {}}, {"releases": None}, {"releases": []}, []])
-def test_a_pypi_response_without_a_releases_mapping_is_rejected(data):
-    with pytest.raises(RuntimeError, match="releases"):
-        watch.pypi_releases("pkg", fetch=lambda url: data)
-    assert watch.pypi_releases("pkg", fetch=lambda url: {"releases": {}}) == ([], [])
+def test_other_dependency_markers_do_not_acknowledge_supercronic():
+    pin = {"ecosystem": "github", "name": "other/binary"}
+    api = new_release_api([{"body": watch.release_marker(pin, "0.2.50")}])
+    assert len(watch.monitor(api, REPO, PINS)) == 1
 
 
 def test_pull_requests_do_not_acknowledge_a_release():
-    api = FakeAPI([{"body": watch.release_marker(PINS[0], "3.11"), "pull_request": {}}])
-    assert len(watch.monitor(api, REPO, PINS[:1], fetch_pypi=fetch)) == 1
+    api = new_release_api([{"body": watch.release_marker(SUPERCRONIC, "0.2.50"), "pull_request": {}}])
+    assert len(watch.monitor(api, REPO, PINS)) == 1
 
 
-def test_supercronic_releases_come_from_github_and_skip_drafts_and_prereleases():
+def test_supercronic_releases_skip_drafts_prereleases_and_non_numeric_tags():
     api = FakeAPI(supercronic=[{"tag_name": "v0.2.49"}, {"tag_name": "v0.2.50", "published_at": "2026-10-01T00:00:00Z"},
                                {"tag_name": "v0.3.0", "prerelease": True}, {"tag_name": "v0.4.0", "draft": True},
-                               {"tag_name": "nightly"}])
-    assert len(watch.monitor(api, REPO, PINS[2:], fetch_pypi=fetch)) == 1
+                               {"tag_name": "nightly"}, {"tag_name": "v0.5.0rc1"}])
+    assert watch.monitor(api, REPO, PINS) == [1]
     body = api.writes[0]["body"]
     assert "https://github.com/aptible/supercronic/releases/tag/v0.2.50" in body
     assert "patch version change" in body
 
 
-def test_untrusted_metadata_is_never_copied_as_markup():
+@pytest.mark.parametrize("version,level", [("0.2.50", "patch"), ("0.3.0", "minor"), ("1.0.0", "major")])
+def test_version_change_level(version, level):
+    assert f"{level} version change" in watch.notice_body(SUPERCRONIC, {"version": version}, [])
+
+
+def test_patch_after_a_two_part_pin_is_a_patch():
+    pin = {**SUPERCRONIC, "version": "2.0"}
+    assert "patch version change" in watch.notice_body(pin, {"version": "2.0.1"}, [])
+
+
+def test_untrusted_timestamp_is_never_copied_as_markup():
     api = FakeAPI(supercronic=[{"tag_name": "v0.2.50", "published_at": "@everyone [x](https://evil.invalid)"}])
-    watch.monitor(api, REPO, PINS, fetch_pypi=fetch)
-    bodies = "\n".join(p["body"] for p in api.writes)
-    assert "https://python-markdown.github.io/changelog/" in bodies      # changelog-like and safe
-    assert "example.org" not in bodies                                    # not a changelog label
-    assert "evil.invalid" not in bodies and "@everyone" not in bodies     # markup or mentions dropped
-    assert "Published: unknown" in bodies
+    watch.monitor(api, REPO, PINS)
+    body = api.writes[0]["body"]
+    assert "evil.invalid" not in body and "@everyone" not in body
+    assert "Published: unknown" in body
 
 
-def test_new_issues_per_run_are_capped_and_the_rest_follow_next_run():
-    many = {"releases": {f"1.{i}": files() for i in range(15)}, "info": {}}
-    pins = [{"ecosystem": "pypi", "name": "pkg", "version": "1.0"}]
-    api = FakeAPI()
-    fetch_many = lambda name: watch.pypi_releases(name, fetch=lambda url: many)
-    assert len(watch.monitor(api, REPO, pins, fetch_pypi=fetch_many)) == watch.MAX_NEW_ISSUES_PER_RUN
-    assert len(watch.monitor(api, REPO, pins, fetch_pypi=fetch_many)) == 4
-    assert [p["title"] for p in api.writes][:2] == ["Review pkg 1.1 (pinned 1.0)", "Review pkg 1.2 (pinned 1.0)"]
+def test_new_issues_are_capped_and_the_rest_follow_next_run():
+    api = FakeAPI(supercronic=[{"tag_name": f"v0.2.{i}"} for i in range(50, 65)])
+    assert len(watch.monitor(api, REPO, PINS)) == 10
+    assert len(watch.monitor(api, REPO, PINS)) == 5
+    assert len(api.writes) == 15
 
 
 def test_nothing_new_makes_no_issue_or_label_call():
     api = FakeAPI()
-    up_to_date = [{"ecosystem": "pypi", "name": "apprise", "version": "3.0.0"}]
-    assert watch.monitor(api, REPO, up_to_date, fetch_pypi=fetch) == []
+    assert watch.monitor(api, REPO, PINS) == []
     assert api.writes == []
 
 
 def test_fetch_failure_stops_before_any_write():
-    def broken(name):
-        raise RuntimeError("GET https://pypi.org/pypi/markdown/json returned HTTP 503")
     api = FakeAPI()
+    def broken(path):
+        raise RuntimeError("GitHub returned HTTP 503")
+    api.list_all = broken
     with pytest.raises(RuntimeError, match="503"):
-        watch.monitor(api, REPO, PINS, fetch_pypi=broken)
+        watch.monitor(api, REPO, PINS)
     assert api.writes == []
 
 
-def test_invalid_repository_or_package_names_are_rejected():
+def test_invalid_repository_is_rejected():
     with pytest.raises(ValueError):
-        watch.monitor(FakeAPI(), "not a repo", PINS, fetch_pypi=fetch)
-    with pytest.raises(ValueError):
-        watch.monitor(FakeAPI(), REPO, [{"ecosystem": "pypi", "name": "../x", "version": "1"}], fetch_pypi=fetch)
+        watch.monitor(FakeAPI(), "not a repo", PINS)
 
 
-def test_pins_are_read_from_requirements_and_dockerfile(tmp_path):
-    (tmp_path / "requirements.txt").write_text(
-        "# comment\nRequests == 2.34.2\n    # via x\n\npyyaml==6.0.3 ; python_version >= '3.8'  # yaml\n")
+def test_only_supercronic_pin_is_read_without_requirements(tmp_path):
     (tmp_path / "Dockerfile").write_text("FROM python\nARG SUPERCRONIC_VERSION=v0.2.49\n")
-    assert watch.read_pins(tmp_path) == [
-        {"ecosystem": "pypi", "name": "requests", "version": "2.34.2"},
-        {"ecosystem": "pypi", "name": "pyyaml", "version": "6.0.3"},
-        {"ecosystem": "github", "name": "aptible/supercronic", "version": "0.2.49"}]
+    assert watch.read_pins(tmp_path) == PINS
+    (tmp_path / "requirements.txt").write_text("arbitrary unpinned Python package\n")
+    assert watch.read_pins(tmp_path) == PINS
 
 
-def test_real_repository_pins_are_readable():
-    pins = watch.read_pins()
-    assert any(p["name"] == "requests" for p in pins) and pins[-1]["name"] == "aptible/supercronic"
+def test_real_repository_pin_is_readable():
+    assert watch.read_pins() == PINS
 
 
-@pytest.mark.parametrize("requirements,dockerfile", [
-    ("requests==2.34.2rc1\n", "ARG SUPERCRONIC_VERSION=v0.2.49\n"),
-    ("requests==2.34.2\npyyaml>=6\n", "ARG SUPERCRONIC_VERSION=v0.2.49\n"),
-    ("requests==2.34.2\n-r other.txt\n", "ARG SUPERCRONIC_VERSION=v0.2.49\n"),
-    ("requests==2.34.2\n", "FROM python\n"),
-    ("", "ARG SUPERCRONIC_VERSION=v0.2.49\n")])
-def test_unsupported_or_missing_pins_fail_loudly(tmp_path, requirements, dockerfile):
-    (tmp_path / "requirements.txt").write_text(requirements)
+@pytest.mark.parametrize("dockerfile", ["FROM python\n", "ARG SUPERCRONIC_VERSION=v0.2.49rc1\n",
+                                        "ARG SUPERCRONIC_VERSION=latest\n"])
+def test_unsupported_or_missing_supercronic_pin_fails(tmp_path, dockerfile):
     (tmp_path / "Dockerfile").write_text(dockerfile)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="SUPERCRONIC_VERSION"):
         watch.read_pins(tmp_path)
