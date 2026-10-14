@@ -167,3 +167,170 @@ def test_historical_diagnostic_coherent_account_scoped(monkeypatch):
 def test_historical_diagnostic_coherent_weak_identity_never_certifies(monkeypatch, changes):
     assert all(finding["category"] != "coherent_single"
                for finding in comparison(monkeypatch, [destination(**changes)]))
+
+
+def representations(monkeypatch, rows, xml=None, identities=None, wire=None, reverse=False):
+    """Supply independently known synthetic identities in internal evidence.
+
+    These annotations are not API activity fields or a new public comment format.
+    A real reader does not claim component/partition identity from amounts.
+    """
+    _, _, positions = read(monkeypatch, rows, wire)
+    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
+    for item, identity in zip(positions["dividend_evidence"], identities or []):
+        item.update(identity)
+    return m.historical_dividend_comparison(list(reversed(source)) if reverse else source,
+                                          ACC, {}, positions)
+
+
+def component(action):
+    return ("broker-account", "1", "USD", action, "20260701")
+
+
+def ordinary_bonus():
+    return report(divs=div_xml(amount="15") + div_xml(amount="10").replace('actionID="A1"', 'actionID="A2"'))
+
+
+def test_representations_ordinary_bonus_complete_components(monkeypatch):
+    finding = representations(monkeypatch,
+        [destination(unitPrice=0.15), destination(id="bonus", unitPrice=0.1)], ordinary_bonus(),
+        [{"representation": "components", "component": component("A1")},
+         {"representation": "components", "component": component("A2")}])[0]
+    assert finding["category"] == "coherent_components"
+    assert finding["source_quantity"] == 100
+    representation = finding["representations"][0]
+    assert representation["quantity_deltas"] == [0, 0]  # not summed to 200
+    assert representation["gross_delta"] == representation["fee_delta"] == 0
+    assert len(representation["component_deltas"]) == 2
+
+
+def test_representations_split_pil_is_one_component(monkeypatch):
+    pil = div_xml(amount="10").replace('type="Dividends"', 'type="Payment In Lieu Of Dividends"')
+    finding = representations(monkeypatch, [destination()], report(divs=div_xml(amount="15") + pil),
+                             [{"representation": "payment", "component": component("A1")}])[0]
+    assert finding["category"] == "coherent_components"
+    assert finding["source_gross"] == 25
+    assert finding["representations"][0]["component_deltas"][0]["gross_delta"] == 0
+
+
+def test_representations_competing_complete_sets_with_discrepancies(monkeypatch):
+    rows = [destination(id="whole", unitPrice=0.26), destination(id="ordinary", unitPrice=0.15),
+            destination(id="bonus", unitPrice=0.1), destination(id="whole-2", quantity=99)]
+    identities = [{"representation": "whole"},
+                  {"representation": "split", "component": component("A1")},
+                  {"representation": "split", "component": component("A2")},
+                  {"representation": "other-whole"}]
+    finding = representations(monkeypatch, rows, ordinary_bonus(), identities)[0]
+    assert finding["category"] == "probable_repetition"
+    first, second, third = finding["representations"]
+    assert first["gross_delta"] == 1 and first["coherent"] is False
+    assert second["coherent"] is True
+    assert third["quantity_deltas"] == [-1] and third["gross_delta"] == Decimal("-0.25")
+    assert third["coherent"] is False
+
+
+def test_representations_component_vector_cannot_hide_offsetting_deltas(monkeypatch):
+    finding = representations(monkeypatch,
+        [destination(unitPrice=0.16), destination(id="bonus", unitPrice=0.09)], ordinary_bonus(),
+        [{"representation": "split", "component": component("A1")},
+         {"representation": "split", "component": component("A2")}])[0]
+    assert finding["category"] == "differences"
+    assert finding["gross_delta"] == 0
+    assert [part["gross_delta"] for part in finding["representations"][0]["component_deltas"]] == [1, -1]
+
+
+@pytest.mark.parametrize("identities", [
+    [{"representation": "split", "component": component("A1")}],
+    [{"representation": "split", "component": component("A1")},
+     {"representation": "split", "component": component("A1")}],
+    [{"representation": "split", "component": component("A1")},
+     {"representation": "split", "component": component("unknown")}],
+])
+def test_representations_incomplete_or_duplicate_components_stay_uncertain(monkeypatch, identities):
+    rows = [destination(id=f"row-{index}", unitPrice=0.125) for index in range(len(identities))]
+    finding = representations(monkeypatch, rows, ordinary_bonus(), identities)[0]
+    assert finding["category"] == "uncertain"
+    assert finding["reason"] == "incomplete or conflicting component coverage"
+    assert "representations" not in finding
+
+
+def test_representations_without_identity_never_search_amount_subsets(monkeypatch):
+    rows = [destination(id="ordinary", unitPrice=0.15), destination(id="bonus", unitPrice=0.1),
+            destination(id="whole", unitPrice=0.25)]
+    finding = representations(monkeypatch, rows, ordinary_bonus())[0]
+    assert finding["category"] == "uncertain"
+    assert finding["reason"] == "component partition identity not proven"
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_representations_contested_ownership_in_either_order(monkeypatch, reverse):
+    # Same canonical reference, different source securities: neither group owns
+    # the destination exclusively, even though the first security could match.
+    other = div_xml().replace('conid="1"', 'conid="2"').replace('currency="USD"', 'currency="EUR"')
+    # Supply separate synthetic source groups with the same canonical reference
+    # to exercise globally contested ownership.
+    source = [m.parse_cash_dividends(report(divs=part))[0] for part in (div_xml(), other)]
+    _, _, positions = read(monkeypatch, [destination()])
+    findings = m.historical_dividend_comparison(source[::-1] if reverse else source, ACC, {}, positions)
+    assert len(findings) == 2
+    assert all(finding["category"] == "uncertain" for finding in findings)
+    assert all(finding["reason"] == "contested destination ownership" for finding in findings)
+
+
+def test_representations_globally_unique_distinct_groups(monkeypatch):
+    xml = report(divs=div_xml() + div_xml(date="20260716"))
+    rows = [destination(), destination(id="next-day", comment=f"dividend#{ISIN_KO}#2026-07-16",
+                                      date="2026-07-16T00:00:00Z")]
+    findings = representations(monkeypatch, rows, xml)
+    assert [finding["category"] for finding in findings] == ["coherent_single", "coherent_single"]
+    assert [finding["activity_ids"] for finding in findings] == [["dividend-1"], ["next-day"]]
+
+
+def test_representations_fractional_quantity_and_sub_float_signed_deltas(monkeypatch):
+    xml = report(divs=div_xml(amount="0.625")).replace('quantity="100"', 'quantity="2.5"')
+    row = destination(quantity=2.5)
+    wire = json.dumps({"activities": [row], "count": 1}).replace(
+        '"unitPrice": 0.25', '"unitPrice": 0.249999999999999999999')
+    finding = representations(monkeypatch, [row], xml, wire=wire)[0]
+    assert finding["category"] == "differences"
+    assert finding["quantity_delta"] == 0
+    assert finding["gross_delta"] == Decimal("-0.0000000000000000000025")
+    row["quantity"] = 2.75
+    finding = representations(monkeypatch, [row], xml)[0]
+    assert finding["quantity_delta"] == Decimal("0.25")
+    assert finding["gross_delta"] == Decimal("0.0625")
+
+
+@pytest.mark.parametrize("tax,refund,fee,expected_fee,delta", [
+    ("-4", "1", 2, 3, -1), ("-1", "4", 1, 0, 1),
+])
+def test_representations_fee_convention_and_signed_tax_refunds(monkeypatch, tax, refund, fee, expected_fee, delta):
+    taxes = "".join(div_xml(amount=amount).replace('type="Dividends"', 'type="Withholding Tax"')
+                    for amount in (tax, refund))
+    finding = representations(monkeypatch, [destination(fee=fee)], report(divs=div_xml() + taxes))[0]
+    assert finding["source_fee"] == expected_fee
+    assert finding["fee_delta"] == delta
+    assert finding["signed_tax_total"] == Decimal(tax) + Decimal(refund)
+    assert [row["amount"] for row in finding["signed_tax_rows"]] == [tax, refund]
+
+
+@pytest.mark.parametrize("currency,profile_currency,price,provenance", [
+    (None, "USD", 0.25, "assetProfile"), ("GBP", "GBp", 0.25, "activity"),
+    ("GBp", "GBP", 25, "activity"),
+])
+def test_representations_currency_provenance_and_denomination(monkeypatch, currency, profile_currency, price, provenance):
+    broker_currency = "USD" if currency is None else "GBP"
+    xml = report(divs=div_xml().replace('currency="USD"', f'currency="{broker_currency}"'))
+    row = destination(currency=currency, unitPrice=price)
+    row["assetProfile"]["currency"] = profile_currency
+    finding = representations(monkeypatch, [row], xml)[0]
+    assert finding["category"] == "coherent_single"
+    assert finding["currency_provenance"] == provenance
+    assert finding["denomination"] == (currency or profile_currency)
+    assert finding["gross_delta"] == 0
+
+
+def test_representations_unsupported_currency_context_stays_uncertain(monkeypatch):
+    finding = representations(monkeypatch, [destination(currency="AAA")])[0]
+    assert finding["category"] == "uncertain"
+    assert finding["reason"] == "missing or unsupported currency context"
