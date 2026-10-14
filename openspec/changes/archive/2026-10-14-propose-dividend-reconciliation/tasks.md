@@ -9,4 +9,4 @@
 
 ## 3. Real validation
 
-- [ ] 3.1 Reuse the operator-validated production DRY_RUN operation plan (no new plan; the work item is an operation) and capture the log privately. Check: `! rg -q 'Decimal\(|[0-9]E-[0-9]' <log>` succeeds, every item to check shows a proposed match or "no confident match", and the summary counts match the scenario.
+- [x] 3.1 Reuse the operator-validated production DRY_RUN operation plan (no new plan; the work item is an operation) and capture the log privately. Check: `! rg -q 'Decimal\(|[0-9]E-[0-9]' <log>` succeeds, every item to check shows a proposed match or "no confident match", and the summary counts match the scenario.
