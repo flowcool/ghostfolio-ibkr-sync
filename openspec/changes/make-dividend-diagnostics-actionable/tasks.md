@@ -8,7 +8,7 @@ Each task is one vertical slice of about one hour. Run offline checks with synth
 
 ## 2. Prerequisites before writes
 
-- [ ] 2.1 Force whole-run `DRY_RUN` for missing/invalid IANA `TZ` before any account runs, with one WARNING and a final-notification mention. Keep Flex suffixes mandatory for dividends, PIL, and withholding: missing/invalid suffix fails the affected account before import, cash, or platform writes without enabling `DRY_RUN`. Test multiple accounts, no writes, failure outcomes, and notifications. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_preflight'`.
+- [x] 2.1 Force whole-run `DRY_RUN` for missing/invalid IANA `TZ` before any account runs, with one WARNING and a final-notification mention. Keep Flex suffixes mandatory for dividends, PIL, and withholding: missing/invalid suffix fails the affected account before import, cash, or platform writes without enabling `DRY_RUN`. Test multiple accounts, no writes, failure outcomes, and notifications. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_preflight'`.
 
 ## 3. Separate identity evidence
 

@@ -297,3 +297,54 @@ def test_historical_diagnostic_read_failure_keeps_exit_and_notification_contract
     env.setattr(m, "process_account", lambda *a: pytest.fail("account after failed reader"))
     assert m.main() == 1
     assert len(sent) == (0 if dry else 1)
+
+
+# --- TZ prerequisite: whole-run forced preview ---------------------------------
+
+@pytest.mark.parametrize("tz", [None, "", "  ", "Not/AZone", "../etc/passwd", "Europe"])
+def test_historical_diagnostic_preflight_invalid_tz_forces_whole_run_preview(env, caplog, tz):
+    if tz is None:
+        env.delenv("TZ")
+    else:
+        env.setenv("TZ", tz)
+    sent = spy_send(env)
+    seen = []
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(m, "process_account",
+                lambda cfg, ibkr_id, *a: seen.append((ibkr_id, cfg["dry_run"])) or ({}, True))
+    assert m.main() == 0
+    assert seen == [("U111", True), ("U222", True), ("U333", True)]
+    warnings = [r.getMessage() for r in caplog.records
+                if r.levelname == "WARNING" and "forced to DRY_RUN" in r.getMessage()]
+    assert len(warnings) == 1
+    assert len(sent) == 1 and "forced DRY_RUN" in sent[0]["body"]
+    assert sent[0]["body"].split(";")[0].endswith(("TZ is missing", "TZ is not a valid IANA timezone"))
+
+
+def test_historical_diagnostic_preflight_forced_preview_failure_notification_names_reason(env):
+    env.setenv("TZ", "Not/AZone")
+    sent = spy_send(env)
+    accounts(env, {**ALL_OK, "U222": ({}, False)})
+    assert m.main() == 1
+    assert len(sent) == 1
+    assert "Accounts failed: 1 of 3" in sent[0]["body"]
+    assert "TZ is not a valid IANA timezone" in sent[0]["body"]
+
+
+def test_historical_diagnostic_preflight_valid_tz_keeps_live_run_silent(env, caplog):
+    env.setenv("TZ", "Europe/Paris")
+    sent = spy_send(env)
+    seen = []
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(m, "process_account", lambda cfg, *a: seen.append(cfg["dry_run"]) or ({}, True))
+    assert m.main() == 0
+    assert seen == [False] * 3 and sent == []
+    assert "forced to DRY_RUN" not in caplog.text
+
+
+def test_historical_diagnostic_preflight_raw_dry_run_stays_silent(env):
+    env.delenv("TZ")
+    env.setenv("DRY_RUN", "1")
+    sent = spy_send(env)
+    accounts(env, ALL_OK)
+    assert m.main() == 0 and sent == []

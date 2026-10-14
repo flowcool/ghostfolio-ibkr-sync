@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, DecimalException, localcontext
 from math import ceil, isfinite
+from zoneinfo import ZoneInfo
 from urllib.parse import quote, quote_plus, urlsplit
 
 import requests
@@ -66,6 +67,18 @@ DIVIDEND_MATCH_DAYS = 3
 def dry_run_requested():
     """True when DRY_RUN is truthy; readable even when the rest of the config is invalid."""
     return os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def timezone_preview_reason():
+    """Return why TZ forces a whole-run preview, or None when TZ is a valid IANA zone."""
+    name = os.environ.get("TZ", "").strip()
+    if not name:
+        return "TZ is missing"
+    try:
+        ZoneInfo(name)
+    except Exception:
+        return "TZ is not a valid IANA timezone"
+    return None
 
 
 def _env_secret(name):
@@ -419,6 +432,29 @@ def parse_cash_dividends(xml_text):
         group["amount"] = float(gross) if gross is not None else float("nan")
         group["tax"] = float(tax) if tax is not None else float("nan")
     return list(groups.values())
+
+
+FLEX_SUFFIX_PATTERN = re.compile(r"^\d{8};\d{6}\s+[A-Za-z]{2,5}$")
+
+
+def flex_provenance_failures(xml_text):
+    """Count DETAIL dividend, payment-in-lieu and withholding rows whose dateTime
+    lacks the Flex form "YYYYMMDD;HHmmss TimeZone", keyed by cash type.
+
+    Other cash types and SUMMARY rows are outside the check.
+    """
+    root = ET.fromstring(xml_text)
+    failures = {}
+    for el in root.iter("CashTransaction"):
+        row = el.attrib
+        tx_type = row.get("type", "")
+        if tx_type not in DIVIDEND_CASH_TYPES and tx_type != WITHHOLDING_CASH_TYPE:
+            continue
+        if row.get("levelOfDetail", "DETAIL").upper() != "DETAIL":
+            continue
+        if not FLEX_SUFFIX_PATTERN.match(row.get("dateTime", "").strip()):
+            failures[tx_type] = failures.get(tx_type, 0) + 1
+    return failures
 
 
 def _dividend_decimal(value):
@@ -1770,6 +1806,15 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
         log.error("Account %s has an uncertain earlier import outcome; refusing further writes", ghost_account_id)
         return {}, False
 
+    # Flex provenance is a prerequisite: fail before any import, cash or platform write
+    provenance = flex_provenance_failures(xml_text)
+    if provenance:
+        log.error("Flex Query %s: cash rows without a valid 'YYYYMMDD;HHmmss TimeZone' dateTime "
+                  "(%s); account failed before any write. Add Date/Time with time zone to the "
+                  "query, see README", query_id,
+                  ", ".join(f"{kind}: {count}" for kind, count in sorted(provenance.items())))
+        return {}, False
+
     # Parse trades and dividends
     trades = parse_trades(xml_text)
     dividends = parse_cash_dividends(xml_text)
@@ -2125,6 +2170,12 @@ def send_notification(settings, title, body):
 
 NOTIFY_TITLE = "ghostfolio-ibkr-sync: run failed"
 TOKEN_EXPIRY_NOTIFY_TITLE = "ghostfolio-ibkr-sync: token expiring"
+FORCED_PREVIEW_NOTIFY_TITLE = "ghostfolio-ibkr-sync: forced preview"
+
+
+def build_forced_preview_summary(reason):
+    """Fixed advisory line: the run wrote nothing because of the TZ prerequisite."""
+    return f"- forced DRY_RUN: {reason}; no Ghostfolio writes. Set a valid IANA TZ."
 
 
 def build_token_expiry_summary(days):
@@ -2149,6 +2200,8 @@ def build_failure_summary(outcome, now=None):
         lines.append(f"- and {int(outcome['dropped'])} more")
     if outcome.get("token_expiry_days") is not None:
         lines.append(build_token_expiry_summary(outcome["token_expiry_days"]))
+    if outcome.get("forced_preview"):
+        lines.append(build_forced_preview_summary(outcome["forced_preview"]))
     lines.append("Details are in the container log.")
     return "\n".join(lines)
 
@@ -2161,15 +2214,22 @@ def finalize_run(outcome, code):
     code. A reminder on a failed run is included in its failure notification.
     """
     days = outcome.get("token_expiry_days")
-    if (code == 0 and days is None) or dry_run_requested():
+    preview = outcome.get("forced_preview")
+    if (code == 0 and days is None and not preview) or dry_run_requested():
         return
-    label = "Failure" if code else "Token expiry"
+    label = "Failure" if code else ("Forced preview" if preview else "Token expiry")
     try:
         settings = load_notification_config()
         if settings is None:
             return
-        title = NOTIFY_TITLE if code else TOKEN_EXPIRY_NOTIFY_TITLE
-        body = build_failure_summary(outcome) if code else build_token_expiry_summary(days)
+        if code:
+            title, body = NOTIFY_TITLE, build_failure_summary(outcome)
+        elif preview:
+            title, body = FORCED_PREVIEW_NOTIFY_TITLE, build_forced_preview_summary(preview)
+            if days is not None:
+                body += "\n" + build_token_expiry_summary(days)
+        else:
+            title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(days)
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
@@ -2190,6 +2250,11 @@ def run_sync(outcome):
         log.error("Configuration error: %s", exc)
         record_failure(outcome, "config", "invalid_configuration")
         return 1
+    reason = timezone_preview_reason()
+    if reason:
+        config["dry_run"] = True
+        outcome["forced_preview"] = reason
+        log.warning("%s: whole run forced to DRY_RUN, no Ghostfolio writes", reason)
     if config["dry_run"]:
         log.info("DRY RUN enabled (DRY_RUN) — no writes will be sent to Ghostfolio")
     try:
