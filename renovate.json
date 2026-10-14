@@ -3,6 +3,7 @@
   "extends": [
     "config:recommended"
   ],
+  "forkProcessing": "enabled",
   "enabledManagers": ["pip_requirements", "github-actions", "dockerfile", "docker-compose"],
   "timezone": "Europe/Zurich",
   "schedule": ["* * * * 1"],
