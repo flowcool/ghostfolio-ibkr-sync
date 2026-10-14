@@ -453,7 +453,7 @@ def _dividend_cash_sum(rows):
             return None
 
 
-def dividend_input_compatible(candidates):
+def dividend_input_compatible(candidates, quiet=False):
     """Check schema only for new payments and potentially associated accruals.
 
     Attribute absence blocks account dividends. Empty values remain local
@@ -463,26 +463,29 @@ def dividend_input_compatible(candidates):
     required = keys + ("quantity", "code", "date", "payDate", "reportDate")
     for dividend in candidates:
         if not dividend.get("accrual_section"):
-            log.warning("Incompatible dividend input: missing ChangeInDividendAccruals section "
-                        "— account dividends not imported; enrich the Flex query")
+            if not quiet:
+                log.warning("Incompatible dividend input: missing ChangeInDividendAccruals section "
+                            "— account dividends not imported; enrich the Flex query")
             return False
         for payment in dividend["payments"]:
             if any(field not in payment for field in keys):
-                log.warning("Incompatible dividend input: missing payment attributes "
-                            "— account dividends not imported; enrich the Flex query")
+                if not quiet:
+                    log.warning("Incompatible dividend input: missing payment attributes "
+                                "— account dividends not imported; enrich the Flex query")
                 return False
             for row in dividend["accruals"]:
                 if any(row.get(field) and payment.get(field)
                        and row[field] != payment[field] for field in keys):
                     continue
                 if any(field not in row for field in required):
-                    log.warning("Incompatible dividend input: missing relevant accrual attributes "
-                                "— account dividends not imported; enrich the Flex query")
+                    if not quiet:
+                        log.warning("Incompatible dividend input: missing relevant accrual attributes "
+                                    "— account dividends not imported; enrich the Flex query")
                     return False
     return True
 
 
-def dividend_structured_quantity(dividend):
+def dividend_structured_quantity(dividend, quiet=False):
     """Return the common exact quantity for net-positive cash actions, or None.
 
     Match account/contract/currency/action/ex-date, then require one payment
@@ -490,8 +493,9 @@ def dividend_structured_quantity(dividend):
     Cash totals stay authoritative. Validation is separate from cash parsing.
     """
     def reject(reason):
-        log.warning("Dividend %s %s: %s — not imported",
-                    dividend["symbol"], dividend["date"], reason)
+        if not quiet:
+            log.warning("Dividend %s %s: %s — not imported",
+                        dividend["symbol"], dividend["date"], reason)
         return None
 
     cash_rows = dividend.get("cash_rows", [])
@@ -702,6 +706,16 @@ def ghost_get_existing_orders(config):
     if ghost_response_is_redirect(resp):
         raise RuntimeError(GHOST_REDIRECT_ERROR)
     resp.raise_for_status()
+    # Keep the original JSON numbers before the normal float-based reader runs.
+    # A mock/adapter without wire bytes cannot establish exact numeric evidence.
+    exact_data = None
+    if config.get("dry_run"):
+        wire = getattr(resp, "content", None)
+        if isinstance(wire, (str, bytes)) and wire:
+            try:
+                exact_data = json.loads(wire, parse_float=Decimal, parse_int=Decimal)
+            except (ValueError, UnicodeError, DecimalException):
+                pass  # The existing decoder below owns technical failures.
     data = resp.json()
     activities = data.get("activities", [])
     total = data.get("count")
@@ -718,6 +732,11 @@ def ghost_get_existing_orders(config):
             "disable restricted view for the Ghostfolio user, or use a token "
             "with the portfolio:read:values scope; refusing to sync without "
             "existing IBKR# IDs (duplicates risk)")
+
+    if config.get("dry_run"):
+        exact_rows = exact_data.get("activities") if isinstance(exact_data, dict) else None
+        exact_available = isinstance(exact_rows, list) and len(exact_rows) == len(activities)
+        positions["dividend_evidence"] = []
 
     for index, order in enumerate(activities):
         profile = {}
@@ -744,6 +763,14 @@ def ghost_get_existing_orders(config):
             dividend_comments.add((order.get("accountId") or "", comment))
 
         active = activity_is_active(order)
+        if config.get("dry_run") and order.get("type") == "DIVIDEND":
+            raw = exact_rows[index] if exact_available else None
+            exact = (isinstance(raw, dict)
+                     and all(raw.get(key) == order.get(key)
+                             for key in ("id", "type", "accountId", "comment", "date")))
+            positions["dividend_evidence"].append({
+                "activity": raw if exact else order, "exact_json": exact,
+                "active": active, "index": index})
         if order.get("type") in ("BUY", "SELL", "DIVIDEND"):
             source = profile.get("dataSource")
             if not isinstance(source, str) or not source.strip():
@@ -1437,6 +1464,151 @@ def _dividend_date_matches(positions, activity):
     return None
 
 
+def _historical_currency(currency):
+    """Return common denomination and exact scale; unknown context stays unknown."""
+    major = {"USD", "EUR", "GBP", "CHF", "JPY", "CAD", "AUD", "NZD", "HKD",
+             "SGD", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "ILS", "ZAR"}
+    if currency in major:
+        return currency, Decimal(1)
+    for base, minor, factor in MINOR_UNIT_MARKETS.values():
+        if currency == minor:
+            return base, Decimal(1) / Decimal(factor)
+    return None
+
+
+def _historical_values(evidence):
+    """Read quantity/gross/fee only from original JSON, with currency provenance."""
+    row = evidence["activity"]
+    profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
+    currency = row.get("currency")
+    provenance = "activity"
+    if "currency" in row and currency is None:
+        currency = profile.get("currency")
+        provenance = "assetProfile" if "assetProfile" in row else "SymbolProfile"
+    unit = _historical_currency(currency) if isinstance(currency, str) else None
+    if unit is None:
+        return None, "missing or unsupported currency context"
+    if not evidence["exact_json"]:
+        return None, "original JSON numeric evidence unavailable"
+    numbers = [row.get(field) for field in ("quantity", "unitPrice", "fee")]
+    if any(not isinstance(value, Decimal) or not value.is_finite() for value in numbers):
+        return None, "missing or invalid exact numeric evidence"
+    quantity, price, fee = numbers
+    if quantity <= 0 or price <= 0 or fee < 0:
+        return None, "unsupported quantity, price or fee"
+    with localcontext() as context:
+        context.prec = max(28, sum(len(value.as_tuple().digits) for value in numbers) + 4)
+        try:
+            gross = quantity * price * unit[1]
+            fee = fee * unit[1]
+        except DecimalException:
+            return None, "unsupported decimal range"
+    return {"quantity": quantity, "gross": gross, "fee": fee, "currency": unit[0],
+            "denomination": currency, "currency_provenance": provenance}, None
+
+
+def historical_dividend_comparison(dividends, account_id, mapping, positions):
+    """Compare retained history conservatively, independently of import selection.
+
+    A canonical comment proves group identity only with matching security/date.
+    It cannot partition several activities into ordinary/bonus or PIL components.
+    Never use matching amounts to manufacture that missing component identity.
+    """
+    findings = []
+    evidence = [item for item in positions.get("dividend_evidence", [])
+                if item["activity"].get("accountId") == account_id]
+    claimed = set()
+    for dividend in dividends:
+        if not dividend.get("payments"):
+            continue
+        reference = f"dividend#{dividend['isin'] or dividend['symbol']}#{dividend['date']}"
+        candidates = [item for item in evidence if item["activity"].get("comment") == reference]
+        finding = {"source": reference, "activity_ids": [item["activity"].get("id") for item in candidates],
+                   "category": "uncertain", "reason": "destination identity not proven"}
+        findings.append(finding)
+        if not candidates:
+            finding["category"] = "absent"
+            continue
+        claimed.update(item["index"] for item in candidates)
+        symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
+        valid = True
+        for item in candidates:
+            row = item["activity"]
+            profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
+            try:
+                date = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
+                day_matches = (date.tzinfo is not None and date.utcoffset().total_seconds() == 0
+                               and date.date().isoformat() == dividend["date"])
+            except (ValueError, TypeError, AttributeError):
+                day_matches = False
+            if (not item["active"] or not row.get("id") or profile.get("dataSource") != "YAHOO"
+                    or profile.get("symbol") != symbol or not day_matches
+                    or (dividend["isin"] and profile.get("isin") != dividend["isin"])):
+                valid = False
+        if not valid:
+            finding["reason"] = "inactive, unsupported or conflicting security/date identity"
+            continue
+        if len(candidates) != 1:
+            finding["reason"] = "component partition identity not proven"
+            continue
+        if not dividend_input_compatible([dividend], quiet=True):
+            finding["reason"] = "incompatible source quantity schema"
+            continue
+        quantity = dividend_structured_quantity(dividend, quiet=True)
+        if quantity is None:
+            finding["reason"] = "missing or conflicting source quantity evidence"
+            continue
+        values, reason = _historical_values(candidates[0])
+        if values is None:
+            finding["reason"] = reason
+            continue
+        unit = _historical_currency(dividend.get("currency"))
+        gross = _dividend_cash_sum(dividend["payments"])
+        tax = _dividend_cash_sum([row for row in dividend.get("cash_rows", [])
+                                 if row.get("type") == WITHHOLDING_CASH_TYPE])
+        if unit is None or unit[0] != values["currency"] or gross is None or tax is None or gross <= 0:
+            finding["reason"] = "missing, conflicting or unsupported source money evidence"
+            continue
+        with localcontext() as context:
+            numbers = [gross, tax, values["gross"], values["fee"], quantity, values["quantity"]]
+            context.prec = max(28, max(value.adjusted() for value in numbers)
+                               - min(value.as_tuple().exponent for value in numbers) + 4)
+            try:
+                source_gross = gross * unit[1]
+                source_fee = max(Decimal(0), tax.copy_negate()) * unit[1]
+                differences = {"quantity_delta": values["quantity"] - quantity,
+                               "gross_delta": values["gross"] - source_gross,
+                               "fee_delta": values["fee"] - source_fee}
+            except DecimalException:
+                finding["reason"] = "unsupported decimal range"
+                continue
+        finding.update(values)
+        finding.update(differences)
+        finding["source_quantity"] = quantity
+        finding["source_gross"] = source_gross
+        finding["source_fee"] = source_fee
+        finding["category"] = "differences" if any(differences.values()) else "coherent_single"
+        finding["reason"] = "exact whole-payment comparison"
+    for item in evidence:
+        if item["index"] not in claimed:
+            findings.append({"source": None, "activity_ids": [item["activity"].get("id")],
+                             "category": "uncertain", "reason": "destination outside proven source coverage"})
+    return findings
+
+
+def log_historical_dividend_comparison(findings, account_id):
+    """Report private diagnostic evidence without changing outcomes or persistence."""
+    counts = defaultdict(int)
+    for finding in findings:
+        counts[finding["category"]] += 1
+        if finding["category"] != "coherent_single":
+            log.info("[DRY RUN] Historical dividend detail: %s", finding)
+        else:
+            log.debug("[DRY RUN] Historical dividend detail: %s", finding)
+    log.info("[DRY RUN] Historical dividends account=%s coverage=%d categories=%s",
+             account_id, len(findings), dict(sorted(counts.items())))
+
+
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
                     existing_trade_ids, existing_dividend_comments, positions):
     """Process a single IBKR account: fetch, parse, and sync to Ghostfolio.
@@ -1547,6 +1719,9 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
              len(activities), skipped_dup, skipped_other)
 
     # Establish identity and deduplicate before checking quantity or schema.
+    if config.get("dry_run"):
+        findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions)
+        log_historical_dividend_comparison(findings, ghost_account_id)
     div_activities = []
     div_skipped_dup = 0
     candidates = []

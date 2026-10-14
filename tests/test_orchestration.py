@@ -962,3 +962,61 @@ def test_dividend_structured_input_withholding_needs_no_accrual_keys(monkeypatch
     w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
     assert w.run()[1] is True
     assert w.activities[0]["fee"] == 5
+
+
+@pytest.mark.parametrize("price,category", [(0.25, "coherent_single"), (0.26, "differences")])
+def test_historical_diagnostic_coherent_dry_run_before_dedup_zero_writes(monkeypatch, caplog, price, category):
+    from test_dividend_diagnostics import destination, read
+    import logging
+
+    ids, comments, pos = read(monkeypatch, [destination(unitPrice=price)])
+    monkeypatch.setattr(m, "fetch_flex_report", lambda *args: report(divs=div_xml()))
+    monkeypatch.setattr(m, "ghost_find_account_id", lambda *args: ACC)
+    for verb in ("post", "put", "patch", "delete"):
+        monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+    caplog.set_level(logging.INFO)
+    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
+    assert category in caplog.text
+    assert "Historical dividends" in caplog.text
+    assert "duplicates skipped: 1" in caplog.text
+    assert comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
+    assert ids == set()
+    if category == "differences":
+        assert "gross_delta" in caplog.text and "dividend-1" in caplog.text
+
+
+def test_historical_diagnostic_coherent_live_pipeline_unchanged(monkeypatch):
+    monkeypatch.setattr(m, "historical_dividend_comparison", lambda *args: pytest.fail("live diagnostic"))
+    w = World(monkeypatch, report(divs=div_xml()))
+    assert w.run()[1] is True
+    assert w.activities[0]["quantity"] == 100.0
+    assert w.activities[0]["unitPrice"] == 0.25
+    assert w.cash_calls == [(ACC, 100.5)]
+
+
+@pytest.mark.parametrize("mode", ["schema", "quantity"])
+@pytest.mark.parametrize("existing", [True, False])
+def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monkeypatch, caplog, mode, existing):
+    from test_dividend_diagnostics import destination, read
+    import logging
+
+    ids, comments, pos = read(monkeypatch, [destination()] if existing else [])
+    root = ET.fromstring(report(divs=div_xml()))
+    accrual = root.find(".//ChangeInDividendAccrual")
+    if mode == "schema":
+        del accrual.attrib["quantity"]
+    else:
+        accrual.set("quantity", "bad")
+    monkeypatch.setattr(m, "fetch_flex_report", lambda *args: ET.tostring(root, encoding="unicode"))
+    monkeypatch.setattr(m, "ghost_find_account_id", lambda *args: ACC)
+    for verb in ("post", "put", "patch", "delete"):
+        monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+    caplog.set_level(logging.INFO)
+    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, ids, comments, pos) == ({}, True)
+    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert len(warnings) == (0 if existing else 1)
+    assert "Historical dividends" in caplog.text
+    if existing:
+        assert "uncertain" in caplog.text and "not imported" not in caplog.text
+    else:
+        assert "not imported" in caplog.text

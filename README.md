@@ -368,6 +368,26 @@ export GHOST_ACCOUNT_NAMES="IBKR Main"
 
 Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
+Every dry run also compares historical dividends in the target account before
+deduplication. The INFO summary reports coverage and categories; details for
+differences or uncertainty include source comments and activity IDs. A coherent
+single activity has the canonical source comment, consistent security and UTC
+date, and exactly equal quantity, gross and fee. Gross comes from broker cash;
+accruals establish quantity. Component quantities are never summed. Several
+activities with the same group comment do not prove a component partition,
+even when their amounts sum correctly; that comparison stays uncertain.
+
+The diagnostic retains original JSON decimals from the existing activities GET.
+It never reconstructs exact evidence from floats. Activity currency determines
+the denomination; only an explicit null permits profile currency fallback, with
+its provenance retained. Supported denominations are USD, EUR, GBP, CHF, JPY,
+CAD, AUD, NZD, HKD, SGD, SEK, NOK, DKK, PLN, CZK, HUF, ILS, ZAR and the existing
+GBp, ZAc and ILA minor units. Missing or unsupported context stays uncertain.
+Gross and fee differences use destination minus source, without a tolerance.
+The diagnostic adds no reads, writes, files or settings. Findings do not change
+import selection, cash updates, exit codes or notifications. Live runs do not
+run this comparison. Use the one-off command below without `CRON`.
+
 ```bash
 docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
   -e IBKR_TOKEN=your_token -e IBKR_ACCOUNT_IDS=U1234567 -e IBKR_QUERY_IDS=123456 \
