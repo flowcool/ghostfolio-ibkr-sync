@@ -1,4 +1,5 @@
 """Offline historical dividend comparisons using synthetic broker/API evidence."""
+import re
 import json
 from decimal import Decimal
 
@@ -396,6 +397,7 @@ def test_evidence_absent_destination_and_info_coverage(monkeypatch, caplog):
     m.log_historical_dividend_comparison(findings, ACC)
     assert "source_groups=1 unmatched_destination=0" in caplog.text
     assert findings[0]["source"] in caplog.text and "no canonical destination identity" in caplog.text
+    assert "1 to check, 0 informational, 0 noise" in caplog.text
 
 
 def identity(findings):
@@ -488,11 +490,12 @@ def test_historical_diagnostic_actionable_anomaly_block_and_failed_check_counts(
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison(findings, ACC)
     text = caplog.text
-    assert "category=uncertain" in text and f"security=KO isin={ISIN_KO} source_date=2026-07-15" in text
-    assert "check symbol fail activity=dividend-1 expected=KO observed=PEP" in text
-    assert "check date fail" in text and "'utc': '2026-07-16'" in text
-    assert "destination: id=dividend-1 security=PEP" in text and "utc_date=2026-07-16" in text
-    assert "quantity=100 gross=25.00 fee=0 currency=USD" in text
+    assert "Dividend to check: uncertain" in text
+    assert f"Security: KO (ISIN {ISIN_KO}), dividend date 2026-07-15" in text
+    assert "Identity check symbol fail for activity dividend-1: expected KO, found PEP" in text
+    assert "Identity check date fail" in text and "found 2026-07-16" in text
+    assert "Ghostfolio: activity dividend-1 (PEP) on 2026-07-16" in text
+    assert "quantity 100, gross 25.00 USD, fee 0 USD" in text and "Nothing was written." in text
     assert "failed_checks={'date': 1, 'symbol': 1}" in text
 
 
@@ -502,9 +505,12 @@ def test_historical_diagnostic_actionable_outside_window_shows_destination_value
     findings = m.historical_dividend_comparison([], ACC, {}, pos, ("2026-07-01", "2026-07-31"))
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison(findings, ACC)
-    assert "category=outside_window" in caplog.text
-    assert "destination: id=dividend-1 security=KO" in caplog.text
-    assert "utc_date=2025-07-15" in caplog.text and "quantity=100 gross=25.00" in caplog.text
+    assert "Ghostfolio: activity" not in caplog.text  # outside window logs at DEBUG only
+    caplog.set_level(logging.DEBUG)
+    m.log_historical_dividend_comparison(findings, ACC)
+    assert "Dividend outside report window" in caplog.text
+    assert "Ghostfolio: activity dividend-1 (KO) on 2025-07-15" in caplog.text
+    assert "quantity 100, gross 25.00 USD" in caplog.text
     assert findings[0]["source"] is None
 
 
@@ -519,8 +525,8 @@ def test_historical_diagnostic_actionable_proximity_skip_is_explained_not_certif
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison(findings, ACC)
     assert "skipped by proximity" in caplog.text
-    assert "weak candidate: id=dividend-1 active=True comment=legacy KO dividend utc_date=2026-07-17" in caplog.text
-    assert "quantity=100 gross=25.00" in caplog.text
+    assert "Weak candidate: activity dividend-1 (comment legacy KO dividend, 2026-07-17)" in caplog.text
+    assert "quantity 100, gross 25.00 USD" in caplog.text
 
 
 def test_historical_diagnostic_actionable_no_proximity_note_beyond_window(monkeypatch):
@@ -535,12 +541,12 @@ def test_historical_diagnostic_actionable_levels_and_privacy(monkeypatch, caplog
     coherent = comparison(monkeypatch, [destination()])
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison(coherent, ACC)
-    assert "Historical dividend finding" not in caplog.text  # coherent detail is DEBUG only
+    assert "Dividend coherent" not in caplog.text  # coherent detail is DEBUG only
     assert "failed_checks={}" in caplog.text
     caplog.clear()
     caplog.set_level(logging.DEBUG)
     m.log_historical_dividend_comparison(coherent, ACC)
-    assert "category=coherent_single" in caplog.text
+    assert "Dividend coherent: coherent" in caplog.text
     assert CFG["ghost_host"] not in caplog.text
 
 
@@ -562,7 +568,7 @@ def test_historical_diagnostic_actionable_source_values_survive_failed_identity(
     assert (finding["source_quantity"], finding["source_gross"], finding["source_fee"],
             finding["source_currency"]) == (Decimal(100), Decimal("25.00"), Decimal(0), "USD")
     text = m.format_historical_dividend_finding(finding, ACC)
-    assert "source values: quantity=100 gross=25.00 fee=0 currency=USD" in text
+    assert "IBKR: quantity 100, gross 25.00 USD, fee 0 USD" in text
 
 
 def test_historical_diagnostic_actionable_destination_before_duplicate_identity_early_return(monkeypatch):
@@ -587,9 +593,9 @@ def test_historical_diagnostic_skip_cause_old_symbol_comment_beats_proximity(mon
     assert [(item["activity_id"], item["active"]) for item in finding["historical_comment"]] == [("old", True)]
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison([finding], ACC)
-    assert "skipped by historical comment" in caplog.text and "carrier: id=old active=True" in caplog.text
-    assert "skipped by proximity" not in caplog.text
-    assert "quantity=100 gross=25.00" in caplog.text
+    assert "Skipped by historical comment: activity old" in caplog.text
+    assert "Skipped by proximity" not in caplog.text
+    assert "quantity 100, gross 25.00 USD" in caplog.text
 
 
 def test_historical_diagnostic_skip_cause_inactive_carrier(monkeypatch):
@@ -623,7 +629,7 @@ def test_historical_diagnostic_skip_cause_unsupported_destination_currency(monke
     assert finding["category"] == "uncertain"
     assert finding["reason"] == "missing or unsupported currency context"
     assert finding["currency_context"] == {"source": "USD", "destination": ["KRW"], "provenance": ["activity"]}
-    assert "currency context: source=USD destination=KRW provenance=activity" in \
+    assert "Currency: IBKR USD, Ghostfolio KRW (from activity)" in \
         m.format_historical_dividend_finding(finding, ACC)
 
 
@@ -647,7 +653,7 @@ def test_historical_diagnostic_skip_cause_unsupported_source_currency(monkeypatc
                                xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))
     assert finding["category"] == "uncertain"
     assert finding["currency_context"]["source"] == "KRW"
-    assert "currency context: source=KRW destination=KRW" in m.format_historical_dividend_finding(finding, ACC)
+    assert "Currency: IBKR KRW, Ghostfolio KRW" in m.format_historical_dividend_finding(finding, ACC)
 
 
 def delta_wire(row, price):
@@ -786,3 +792,63 @@ def test_dividend_readable_pairs_equal_total_needs_accepted_identity(monkeypatch
     finding = readable(monkeypatch, rows)[0]
     assert finding["category"] == "uncertain"
     assert finding["readable"]["class"] == "to_check" and finding["readable"]["label"] == "uncertain"
+
+
+def report_text(findings, caplog, level="INFO"):
+    import logging
+    caplog.clear()
+    caplog.set_level(getattr(logging, level))
+    m.log_historical_dividend_comparison(findings, ACC)
+    return caplog.text
+
+
+def assert_plain(text):
+    assert "Decimal(" not in text and "[" not in text.replace("[DRY RUN]", "")
+    assert not re.search(r"\d[eE][-+]?\d", text)
+
+
+def test_dividend_readable_report_quantity_difference_with_two_legacy_twins(monkeypatch, caplog):
+    rows = [destination(quantity=101),
+            destination(id="dividend-2", comment="legacy KO dividend"),
+            destination(id="dividend-3", comment="legacy KO dividend 2")]
+    findings = readable(monkeypatch, rows)
+    group = [f for f in findings if f["source"] is not None][0]
+    twin = [f for f in findings if f["source"] is None][0]
+    block = m.format_historical_dividend_finding(group, ACC)
+    assert "Dividend to check: quantity difference" in block
+    assert "IBKR: quantity 100, gross 25.00 USD, fee 0 USD" in block
+    assert "Ghostfolio: activity dividend-1 (KO) on 2026-07-15, quantity 101, gross 25.25 USD" in block
+    assert "Difference (Ghostfolio minus IBKR): quantity +1" in block
+    assert "Probable duplicates" in block and "dividend-2, dividend-3" in block
+    assert "Action:" in block and block.endswith("Nothing was written.")
+    twin_block = m.format_historical_dividend_finding(twin, ACC)
+    assert "This row looks like a duplicate" in twin_block and "Nothing was written." in twin_block
+    assert_plain(block + twin_block)
+    text = report_text(findings, caplog)
+    assert "3 to check, 0 informational, 0 noise" in text
+    assert text.index("to check, 0 informational") < text.index("Dividend to check: quantity difference")
+
+
+def test_dividend_readable_report_plain_decimals_without_exponent(monkeypatch, caplog):
+    row = destination(unitPrice=0.25, quantity=100.0000001)
+    findings = readable(monkeypatch, [row])
+    block = m.format_historical_dividend_finding(findings[0], ACC)
+    assert "quantity +0.0000001" in block
+    assert_plain(block)
+    assert m._plain(Decimal("1E-7")) == "0.0000001" and m._plain(Decimal("1E+3")) == "1000"
+    assert m._plain(0.0000001) == "0.0000001"
+
+
+def test_dividend_readable_report_levels_and_summary_order(monkeypatch, caplog):
+    info = [destination(id=f"dividend-{i}", unitPrice=0.125) for i in (1, 2)]
+    text = report_text(readable(monkeypatch, info), caplog)
+    assert "0 to check, 1 informational, 0 noise" in text
+    assert "total equal to IBKR, split over 2 rows" in text
+    assert text.index("Dividend information") < text.index("0 to check, 1 informational")
+    noise = readable(monkeypatch, [destination(unitPrice=0.250001)])
+    assert "0 to check, 0 informational, 1 noise" in report_text(noise, caplog)
+    assert "Dividend noise" not in caplog.text
+    assert "Dividend noise: rounding noise" in report_text(noise, caplog, "DEBUG")
+    coherent = readable(monkeypatch, [destination()])
+    assert "Dividend coherent" not in report_text(coherent, caplog)
+    assert "Dividend coherent" in report_text(coherent, caplog, "DEBUG")
