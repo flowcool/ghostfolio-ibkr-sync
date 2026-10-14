@@ -8,8 +8,9 @@ manual opening purchases must back older positions. Daily additive runs retain
 previously imported history. The holdings guard uses net quantities rather than
 chronological reconstruction, so it cannot prove complete historical accounting.
 
-The parser consumes Trades, Cash Transactions and Cash Report, not Corporate
-Actions. Splits and mergers require manual reconciliation; split-adjusted market
+The parser consumes Account Information (base currency), Trades, Cash
+Transactions, Change in Dividend Accruals (dividend quantity evidence) and Cash
+Report, not Corporate Actions. Splits and mergers require manual reconciliation; split-adjusted market
 prices can disagree with unchanged stored transactions. Keep the 365-day query
 for recovery instead of narrowing it casually: an omitted purchase can prevent
 a later sell from passing the holdings gate.

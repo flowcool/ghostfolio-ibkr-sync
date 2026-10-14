@@ -4,6 +4,30 @@
 
 The Flex Query does not include the Cash Transactions section. Add it as described in [Create a Flex Query](ibkr-setup.md#2-create-a-flex-query); trades still sync meanwhile, but the run exits 1.
 
+## "cash rows without a valid 'YYYYMMDD;HHmmss TimeZone' dateTime"
+
+The full line starts with `Flex Query <id>:` and ends with `account failed before any write`. A DETAIL dividend, payment-in-lieu or withholding row has no valid time-zone suffix, so the account fails before any import, cash or platform write. The run exits 1; other accounts still run and `DRY_RUN` is not enabled. In the Flex query, set the time format to **HHmmss TimeZone** (see [Create a Flex Query](ibkr-setup.md#2-create-a-flex-query)).
+
+## "required dividend fields missing from the report"
+
+The query lacks an attribute the connector requires, or the Change in Dividend Accruals section. The line names each missing XML attribute with the IBKR field to tick, for example `CashTransaction.conid (ConID (Contract ID))`, and ends with `account failed before any write`. Tick the named fields, save the query and re-run. A single empty or malformed value does not trigger this error: it rejects only that payment. See [Prepare for structured dividend quantities](ibkr-setup.md#prepare-for-structured-dividend-quantities).
+
+## "TZ is missing" or "TZ is not a valid IANA timezone"
+
+The run logs `<reason>: whole run forced to DRY_RUN, no Ghostfolio writes`. Nothing is written for any account, and the run sends one notification naming the reason when `APPRISE_URLS` is set. Set `TZ` to an IANA zone such as `Europe/Warsaw` and recreate the container. The image sets no default `TZ`.
+
+## "Duplicate Ghostfolio target"
+
+`Configuration error: Duplicate Ghostfolio target '<name>': each IBKR account needs its own target`. Two IBKR accounts point at one Ghostfolio account, either by a repeated name in `GHOST_ACCOUNT_NAMES` or, without names, by a repeated IBKR account ID. The run exits 1 before any network call. Give each IBKR account its own Ghostfolio account; the second balance would overwrite the first.
+
+## "Cash balance not updated for account ..."
+
+The cash balance is sent only when the IBKR base currency equals the Ghostfolio account currency. The account fails and no balance is sent in two cases: `IBKR base currency X differs from Ghostfolio account currency Y` (change the Ghostfolio account currency, or use the matching account), and `the report has no base currency` (select **CurrencyPrimary** under **Account Information** in the Flex query). `DRY_RUN` runs the same check.
+
+## "Unknown buySell ... trade rejected"
+
+The Flex report has a trade whose Buy/Sell value is not exactly `BUY` or `SELL`, for example a cancellation (`SELL (Ca.)`). The row is never imported, the log adds `Trade <id> cannot be converted safely; excluded before holdings checks`, and the account fails. Other trades import normally. Every run fails while the row stays in the 365-day report window. Check the trade in IBKR; there is no ENV override.
+
 ## "Not importing buy ... matches a manual Ghostfolio buy"
 
 An IBKR buy was **not** imported because Ghostfolio already has a buy of the same quantity within 2 days that has no `IBKR#` comment, so it is most likely the same purchase entered by hand. Importing it would double the position. Put `IBKR#<tradeID>` (the ID shown in the warning) in the comment of that manual entry and the warning goes away. If it was a different purchase, add the missing buy by hand. See [What the tool skips automatically](../README.md#what-the-tool-skips-automatically).
@@ -33,11 +57,11 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 | Code | Meaning |
 | --- | --- |
 | 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), at least one account failed, or an unhandled error occurred |
+| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), a Ghostfolio target is repeated, at least one account failed, or an unhandled error occurred |
 
-A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
+A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Flex query without the time-zone suffix or the required dividend fields, a refused cash balance (currency mismatch or no base currency), an unknown trade side, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
-With [failure notifications](../README.md#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run (`DRY_RUN`), which never notifies; its delivery never changes the exit code.
+With [failure notifications](../README.md#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run chosen with `DRY_RUN`, which never notifies. A run forced into `DRY_RUN` by a missing or invalid `TZ` does notify, even when every account succeeds. Delivery never changes the exit code.
 
 Unmapped ISINs are **not** a failure - they are reported at the end of the run as a prompt to update your mapping file, and the run still exits 0. Activities that Ghostfolio itself detects as duplicates are not a failure either. The tool logs `Ghostfolio created X of Y` and counts only submitted rows matched to the server-created activity list as imported. An unknown or unverifiable import outcome fails the account and blocks subsequent imports and processing of later queries targeting that account for the rest of the run.
 

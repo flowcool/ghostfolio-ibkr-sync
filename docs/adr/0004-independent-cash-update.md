@@ -11,12 +11,15 @@ rollback across activity imports and the cash update, and import failure still
 makes the run fail.
 
 This is not a promise to update cash after every error: early fetch/account
-lookup failures or exceptions before reaching the cash stage bypass it. A missing
-or unparseable base-currency row skips the update with a warning. An uncertain
+lookup failures or exceptions before reaching the cash stage bypass it. A report
+without a `BASE_SUMMARY` cash row skips the update with a warning. An uncertain
 import fences subsequent queries to the same destination account during that
 run, but does not bypass the current invocation's cash stage. Dry runs perform
 no financial write. The account currency is preserved without conversion, so it
-must match IBKR's base currency.
+must match IBKR's base currency: since 3.0 the update checks the Flex
+`AccountInformation` currency against the Ghostfolio account currency. A
+difference, or a report without that currency, sends no balance and fails the
+account (after the import phases, so trades and dividends are unaffected).
 
 Sources: `process_account`, `mark_import_uncertain`, `parse_cash_report` and
 `ghost_update_cash_balance` in the [runtime](../../ibkr_to_ghostfolio.py), and

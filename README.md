@@ -111,6 +111,14 @@ ghostfolio-ibkr-sync version v2.2.0
 New stable images, including `:latest`, report `vX.Y.Z`. Older main-built images
 may report `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
 
+### Upgrading to 3.0
+
+3.0 contains breaking changes: the Flex query needs a time-zone suffix and more
+dividend fields, and `TZ` must be set. Read the
+[3.0 upgrade and rollback guide](docs/upgrading-to-3.0.md) before pulling a new
+image. A `v3.0.0-rc.N` release candidate may be published first for testing; it
+never moves `:latest`.
+
 ### Upgrading to 2.2
 
 See the [2.2 upgrade and rollback guide](docs/upgrading-to-2.2.md).
@@ -135,17 +143,20 @@ before upgrading. Cash Transactions still establish payments and withholding;
 Change in Dividend Accruals supplies quantity evidence only. The connector no
 longer infers quantity from descriptions or falls back to one unit. Missing,
 conflicting or unsafe evidence rejects the affected payment with a warning.
-Missing required attributes block new account dividends; empty or conflicting
-evidence rejects only the affected payment. Trades and cash continue. These
-rejections do not change the exit code or send failure notifications. Rejected
-payments retry on later runs; existing dividends are deduplicated first and stay
-untouched and unverified.
+A required Cash Transactions attribute, or the Change in Dividend Accruals
+section, that is missing from the whole report fails the account before any
+write (exit 1, one `ERROR` naming each field to tick). A single empty or
+conflicting value rejects only the affected payment: trades and cash continue,
+and that rejection does not change the exit code or send failure notifications.
+Rejected payments retry on later runs; existing dividends are deduplicated first
+and stay untouched and unverified.
 
 Before upgrading, back up Ghostfolio and record the previous image digest. Keep
 ENV and mounts available, and set a valid IANA `TZ` before enabling writes.
 For runtime rollback, restore that digest and recreate the connector. Check the
 previous runtime's timestamp format requirements before resuming writes.
-Rollback does not undo financial writes. See the [upgrade procedure](docs/ibkr-setup.md#activate-timezone-aware-dividend-diagnostics).
+Rollback does not undo financial writes. See the [upgrade procedure](docs/ibkr-setup.md#activate-timezone-aware-dividend-diagnostics)
+and the [3.0 upgrade guide](docs/upgrading-to-3.0.md).
 
 ## Ghostfolio Setup
 
@@ -240,7 +251,7 @@ All configuration is done via environment variables:
 | `GHOST_TOKEN_EXPIRY_WARNING_DAYS` | No | Legacy token reminder window, integer 0-365 days (default `14`; `0` disables). Invalid values warn and use `14`. Ignored with `GHOST_ACCESS_TOKEN` | `14` |
 | `GHOST_HOST` | Yes | Ghostfolio base URL | `http://ghostfolio:3333` |
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
-| `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count) | `IBKR Individual` |
+| `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count). Two accounts cannot share one name: the run stops at start-up (exit 1) before any network call. Without names, the IBKR account IDs are the targets and must also be distinct | `IBKR Individual` |
 | `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
 | `CRON` | No | Five numeric cron fields for recurring runs (Docker only); validated before startup | `0 6 * * *` |
 | `TZ` | For writes | Valid IANA timezone for historical dividend dates and cron scheduling. Missing or invalid values force the whole run into `DRY_RUN`, with a WARNING and a final notification when configured | `Europe/Warsaw` |
@@ -314,13 +325,13 @@ A clean, fully reconciled run normally emits only `INFO` lines. `WARNING` means 
 | `DEBUG` | FX/options skipped, each sell not imported because already reconciled |
 | `INFO` | Sells imported for long-held positions; one summary line of sells not imported (already entered manually, or no Ghostfolio position) |
 | `WARNING` | Unmapped ISIN on symbol fallback; position held under another symbol; manual sell or buy nearby with another quantity; buy skipped because it matches a manual buy; withholding tax without a dividend the same day; network retry |
-| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; run aborted before any write (see [Run stops before importing anything](docs/troubleshooting.md#run-stops-before-importing-anything)) |
+| `ERROR` | Ghostfolio holds some quantity but the IBKR sells exceed it — fix the position in Ghostfolio; IBKR/Ghostfolio request failures; account failed before any write because a Flex prerequisite is missing (time-zone suffix, dividend fields); cash balance refused (currency mismatch or no base currency); trade rejected (unknown `buySell`); run aborted before any write (see [Run stops before importing anything](docs/troubleshooting.md#run-stops-before-importing-anything)) |
 
 ## How activities are converted
 
 | Source (IBKR) | Ghostfolio activity |
 |---|---|
-| Trade | `BUY` when IBKR says `BUY`, `SELL` when IBKR says `SELL`. Any other value (for example a cancellation) rejects the row: an error is logged, the account run is not ok and the other trades import normally. Quantity and price are absolute values. The comment is `IBKR#<tradeID>`, the data source is always `YAHOO`. |
+| Trade | `BUY` when IBKR says `BUY`, `SELL` when IBKR says `SELL`. Any other value (for example a cancellation) rejects the row: an error is logged, the account run is not ok and the other trades import normally. The row is never imported, so every run fails while it stays inside the 365-day report window. Quantity and price are absolute values. The comment is `IBKR#<tradeID>`, the data source is always `YAHOO`. |
 | Commission | `fee` = the commission cost. A positive `ibCommission` (a rebate) is recorded as a fee of 0 and logged as a `WARNING`, because Ghostfolio fees cannot be negative. |
 | Dividend | One `DIVIDEND` per security and day: dividends and payments in lieu are summed (a reversal nets out), withholding tax becomes the `fee`. A net refund of tax is recorded as a fee of 0 with a `WARNING`. The comment is `dividend#<ISIN>#<date>` (or the IBKR symbol when there is no ISIN) and the date is the date of the cash transaction at 00:00 UTC. A dividend is treated as already present if Ghostfolio has that comment, **or any dividend of the same symbol in the same account within ±3 days** (so a real dividend that falls that close to a manual one is not imported). |
 | Dividend quantity and price | Each net-positive cash action matches accruals by nonempty `accountId`, `conid`, `currency`, `actionID` and `exDate`. It needs exactly one `Re` with `payDate` on the cash day and `date` or `reportDate` on that day. All associated quantities must agree as positive finite decimals. Dividend/PIL portions and ordinary/bonus actions share one common quantity; quantities are never summed or rounded. Price = cash gross ÷ quantity, regardless of accrual gross, tax or rate. Zero-net actions provide no quantity; negative-net actions, mixed currencies and conflicting evidence reject the group. Quantity and price must remain positive finite numbers, and fees nonnegative finite, after conversion and minor-unit scaling; overflow or positive underflow rejects the group. |
@@ -467,6 +478,8 @@ docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBU
   -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
+
+The dividend comparison ends with one line, `[DRY RUN] Dividend report: N to check, N informational, N noise`, followed by the detail of each item to check. Findings are written in plain English: the reason, the IBKR and Ghostfolio values side by side, one action line and the statement that nothing was written. Coherent and outside-window findings appear at `DEBUG` only. Differences of less than half a minor unit are noise; a difference of exactly one minor unit with equal quantity is named "minimal difference, cause unknown"; a legacy-comment row on the same security and day is named "probable duplicate". Each item to check that has a candidate carries a "Proposed match": the IBKR dividend and the candidate Ghostfolio rows, each labelled Keep, Duplicate or Differs, with a "strong" or "weak" confidence and the row to act on; with no candidate it reads "no confident match". A proposal never writes, repairs or changes the counts, exit code or notifications.
 
 Look for lines starting with `[DRY RUN]`; when there is nothing to import the log simply says `No new activities to import`. Replace `your-ghostfolio-network` with the Docker network shared with Ghostfolio. Run it again after upgrading to a new version: comparing the log with the previous version's shows exactly what the new version changes.
 
