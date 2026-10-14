@@ -1,7 +1,7 @@
 ## 1. Rules
 
 - [x] 1.1 Build the candidate set and strong/weak confidence per IBKR dividend (same security, local day, gross, fee), including coherent twins, offline. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_match_strong'`.
-- [ ] 1.2 Add the weak rules (proximity window, quantity gap with a gross difference, one-unit gap), tie-breaks and "no confident match", offline. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_match_weak'`.
+- [x] 1.2 Add the weak rules (proximity window, quantity gap with a gross difference, one-unit gap), tie-breaks and "no confident match", offline. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_match_weak'`.
 
 ## 2. Report text
 

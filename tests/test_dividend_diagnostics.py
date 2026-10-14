@@ -908,7 +908,7 @@ def test_dividend_match_strong_proximity_row_equal_in_gross_and_fee(monkeypatch)
 def test_dividend_match_strong_proximity_row_of_another_day_is_not_strong(monkeypatch):
     near = destination(id="dividend-3", comment="legacy KO dividend", date="2026-07-16T00:00:00Z")
     findings = readable(monkeypatch, [near])
-    assert findings[0]["category"] == "absent" and "match" not in findings[0]
+    assert findings[0]["category"] == "absent" and findings[0]["match"]["confidence"] != "strong"
 
 
 def test_dividend_match_strong_leaves_classes_categories_and_counts_unchanged(monkeypatch):
@@ -916,5 +916,60 @@ def test_dividend_match_strong_leaves_classes_categories_and_counts_unchanged(mo
     findings = readable(monkeypatch, [destination(unitPrice=0.2501), twin])
     stripped = [{k: v for k, v in f.items() if k != "match"} for f in findings]
     again = m.classify_dividend_findings([{k: v for k, v in f.items() if k != "readable"} for f in stripped])
+    assert [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings] == \
+        [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in again]
+
+
+def assert_weak(match, ids):
+    assert match["confidence"] == "weak"
+    assert [row["activity_id"] for row in match["rows"]] == ids
+    assert {row["label"] for row in match["rows"]} == {"Differs"}
+    assert match["manual_comparison"] is True
+    assert match["action_activity_id"] == ids[0]
+
+
+def test_dividend_match_weak_one_unit_gross_gap(monkeypatch):
+    match = match_of(readable(monkeypatch, [destination(unitPrice=0.2501)]))
+    assert_weak(match, ["dividend-1"])
+
+
+def test_dividend_match_weak_quantity_gap_with_other_gross(monkeypatch):
+    match = match_of(readable(monkeypatch, [destination(quantity=50)]))
+    assert_weak(match, ["dividend-1"])
+    assert match["rows"][0]["values"]["quantity"] == Decimal(50)
+
+
+def test_dividend_match_weak_proximity_window_row(monkeypatch):
+    near = destination(id="dividend-3", comment="legacy KO dividend", date="2026-07-16T00:00:00Z")
+    findings = readable(monkeypatch, [near])
+    assert findings[0]["category"] == "absent"
+    assert_weak(findings[0]["match"], ["dividend-3"])
+    assert findings[0]["match"]["rows"][0]["origin"] == "proximity"
+
+
+def test_dividend_match_weak_twins_all_differ_without_keep(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", unitPrice=0.26)
+    match = match_of(readable(monkeypatch, [destination(unitPrice=0.2501), twin]))
+    assert_weak(match, ["dividend-1", "dividend-2"])
+
+
+def test_dividend_match_weak_strong_still_beats_weak(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", unitPrice=0.26)
+    match = match_of(readable(monkeypatch, [destination(), twin]))
+    assert match["confidence"] == "strong" and match["manual_comparison"] is False
+
+
+def test_dividend_match_weak_no_candidate_reads_none(monkeypatch):
+    findings = readable(monkeypatch, [])
+    assert findings[0]["category"] == "absent"
+    assert findings[0]["match"] == {"confidence": "none", "rows": [], "action_activity_id": None,
+                                    "manual_comparison": False}
+
+
+def test_dividend_match_weak_leaves_classes_categories_and_counts_unchanged(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", unitPrice=0.26)
+    findings = readable(monkeypatch, [destination(quantity=50), twin])
+    stripped = [{k: v for k, v in f.items() if k not in ("match", "readable")} for f in findings]
+    again = m.classify_dividend_findings(stripped)
     assert [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings] == \
         [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in again]
