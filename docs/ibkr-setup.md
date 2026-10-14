@@ -190,7 +190,7 @@ certify previously imported dividend quantities.
 
 1. Back up Ghostfolio and record the current connector image digest. Keep ENV,
    credentials and mounts available for rollback. Pause scheduled imports while
-   preparing the upgrade.
+   preparing the upgrade, unless `DRY_RUN` is already true (nothing is written then).
 2. Save the enriched Flex Query with **YYYYMMDD** dates and **HHmmss TimeZone**
    times. Check the resulting DETAIL dividend, payment-in-lieu and withholding
    cash rows for timezone-qualified `dateTime` values. Keep the accrual fields

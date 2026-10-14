@@ -11,11 +11,21 @@ Before you start:
   [Releasing](releasing.md#runtime-rollback) and the [Docker image guide](../README.md#docker-image).
   Keep your ENV and mounts.
 - A release candidate, `v3.0.0-rc.N`, can be published for testing before `:latest` moves. It
-  never moves `:latest`, `:X.Y.Z` or `:X.Y`. Run it as a one-off container with `DRY_RUN=1`
-  and a pinned `:3.0.0-rc.N` tag, then switch to the stable tag once it is published. See
-  [the release candidate steps](releasing.md#release-candidate-optional).
-- Run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` and no `CRON` after each change below, using the
-  [README preview command](../README.md#dry-run-first).
+  never moves `:latest`, `:X.Y.Z` or `:X.Y`. To test it on a scheduled Compose install, follow
+  [Try a release candidate](#try-a-release-candidate).
+- Run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` after each change below, using the
+  [README preview command](../README.md#dry-run-first) (no `CRON`), or
+  [one manual run in your scheduled container](../README.md#run-once-by-hand-in-a-scheduled-container).
+- Pause scheduled imports only if the container runs live (`DRY_RUN` unset or false). With `DRY_RUN`
+  already true, nothing is written, so keep the schedule running.
+
+## Is my Flex query already compliant?
+
+Run once with `DRY_RUN` true and read the log. The query is ready for 3.0 when the run shows
+neither the time-zone `ERROR` of step 2 (`cash rows without a valid 'YYYYMMDD;HHmmss TimeZone'
+dateTime`) nor the dividend-field `ERROR` of step 3 (`required dividend fields missing from the
+report`). Use a 3.0 image for this check: older images do not run the check. A report with no
+dividend rows raises neither error, so it cannot show that the dividend fields are present.
 
 ## 1. Set `TZ` (required to write)
 
@@ -43,6 +53,13 @@ are not checked.
 2. Set the date format to **YYYYMMDD** and the time format to **HHmmss TimeZone**, and keep the
    date/time separator as a semicolon (`;`).
 3. Click **Continue**, then **Save**.
+
+**Order matters.** Images up to 2.5.0 cannot read the time-zone suffix. If you change the query
+while one of them still runs, its next run logs `Skipping cash transaction ...: invalid amount or
+date` for dividends and `Could not parse dateTime ... for trade ...` for trades, and those rows are
+not imported. Upgrade to 3.0 right after you change the query. If you already changed the query
+and still run 2.5.0 or older, upgrade now, or restore the query time format to **HHmmss** and the
+previous image together.
 
 **Symptom if not done.** The account fails before any import, cash or platform write, `DRY_RUN`
 is not enabled, other accounts still run and the run exits 1:
@@ -136,10 +153,48 @@ Trade <id> cannot be converted safely; excluded before holdings checks
 - **Stable channel.** `:latest` follows the current stable release only. See the
   [Docker image guide](../README.md#docker-image).
 
+## Try a release candidate
+
+Use this on an existing scheduled Compose install to test `v3.0.0-rc.N` before the stable release.
+With `DRY_RUN` true, the candidate writes nothing.
+
+1. Note the current `image:` line of the service. It is your rollback.
+2. Set the image to the candidate tag and `DRY_RUN` to `true`, then redeploy:
+
+   ```yaml
+   image: ghcr.io/flowcool/ghostfolio-ibkr-sync:3.0.0-rc.N
+   environment:
+     DRY_RUN: "true"
+   ```
+
+   ```bash
+   docker compose up -d
+   ```
+
+3. Run once by hand, with the same environment as the cron
+   ([README](../README.md#run-once-by-hand-in-a-scheduled-container)):
+
+   ```bash
+   docker exec <container> python /app/ibkr_to_ghostfolio.py
+   ```
+
+4. Read the log with the [Verify](#verify) list. The first start-up line names the candidate:
+   `ghostfolio-ibkr-sync version v3.0.0-rc.N`.
+5. Roll back: restore the previous `image:` line and the previous `DRY_RUN` value, then run
+   `docker compose up -d`. If you changed the Flex query for 3.0, see the order warning in step 2.
+6. After the stable release, return to `:latest` (or pin `:3.0.0`). A pinned `-rc.N` tag gets no
+   automatic update, so change it yourself.
+
 ## Verify
 
-Run once with `DRY_RUN=1 LOG_LEVEL=DEBUG`. Expect none of the lines above, the version in the start-up
-log, and a dividend report you can read. Then remove `DRY_RUN`, and resume the schedule.
+Run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` (or `DRY_RUN` true in a scheduled container, see above).
+Expect:
+
+- the version in the start-up log, `ghostfolio-ibkr-sync version v3.0.0` (or `v3.0.0-rc.N` for a candidate);
+- none of the `ERROR` and `WARNING` lines of steps 1 to 4 and 6;
+- a dividend report you can read.
+
+Then remove `DRY_RUN` (unless you only test a candidate) and resume the schedule if you paused it.
 
 ## Roll back
 

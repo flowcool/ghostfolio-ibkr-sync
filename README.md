@@ -83,15 +83,24 @@ docker inspect --format '{{.Image}}' "$(docker compose ps -q ibkr-sync)"
 docker image inspect --format '{{json .RepoDigests}}' <image-id-from-above>
 ```
 
+For a container identified by name (any service name, for example the `container_name` of the
+[Compose example](#docker-compose--portainer)), pass the name instead:
+
+```bash
+docker inspect --format '{{.Image}}' <container-name>
+docker image inspect --format '{{json .RepoDigests}}' <image-id-from-above>
+```
+
 Save the matching `ghcr.io/flowcool/ghostfolio-ibkr-sync@sha256:...` reference
 with the existing ENV and mounts. If no repository digest is recorded, stop and
 identify the installed artifact before upgrading. Select a full version for
 controlled upgrades or pin its digest for exact artifact selection. Container
 tags remain mutable outside the workflow's overwrite guards.
 
-A `vX.Y.Z-rc.N` release candidate tag may also exist. It is a maintainer
-validation step, not for normal use: it never moves `:latest` or `:X.Y.Z`. See
-[the release candidate steps](docs/releasing.md#release-candidate-optional).
+A `vX.Y.Z-rc.N` release candidate may also exist. It is published as `:X.Y.Z-rc.N` and never
+moves `:latest`, `:X.Y.Z` or `:X.Y`. A pinned `-rc.N` tag receives no automatic update: after the
+stable release, change the image back to `:latest` (or pin `:X.Y.Z`). To test one on a scheduled
+Compose install, see [Try a release candidate](docs/upgrading-to-3.0.md#try-a-release-candidate).
 
 To roll back, select the saved digest and recreate the connector with the same
 ENV and mounts. This does not restore financial records or undo cash updates.
@@ -108,6 +117,7 @@ ghostfolio-ibkr-sync version v2.2.0
 2026-10-09 06:05:00 [INFO] Starting IBKR to Ghostfolio sync (version v2.2.0)
 ```
 
+A release candidate reports its tag, for example `ghostfolio-ibkr-sync version v3.0.0-rc.1`.
 New stable images, including `:latest`, report `vX.Y.Z`. Older main-built images
 may report `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
 
@@ -117,7 +127,9 @@ may report `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<s
 dividend fields, and `TZ` must be set. Read the
 [3.0 upgrade and rollback guide](docs/upgrading-to-3.0.md) before pulling a new
 image. A `v3.0.0-rc.N` release candidate may be published first for testing; it
-never moves `:latest`.
+never moves `:latest`. The guide also shows how to
+[check that your Flex query is ready](docs/upgrading-to-3.0.md#is-my-flex-query-already-compliant)
+and how to [try the candidate](docs/upgrading-to-3.0.md#try-a-release-candidate).
 
 ### Upgrading to 2.2
 
@@ -688,6 +700,16 @@ instead select an available full version or a recorded digest for controlled
 upgrades. No deployment is changed automatically.
 
 This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml` and give it owner `10001:10001` with mode `0600` as described above. The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
+
+### Run once by hand in a scheduled container
+
+To trigger one run without waiting for the cron tick, execute the cron command in the running
+container. It uses the container's environment, so `DRY_RUN` behaves as configured (with `DRY_RUN`
+true, nothing is written):
+
+```bash
+docker exec <container> python /app/ibkr_to_ghostfolio.py
+```
 
 ## Troubleshooting
 
