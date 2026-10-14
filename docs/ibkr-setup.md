@@ -141,20 +141,17 @@ replace Cash Transactions as the source of paid gross amounts and withholding.
 Accrual amounts and tax can differ from cash, and `Re` also marks corrections and
 cancellations. Do not import accrual rows directly as dividend payments.
 
-Required payment keys are `accountId`, `conid`, `currency`, `actionID` and
-`exDate`. Relevant accrual rows require these keys plus `quantity`, `code`,
-`date`, `payDate` and `reportDate`. Withholding rows keep their cash fields;
-they do not need accrual association keys.
+Required payment keys: a report where a payment attribute appears on no relevant cash row fails the account before any write, including trades and cash. The run logs one `ERROR` that names each missing attribute with the IBKR field to tick. It does not enable `DRY_RUN`. This matches the time-zone check.
 
-A missing accrual section or required attribute on a new payment or relevant
-accrual blocks new dividends for that account with an incompatibility warning.
-Trades and cash still run, and these dividend rejections do not change the exit
-code or trigger failure notifications. Present but empty values, missing evidence
-in a short report window, and conflicting quantities reject only the affected
-payment. Rejected payments are not marked imported and can retry after the query
-or report window is corrected. Empty sections without payments are valid.
-Unrelated rows do not block valid payments. Existing dividends are deduplicated
-before evidence checks and remain untouched and unverified.
+- `accountId`: ClientAccountID
+- `conid`: ConID (Contract ID)
+- `currency`: CurrencyPrimary
+- `actionID`: ActionID
+- `exDate`: Ex Date
+
+When the report has a relevant payment, dividend or withholding cash row, the `ChangeInDividendAccruals` section is also required. If it is absent, the account fails the same way. If it has rows, each of these attributes must appear on at least one of them: `accountId`, `conid`, `currency`, `actionID`, `exDate`, `quantity` (Quantity), `code` (Code), `date` (Date), `payDate` (Pay Date) and `reportDate` (Report Date). A present but empty section stays valid. Withholding rows keep their cash fields; they do not need accrual association keys.
+
+A single empty or malformed value does not fail the account. It rejects only the affected payment: present but empty values, missing evidence in a short report window, and conflicting quantities. Rejected payments are not marked imported and can retry after the query or report window is corrected. Empty sections without payments are valid. Unrelated rows do not block valid payments. Existing dividends are deduplicated before evidence checks and remain untouched and unverified.
 
 Before upgrading, back up Ghostfolio with your deployment's backup procedure and
 record the previous image digest as described in [Releasing](releasing.md).
