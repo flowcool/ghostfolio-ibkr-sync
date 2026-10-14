@@ -1,7 +1,7 @@
 ## 1. Preflight
 
 - [x] 1.1 Accept `vX.Y.Z-rc.N` prereleases in `release_metadata`; widen `assemble` to the RC version. Offline tests in `tests/test_release_image.py` (load the script like `tests/test_release_watch.py`). Check: `.venv/bin/python -m pytest -q tests -k 'release_candidate_metadata'`.
-- [ ] 1.2 Add the stable-follows-RC commit check to the preflight as a function of tag-to-commit data, git calls stubbed in tests. Check: `.venv/bin/python -m pytest -q tests -k 'release_candidate_stable_commit'`.
+- [x] 1.2 Add the stable-follows-RC commit check to the preflight as a function of tag-to-commit data, git calls stubbed in tests. Check: `.venv/bin/python -m pytest -q tests -k 'release_candidate_stable_commit'`.
 
 ## 2. Workflow
 

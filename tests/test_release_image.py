@@ -81,3 +81,50 @@ def test_release_candidate_metadata_assemble_version(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="native image manifest"):
         verify_release_image.assemble("ghcr.io/o/r", "3.0.0-rc.1")
     assert calls
+
+
+A, B, C = "a" * 40, "b" * 40, "c" * 40
+
+
+def test_release_candidate_stable_commit_refuses_later_commit():
+    tags = {"v3.0.0-rc.1": A, "v3.0.0-rc.2": B}
+    with pytest.raises(RuntimeError, match=r"v3\.0\.0 .*v3\.0\.0-rc\.2"):
+        release_image.stable_follows_release_candidate("v3.0.0", tags, C)
+    release_image.stable_follows_release_candidate("v3.0.0", tags, B)
+
+
+def test_release_candidate_stable_commit_highest_is_numeric():
+    tags = {"v3.0.0-rc.9": A, "v3.0.0-rc.10": B}
+    release_image.stable_follows_release_candidate("v3.0.0", tags, B)
+    with pytest.raises(RuntimeError, match=r"v3\.0\.0-rc\.10"):
+        release_image.stable_follows_release_candidate("v3.0.0", tags, A)
+
+
+def test_release_candidate_stable_commit_ignores_malformed_and_other_versions():
+    tags = {"v3.0.0-rc.1": A, "v3.0.0-rc.0": B, "v3.0.0-rc.01": B, "v3.0.0-beta.1": B,
+            "v3.0.0-rc.2-x": B, "v3.0.01-rc.5": B, "v3.0.10-rc.9": B, "v3.0.0-rc.": B}
+    release_image.stable_follows_release_candidate("v3.0.0", tags, A)
+
+
+def test_release_candidate_stable_commit_without_rc_proceeds():
+    release_image.stable_follows_release_candidate("v3.0.0", {}, C)
+    release_image.stable_follows_release_candidate("v3.0.0", {"v3.0.1-rc.1": A}, C)
+
+
+def test_release_candidate_stable_commit_skips_rc_tags():
+    release_image.stable_follows_release_candidate("v3.0.0-rc.2", {"v3.0.0-rc.3": A}, C)
+
+
+def test_release_candidate_stable_commit_git_wrapper(monkeypatch):
+    commits = {"v3.0.0-rc.1": A, "v3.0.0-rc.2": B}
+    calls = []
+
+    def fake_check_output(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "tag", "--list"]:
+            assert command[3] == "v3.0.0-rc.*"
+            return "\n".join(commits) + "\n"
+        return commits[command[2][:-len("^{commit}")]] + "\n"
+
+    monkeypatch.setattr(release_image.subprocess, "check_output", fake_check_output)
+    assert release_image.release_candidate_commits("v3.0.0") == commits
