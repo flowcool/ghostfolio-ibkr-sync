@@ -469,3 +469,13 @@ def test_historical_diagnostic_identity_conflicting_isin_blocks_amount_compariso
     finding = comparison(monkeypatch, [destination(assetProfile=profile)])[0]
     assert identity([finding])["isin"]["status"] == "fail"
     assert finding["category"] == "uncertain" and "gross_delta" not in finding
+
+
+@pytest.mark.parametrize("tz,reason", [("", "TZ is missing"), ("Not/AZone", "TZ is not a valid IANA timezone")])
+def test_historical_diagnostic_identity_invalid_tz_makes_date_unavailable(monkeypatch, tz, reason):
+    monkeypatch.setenv("TZ", tz)
+    finding = comparison(monkeypatch, [destination()])[0]
+    date = identity([finding])["date"]
+    assert date["status"] == "unavailable" and date["reason"] == f"{reason}; forced preview"
+    assert date["observed"] == {"utc": "2026-07-15", "local": None}
+    assert not any(check["status"] == "fail" for check in finding["identity_checks"])

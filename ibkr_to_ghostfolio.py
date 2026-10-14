@@ -1603,12 +1603,14 @@ def _historical_identity_checks(item, dividend, symbol):
     row = item["activity"]
     profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
     observed_date = {"utc": None, "local": None}
+    tz_reason = timezone_preview_reason()
     try:
         instant = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
         if instant.tzinfo is not None:
             observed_date["utc"] = instant.astimezone(timezone.utc).date().isoformat()
-            observed_date["local"] = instant.astimezone(
-                ZoneInfo(os.environ.get("TZ", "").strip())).date().isoformat()
+            if tz_reason is None:
+                observed_date["local"] = instant.astimezone(
+                    ZoneInfo(os.environ.get("TZ", "").strip())).date().isoformat()
     except Exception:
         pass
     profile_isin = profile.get("isin")
@@ -1625,6 +1627,9 @@ def _historical_identity_checks(item, dividend, symbol):
     ]
     checks = [{"activity_id": row.get("id"), "check": name, "status": "pass" if ok else "fail",
                "expected": expected, "observed": observed} for name, ok, expected, observed in rows]
+    if tz_reason is not None:
+        # No local calendar can be computed: the date is unavailable evidence, not a mismatch
+        checks[-1].update({"status": "unavailable", "reason": f"{tz_reason}; forced preview"})
     checks.append({"activity_id": row.get("id"), "check": "isin", "status": isin_status,
                    "expected": dividend["isin"] or None, "observed": profile_isin or None})
     return checks
