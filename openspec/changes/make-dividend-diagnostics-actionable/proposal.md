@@ -39,7 +39,7 @@ Saved source: query 1671605, SHA-256 `a8864f5d40ceccffac677d76cab97c2ffda37e06d0
 
 ## Impact
 
-Parsing, diagnostics, account orchestration, tests, README, and IBKR setup guidance change. Shared-helper propagation must be assessed.
+Parsing, diagnostics, account orchestration, tests, README, and IBKR setup guidance change. Propagation to ghostfolio-degiro-sync was assessed: it uses no `historical_*` or `parse_ibkr_datetime` helper and no projected helper is touched, so no downstream propagation is needed.
 
 ## Non-goals
 
