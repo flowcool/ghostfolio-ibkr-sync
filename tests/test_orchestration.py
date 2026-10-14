@@ -1059,7 +1059,7 @@ def _cash_row(type_, date_time, **extra):
 
 @pytest.mark.parametrize("type_", ["Dividends", "Payment In Lieu Of Dividends", "Withholding Tax"])
 @pytest.mark.parametrize("bad", [None, "", "20260715", "20260715;120000", "20260715;120000 ", "20260715;120000 E S T",
-                                 "20260715;120000 EST5EDT1", "20260715 120000 EST"])
+                                 "20260715;120000 EST5EDT1", "20261301;120000 EST", "20260715;256100 EST", "20260715 120000 EST"])
 def test_historical_diagnostic_preflight_bad_suffix_fails_account_before_any_write(monkeypatch, type_, bad):
     xml = report(trades=trade_xml("T1"), divs=_cash_row(type_, bad))
     w = World(monkeypatch, xml)

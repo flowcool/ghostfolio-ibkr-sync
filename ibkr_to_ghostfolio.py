@@ -452,7 +452,8 @@ def flex_provenance_failures(xml_text):
             continue
         if row.get("levelOfDetail", "DETAIL").upper() != "DETAIL":
             continue
-        if not FLEX_SUFFIX_PATTERN.match(row.get("dateTime", "").strip()):
+        date_time = row.get("dateTime", "").strip()
+        if not FLEX_SUFFIX_PATTERN.match(date_time) or not parse_ibkr_datetime(date_time):
             failures[tx_type] = failures.get(tx_type, 0) + 1
     return failures
 
