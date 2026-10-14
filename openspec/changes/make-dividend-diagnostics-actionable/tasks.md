@@ -20,7 +20,7 @@ Each task is one vertical slice of about one hour. Run offline checks with synth
 
 ## 5. README and user docs
 
-- [ ] 5.1 Update README, `docs/ibkr-setup.md`, and configuration examples with `TZ` forced-preview behavior, WARNING/final notification, mandatory `HHmmss TimeZone` and account failure, staged activation, privacy, and rollback. Verify `rg -n 'HHmmss TimeZone|TZ|DRY_RUN|WARNING|notification|rollback' README.md docs/ibkr-setup.md`.
+- [x] 5.1 Update README, `docs/ibkr-setup.md`, and configuration examples with `TZ` forced-preview behavior, WARNING/final notification, mandatory `HHmmss TimeZone` and account failure, staged activation, privacy, and rollback. Verify `rg -n 'HHmmss TimeZone|TZ|DRY_RUN|WARNING|notification|rollback' README.md docs/ibkr-setup.md`.
 
 ## 6. Real dry-run acceptance
 
