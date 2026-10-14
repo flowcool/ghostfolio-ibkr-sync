@@ -38,7 +38,7 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **OpenSpec to work items.** After approval, one parent item for the change and
   one self-contained item per task (spec path, requirement, scenario, acceptance
   command, files to touch). Closing an item ticks its task in `tasks.md`; archive
-  the change when every item is closed.
+  the change when every task item is closed, before the release item.
 - **Release.** A change that touches shipped code ends with a release item after
   its last task: archive, replay on `main`, semver tag on the operator's go,
   image pullable; the parent item closes only after it.
