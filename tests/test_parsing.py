@@ -109,8 +109,19 @@ def test_parse_cash_report_missing_or_invalid_is_none(xml):
     ("20260801", "2026-08-01T00:00:00+00:00"),
     ("2026-08-01", "2026-08-01T00:00:00+00:00"),
     (" 20260801 ", "2026-08-01T00:00:00+00:00"),
+    ("20260115;093000 EST", "2026-01-15T09:30:00+00:00"),
+    ("20260715;093000 EDT", "2026-07-15T09:30:00+00:00"),
 ])
 def test_parse_ibkr_datetime_formats(raw, iso):
+    assert m.parse_ibkr_datetime(raw) == iso
+
+
+@pytest.mark.parametrize("raw,iso", [
+    ("20260801;143000", "2026-08-01T14:30:00+00:00"),
+    ("20260115;093000 EST", "2026-01-15T09:30:00+00:00"),
+    ("20260715;093000 EDT", "2026-07-15T09:30:00+00:00"),
+])
+def test_historical_diagnostic_parser(raw, iso):
     assert m.parse_ibkr_datetime(raw) == iso
 
 
