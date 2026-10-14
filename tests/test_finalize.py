@@ -269,3 +269,31 @@ def test_dividend_structured_input_other_failures_still_notify(env):
     sent = spy_send(env)
     assert m.main() == 1
     assert len(sent) == 1 and "Accounts failed: 3 of 3." in sent[0]["body"]
+
+
+@pytest.mark.parametrize("price", [0.25, 0.26])
+def test_historical_diagnostic_findings_preserve_success_and_notifications(env, caplog, price):
+    from test_dividend_diagnostics import destination, read
+    from test_orchestration import World, report, div_xml
+    import logging
+    env.setenv("DRY_RUN", "1")
+    ids, comments, pos = read(env, [destination(unitPrice=price)])
+    World(env, report(divs=div_xml()))
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
+    sent = spy_send(env)
+    for verb in ("post", "put", "patch", "delete"):
+        env.setattr(m.requests, verb, lambda *a, **kw: pytest.fail("financial HTTP write"))
+    caplog.set_level(logging.INFO)
+    assert m.main() == 0 and sent == []
+    assert "Historical dividends" in caplog.text
+
+
+@pytest.mark.parametrize("dry", [True, False])
+def test_historical_diagnostic_read_failure_keeps_exit_and_notification_contract(env, dry):
+    env.setenv("DRY_RUN", "1" if dry else "0")
+    sent = spy_send(env)
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
+        m.requests.ConnectionError("synthetic activity GET failure")))
+    env.setattr(m, "process_account", lambda *a: pytest.fail("account after failed reader"))
+    assert m.main() == 1
+    assert len(sent) == (0 if dry else 1)
