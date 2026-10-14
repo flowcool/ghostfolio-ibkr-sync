@@ -1,12 +1,12 @@
 version: 2
 updates:
-  # After the Renovate Dependency Dashboard is open, set ordinary update limits
-  # to zero so Renovate owns them. Security updates remain enabled.
+  # Renovate owns ordinary updates (Dependency Dashboard open); ordinary update
+  # limits are zero. Security updates remain enabled.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 14
     groups:
@@ -19,7 +19,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 3
     groups:
@@ -31,6 +31,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     cooldown:
       default-days: 3
