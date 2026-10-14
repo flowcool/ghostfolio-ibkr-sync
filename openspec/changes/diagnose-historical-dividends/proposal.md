@@ -7,7 +7,11 @@ Additive imports leave historical dividends unverified. Captures show coherent c
 ## What Changes
 
 - Add historical comparison to every truthy `DRY_RUN`, including one-off Docker runs without `CRON`.
-- Log summary/details, uncertainty and exact monetary differences.
+- Log summary/details, uncertainty and exact destination-minus-source monetary differences.
+- Define activity/profile currency precedence with provenance and exact major/minor-unit normalization.
+- Separate complete single/component representations from coherence; report competing complete representations as probable repetition even with discrepancies. Require globally unique destination assignment.
+- Retain JSON decimal evidence before float decoding; preserve cash tax/refund evidence and the existing fee convention.
+- Specify one acceptance command per slice, including reader compatibility and final outcome regressions across `tests/`.
 - Reuse quantity/cash rules; no financial changes.
 
 Saved enriched Flex XML inventory:
