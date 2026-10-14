@@ -4,7 +4,7 @@ Execution order: 1.1 → 2.1 → 3.1. Synthetic inputs/mocked HTTP only; README 
 
 ## 1. Coherent dry-run comparison
 
-- [ ] 1.1 Deliver retained dividend evidence, account-scoped single/component comparison and dry-run summary in ibkr_to_ghostfolio.py, tests/test_dividend_diagnostics.py, tests/test_orchestration.py and README. Check `.venv/bin/python -m pytest -v tests -k historical_diagnostic_coherent`; cover exact JSON retention before float decoding, activity/profile currency precedence and provenance; assert unchanged reader return tuple/indexes, validation/failure behavior, numeric import path, read count, live behavior, deduplication and zero financial writes.
+- [x] 1.1 Deliver retained dividend evidence, account-scoped single/component comparison and dry-run summary in ibkr_to_ghostfolio.py, tests/test_dividend_diagnostics.py, tests/test_orchestration.py and README. Check `.venv/bin/python -m pytest -v tests -k historical_diagnostic_coherent`; cover exact JSON retention before float decoding, activity/profile currency precedence and provenance; assert unchanged reader return tuple/indexes, validation/failure behavior, numeric import path, read count, live behavior, deduplication and zero financial writes.
 
 ## 2. Repetition and differences
 
