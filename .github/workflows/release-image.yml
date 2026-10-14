@@ -173,6 +173,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          case "$RELEASE_TAG" in
+            *-rc.*)
+              echo "Skip latest: $RELEASE_TAG is a release candidate, latest is untouched"
+              exit 0
+              ;;
+          esac
           current=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
           if [ "$current" = "$RELEASE_TAG" ]; then
             digest=$(cat release-manifest-digest.txt)
