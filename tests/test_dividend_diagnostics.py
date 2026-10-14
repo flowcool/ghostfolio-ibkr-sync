@@ -852,3 +852,69 @@ def test_dividend_readable_report_levels_and_summary_order(monkeypatch, caplog):
     coherent = readable(monkeypatch, [destination()])
     assert "Dividend coherent" not in report_text(coherent, caplog)
     assert "Dividend coherent" in report_text(coherent, caplog, "DEBUG")
+
+
+def match_of(findings):
+    return [f for f in findings if f["source"] is not None][0].get("match")
+
+
+def test_dividend_match_strong_canonical_keep_and_legacy_twin_duplicate(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend")
+    match = match_of(readable(monkeypatch, [destination(), twin]))
+    assert match["confidence"] == "strong"
+    labels = {row["activity_id"]: row["label"] for row in match["rows"]}
+    assert labels == {"dividend-1": "Keep", "dividend-2": "Duplicate"}
+    assert match["action_activity_id"] == "dividend-2"
+
+
+def test_dividend_match_strong_twin_with_other_quantity_same_gross_and_fee(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", quantity=50, unitPrice=0.5)
+    match = match_of(readable(monkeypatch, [destination(), twin]))
+    assert [row["label"] for row in match["rows"]] == ["Keep", "Duplicate"]
+    assert [row["values"]["quantity"] for row in match["rows"]] == [Decimal(100), Decimal(50)]
+
+
+def test_dividend_match_strong_unequal_twin_is_differs(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", unitPrice=0.26)
+    match = match_of(readable(monkeypatch, [destination(), twin]))
+    assert [row["label"] for row in match["rows"]] == ["Keep", "Differs"]
+    assert match["action_activity_id"] == "dividend-2"
+
+
+def test_dividend_match_strong_compared_row_with_other_gross_is_not_strong(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend")
+    match = match_of(readable(monkeypatch, [destination(unitPrice=0.26), twin]))
+    assert [(row["activity_id"], row["label"]) for row in match["rows"]] == [
+        ("dividend-1", "Differs"), ("dividend-2", "Keep")]
+
+
+def test_dividend_match_strong_twin_of_another_day_is_no_candidate(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend", date="2026-07-16T00:00:00Z")
+    match = match_of(readable(monkeypatch, [destination(), twin]))
+    assert [row["activity_id"] for row in match["rows"]] == ["dividend-1"]
+
+
+def test_dividend_match_strong_proximity_row_equal_in_gross_and_fee(monkeypatch):
+    other = destination(id="dividend-3", comment="legacy KO dividend")
+    findings = readable(monkeypatch, [other])
+    assert findings[0]["category"] == "absent" and findings[0]["proximity"]["candidates"]
+    match = findings[0]["match"]
+    assert match["confidence"] == "strong"
+    assert [(row["activity_id"], row["origin"], row["label"]) for row in match["rows"]] == [
+        ("dividend-3", "proximity", "Keep")]
+    assert match["action_activity_id"] is None
+
+
+def test_dividend_match_strong_proximity_row_of_another_day_is_not_strong(monkeypatch):
+    near = destination(id="dividend-3", comment="legacy KO dividend", date="2026-07-16T00:00:00Z")
+    findings = readable(monkeypatch, [near])
+    assert findings[0]["category"] == "absent" and "match" not in findings[0]
+
+
+def test_dividend_match_strong_leaves_classes_categories_and_counts_unchanged(monkeypatch):
+    twin = destination(id="dividend-2", comment="legacy KO dividend")
+    findings = readable(monkeypatch, [destination(unitPrice=0.2501), twin])
+    stripped = [{k: v for k, v in f.items() if k != "match"} for f in findings]
+    again = m.classify_dividend_findings([{k: v for k, v in f.items() if k != "readable"} for f in stripped])
+    assert [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings] == \
+        [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in again]
