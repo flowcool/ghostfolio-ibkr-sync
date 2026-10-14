@@ -33,7 +33,7 @@ Evidence: `python -m pytest -q tests/test_auth.py::test_access_mode_dry_run_logs
 
 ### Requirement: Flex selection and conversion
 
-The connector SHALL select Trade children excluding CASH/OPT, DETAIL dividend/PIL/withholding grouped by security/day, and BASE_SUMMARY cash; ignore other cash types/levels and AssetSummary. Trades SHALL use BUY for exact BUY, otherwise SELL; absolute quantity/price; commission/withholding fees with refunds/rebates clamped to zero. Nonpositive payments SHALL skip.
+The connector SHALL select Trade children excluding CASH/OPT, DETAIL dividend/PIL/withholding grouped by security/day, and BASE_SUMMARY cash; ignore other cash types/levels and AssetSummary. Trades SHALL use BUY for exact BUY and SELL for exact SELL; any other `buySell` value SHALL reject the row (error, run not ok, other trades unaffected); absolute quantity/price; commission/withholding fees with refunds/rebates clamped to zero. Nonpositive payments SHALL skip.
 
 Cash Transactions SHALL establish payments/gross/withholding. Conversion SHALL preserve account, currency/scaling, cash-day UTC date/comment. Description inference and one-unit fallback SHALL be removed.
 
@@ -63,7 +63,11 @@ Check: `.venv/bin/python -m pytest -v tests -k dividend_structured_numeric`.
 - **WHEN** fixtures include split PIL, ordinary/bonus at equal/different rates, unequal quantities, signed zero/negative actions, mixed currencies and differing accrual gross/tax/rate
 - **THEN** valid groups retain quantity/cash totals; invalid groups reject; permutation/accounting/identity assertions pass.
 
-Check: `.venv/bin/python -m pytest -v tests -k dividend_structured_components`.
+#### Scenario: Unknown trade side
+- **WHEN** a synthetic Trade has `buySell` `SELL (Ca.)`, empty or lowercase `sell`, beside valid BUY and SELL rows
+- **THEN** only the unknown row is rejected with an error, never counted by the holdings gate; valid rows convert unchanged.
+
+Check: `.venv/bin/python -m pytest -q tests -k 'unknown_trade_side'`.
 
 ### Requirement: Mapping and duplicate reconciliation
 
