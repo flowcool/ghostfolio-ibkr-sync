@@ -1,6 +1,6 @@
 ## 1. Classification
 
-- [ ] 1.1 Wait for task 1.1 of `fail-account-on-missing-dividend-fields` to merge. Then classify gross/fee deltas (noise, minimal difference for every currency including a 0.01 EUR or USD case, other) and quantity deltas, with offline tests. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_readable_classes'`.
+- [x] 1.1 Wait for task 1.1 of `fail-account-on-missing-dividend-fields` to merge. Then classify gross/fee deltas (noise, minimal difference for every currency including a 0.01 EUR or USD case, other) and quantity deltas, with offline tests. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_readable_classes'`.
 - [ ] 1.2 Add probable-duplicate, equal-total split and absent/outside-coverage pair detection, with offline tests. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_readable_pairs'`.
 
 ## 2. Report text
