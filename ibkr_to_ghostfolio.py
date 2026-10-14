@@ -1557,6 +1557,9 @@ def _dividend_date_matches(positions, activity):
     return None
 
 
+ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW"}
+
+
 def _historical_currency(currency):
     """Return common denomination and exact scale; unknown context stays unknown."""
     major = {"USD", "EUR", "GBP", "CHF", "JPY", "CAD", "AUD", "NZD", "HKD",
@@ -1567,6 +1570,34 @@ def _historical_currency(currency):
         if currency == minor:
             return base, Decimal(1) / Decimal(factor)
     return None
+
+
+def _historical_minor_unit(currency):
+    """Smallest amount of a major currency: 1 for zero-decimal currencies, else 0.01."""
+    return Decimal(1) if currency in ZERO_DECIMAL_CURRENCIES else Decimal("0.01")
+
+
+def classify_dividend_deltas(currency, quantity_deltas, gross_deltas, fee_deltas):
+    """Classify destination-minus-source deltas (major units) of one comparison.
+
+    Returns "none", "noise", "minimal", "other" or "quantity", strongest first:
+    any quantity delta is "quantity" (never noise); a gross/fee delta of half a
+    minor unit or more other than exactly one minor unit is "other"; exactly one
+    minor unit is "minimal"; below half a minor unit is "noise".
+    """
+    if any(quantity_deltas):
+        return "quantity"
+    unit = _historical_minor_unit(currency)
+    classes = set()
+    for delta in list(gross_deltas) + list(fee_deltas):
+        size = abs(delta)
+        if not size:
+            continue
+        classes.add("noise" if size < unit / 2 else "minimal" if size == unit else "other")
+    for name in ("other", "minimal", "noise"):
+        if name in classes:
+            return name
+    return "none"
 
 
 def _historical_destination_currency(evidence):
@@ -1904,6 +1935,12 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
                     comparisons.append({"activity_ids": [item["activity"].get("id") for item in rows],
                                         "kind": "single" if len(rows) == 1 and rows[0].get("component") is None else "components",
                                         "coherent": coherent, **differences,
+                                        "delta_class": classify_dividend_deltas(
+                                            unit[0], differences["quantity_deltas"],
+                                            [differences["gross_delta"]]
+                                            + [delta["gross_delta"] for delta in component_deltas],
+                                            [differences["fee_delta"]]
+                                            + [delta["fee_delta"] for delta in component_deltas]),
                                         "component_deltas": component_deltas,
                                         "values": values})
             except DecimalException:
@@ -1914,7 +1951,7 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         finding["signed_tax_total"] = signed_tax_total
         if len(comparisons) == 1:
             finding.update({key: value for key, value in comparisons[0].items()
-                            if key in ("gross_delta", "fee_delta", "quantity_deltas")})
+                            if key in ("gross_delta", "fee_delta", "quantity_deltas", "delta_class")})
             if len(comparisons[0]["values"]) == 1:
                 finding.update(comparisons[0]["values"][0])
                 finding["quantity_delta"] = comparisons[0]["quantity_deltas"][0]

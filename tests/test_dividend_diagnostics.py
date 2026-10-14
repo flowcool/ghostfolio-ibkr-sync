@@ -648,3 +648,54 @@ def test_historical_diagnostic_skip_cause_unsupported_source_currency(monkeypatc
     assert finding["category"] == "uncertain"
     assert finding["currency_context"]["source"] == "KRW"
     assert "currency context: source=KRW destination=KRW" in m.format_historical_dividend_finding(finding, ACC)
+
+
+def delta_wire(row, price):
+    return json.dumps({"activities": [row], "count": 1}).replace(
+        '"unitPrice": 0.25', f'"unitPrice": {price}')
+
+
+@pytest.mark.parametrize("currency,amount,price,fee,quantity,expected", [
+    ("USD", "25.00", "0.25", 0, 100, "none"),
+    ("USD", "25.00", "0.250001", 0, 100, "noise"),
+    ("USD", "25.00", "0.2549", 0, 100, "other"),
+    ("USD", "25.00", "0.2501", 0, 100, "minimal"),
+    ("EUR", "25.00", "0.2501", 0, 100, "minimal"),
+    ("EUR", "25.00", "0.2499", 0, 100, "minimal"),
+    ("USD", "25.00", "0.25", 0.004, 100, "noise"),
+    ("USD", "25.00", "0.25", 0.01, 100, "minimal"),
+    ("USD", "25.00", "0.25", 0.02, 100, "other"),
+    ("USD", "25.00", "0.2501", 0, 101, "quantity"),
+    ("USD", "25.00", "0.25", 0, 100.000000000001, "quantity"),
+    ("JPY", "2500", "25.004", 0, 100, "noise"),
+    ("JPY", "2500", "25.005", 0, 100, "other"),
+    ("JPY", "2500", "25.01", 0, 100, "minimal"),
+    ("JPY", "2500", "25.02", 0, 100, "other"),
+])
+def test_dividend_readable_classes_deltas(monkeypatch, currency, amount, price, fee, quantity, expected):
+    xml = report(divs=div_xml(amount=amount).replace('currency="USD"', f'currency="{currency}"'))
+    row = destination(currency=currency, fee=fee, quantity=quantity, unitPrice=25 if currency == "JPY" else 0.25)
+    row["assetProfile"]["currency"] = currency
+    wire = json.dumps({"activities": [row], "count": 1}).replace(
+        f'"unitPrice": {row["unitPrice"]}', f'"unitPrice": {price}', 1)
+    _, _, positions = read(monkeypatch, [row], wire)
+    source = m.parse_cash_dividends(xml)
+    finding = m.historical_dividend_comparison(source, ACC, {}, positions)[0]
+    assert finding["delta_class"] == expected
+
+
+def test_dividend_readable_classes_noise_stays_counted_and_visible(monkeypatch):
+    row = destination(unitPrice=0.25)
+    finding = comparison(monkeypatch, [row], wire=delta_wire(row, "0.250001"))[0]
+    assert finding["delta_class"] == "noise"
+    assert finding["category"] == "differences"
+    assert finding["gross_delta"] == Decimal("0.0001")
+
+
+def test_dividend_readable_classes_strongest_class_wins():
+    classify = m.classify_dividend_deltas
+    zero = Decimal(0)
+    assert classify("USD", [zero], [Decimal("0.001")], [Decimal("0.01")]) == "minimal"
+    assert classify("USD", [zero], [Decimal("0.01")], [Decimal("0.5")]) == "other"
+    assert classify("USD", [Decimal("1")], [Decimal("0.001")], [zero]) == "quantity"
+    assert classify("KRW", [zero], [Decimal("0.4")], [zero]) == "noise"
