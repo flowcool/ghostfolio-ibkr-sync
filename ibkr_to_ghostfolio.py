@@ -1593,6 +1593,43 @@ def historical_dividend_report_window(xml_text):
     return windows[0] if windows and len(set(windows)) == 1 else None
 
 
+def _historical_identity_checks(item, dividend, symbol):
+    """Evaluate the six identity checks with expected/observed values.
+
+    The source YYYYMMDD stays the IBKR business day; it is compared with the
+    destination instant's calendar day in the local IANA TZ. An absent profile
+    ISIN is unavailable evidence and does not block; a nonempty conflict fails.
+    """
+    row = item["activity"]
+    profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
+    observed_date = {"utc": None, "local": None}
+    try:
+        instant = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
+        if instant.tzinfo is not None:
+            observed_date["utc"] = instant.astimezone(timezone.utc).date().isoformat()
+            observed_date["local"] = instant.astimezone(
+                ZoneInfo(os.environ.get("TZ", "").strip())).date().isoformat()
+    except Exception:
+        pass
+    profile_isin = profile.get("isin")
+    if not dividend["isin"] or not profile_isin:
+        isin_status = "unavailable"
+    else:
+        isin_status = "pass" if profile_isin == dividend["isin"] else "fail"
+    rows = [
+        ("active", bool(item["active"]), True, item["active"]),
+        ("id", bool(row.get("id")), "nonempty", row.get("id")),
+        ("data_source", profile.get("dataSource") == "YAHOO", "YAHOO", profile.get("dataSource")),
+        ("symbol", profile.get("symbol") == symbol, symbol, profile.get("symbol")),
+        ("date", observed_date["local"] == dividend["date"], dividend["date"], observed_date),
+    ]
+    checks = [{"activity_id": row.get("id"), "check": name, "status": "pass" if ok else "fail",
+               "expected": expected, "observed": observed} for name, ok, expected, observed in rows]
+    checks.append({"activity_id": row.get("id"), "check": "isin", "status": isin_status,
+                   "expected": dividend["isin"] or None, "observed": profile_isin or None})
+    return checks
+
+
 def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None):
     """Compare retained history conservatively, independently of import selection.
 
@@ -1633,20 +1670,9 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             finding["reason"] = "duplicate destination activity identity"
             continue
         symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
-        valid = True
-        for item in candidates:
-            row = item["activity"]
-            profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
-            try:
-                date = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
-                day_matches = (date.tzinfo is not None and date.utcoffset().total_seconds() == 0
-                               and date.date().isoformat() == dividend["date"])
-            except (ValueError, TypeError, AttributeError):
-                day_matches = False
-            if (not item["active"] or not row.get("id") or profile.get("dataSource") != "YAHOO"
-                    or profile.get("symbol") != symbol or not day_matches
-                    or (dividend["isin"] and profile.get("isin") != dividend["isin"])):
-                valid = False
+        checks = [check for item in candidates for check in _historical_identity_checks(item, dividend, symbol)]
+        finding["identity_checks"] = checks
+        valid = not any(check["status"] == "fail" for check in checks)
         if not valid:
             finding["reason"] = "inactive, unsupported or conflicting security/date identity"
             continue

@@ -12,7 +12,7 @@ Each task is one vertical slice of about one hour. Run offline checks with synth
 
 ## 3. Separate identity evidence
 
-- [ ] 3.1 Split active/id/data-source/symbol/date/ISIN checks with expected/observed values; compare dates in local IANA `TZ`; treat absent profile ISIN as unavailable and permit amount comparison, while a nonempty conflict blocks identity. Cover six checks and Paris winter/summer dates. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_identity'`.
+- [x] 3.1 Split active/id/data-source/symbol/date/ISIN checks with expected/observed values; compare dates in local IANA `TZ`; treat absent profile ISIN as unavailable and permit amount comparison, while a nonempty conflict blocks identity. Cover six checks and Paris winter/summer dates. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_identity'`.
 
 ## 4. Readable findings and counts
 

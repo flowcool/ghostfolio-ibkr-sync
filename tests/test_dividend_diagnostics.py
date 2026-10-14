@@ -396,3 +396,76 @@ def test_evidence_absent_destination_and_info_coverage(monkeypatch, caplog):
     m.log_historical_dividend_comparison(findings, ACC)
     assert "source_groups=1 unmatched_destination=0" in caplog.text
     assert findings[0]["source"] in caplog.text and "no canonical destination identity" in caplog.text
+
+
+def identity(findings):
+    return {check["check"]: check for check in findings[0]["identity_checks"]}
+
+
+def test_historical_diagnostic_identity_six_checks_expose_expected_observed(monkeypatch):
+    finding = comparison(monkeypatch, [destination()])[0]
+    checks = identity([finding])
+    assert list(checks) == ["active", "id", "data_source", "symbol", "date", "isin"]
+    assert all(check["status"] == "pass" for check in checks.values())
+    assert checks["date"]["expected"] == "2026-07-15"
+    assert checks["date"]["observed"] == {"utc": "2026-07-15", "local": "2026-07-15"}
+    assert checks["isin"]["expected"] == checks["isin"]["observed"] == ISIN_KO
+    assert finding["category"] == "coherent_single"
+
+
+@pytest.mark.parametrize("changes,failed,observed", [
+    ({"isDraft": True}, "active", False),
+    ({"id": ""}, "id", ""),
+    ({"assetProfile": {"symbol": "KO", "isin": ISIN_KO, "dataSource": "MANUAL"}}, "data_source", "MANUAL"),
+    ({"assetProfile": {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO"}}, "symbol", "PEP"),
+    ({"date": "2026-07-16T00:00:00Z"}, "date", {"utc": "2026-07-16", "local": "2026-07-16"}),
+    ({"assetProfile": {"symbol": "KO", "isin": "US0000000002", "dataSource": "YAHOO"}}, "isin", "US0000000002"),
+])
+def test_historical_diagnostic_identity_each_check_fails_alone(monkeypatch, changes, failed, observed):
+    finding = comparison(monkeypatch, [destination(**changes)])[0]
+    checks = identity([finding])
+    assert [name for name, check in checks.items() if check["status"] == "fail"] == [failed]
+    assert checks[failed]["observed"] == observed
+    assert finding["category"] == "uncertain" and "representations" not in finding
+
+
+@pytest.mark.parametrize("tz,stored,expected_local", [
+    ("Europe/Paris", "2026-01-14T23:00:00.000Z", "2026-01-15"),  # winter, UTC+1
+    ("Europe/Paris", "2026-07-14T22:00:00.000Z", "2026-07-15"),  # summer, UTC+2
+])
+def test_historical_diagnostic_identity_paris_local_date(monkeypatch, tz, stored, expected_local):
+    monkeypatch.setenv("TZ", tz)
+    comment = f"dividend#{ISIN_KO}#{expected_local}"
+    xml = report(divs=div_xml().replace("20260715", expected_local.replace("-", "")))
+    finding = comparison(monkeypatch, [destination(date=stored, comment=comment)], xml)[0]
+    date = identity([finding])["date"]
+    assert date["status"] == "pass" and date["observed"]["local"] == expected_local
+    assert date["observed"]["utc"] != expected_local
+    assert finding["category"] == "coherent_single"
+
+
+def test_historical_diagnostic_identity_utc_instant_crossing_paris_midnight(monkeypatch):
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    date = identity(comparison(monkeypatch, [destination(date="2026-07-15T00:00:00Z")]))["date"]
+    assert date["status"] == "pass"  # 02:00 Paris, same calendar day
+    date = identity(comparison(monkeypatch, [destination(date="2026-07-15T23:00:00Z")]))["date"]
+    assert date["status"] == "fail" and date["observed"] == {"utc": "2026-07-15", "local": "2026-07-16"}
+
+
+@pytest.mark.parametrize("profile_isin", [None, ""])
+def test_historical_diagnostic_identity_absent_isin_permits_amount_comparison(monkeypatch, profile_isin):
+    profile = {"symbol": "KO", "dataSource": "YAHOO", "currency": "USD"}
+    if profile_isin is not None:
+        profile["isin"] = profile_isin
+    finding = comparison(monkeypatch, [destination(assetProfile=profile)])[0]
+    isin = identity([finding])["isin"]
+    assert isin["status"] == "unavailable" and isin["expected"] == ISIN_KO and isin["observed"] is None
+    assert finding["category"] == "coherent_single"
+    assert finding["gross_delta"] == finding["fee_delta"] == 0
+
+
+def test_historical_diagnostic_identity_conflicting_isin_blocks_amount_comparison(monkeypatch):
+    profile = {"symbol": "KO", "isin": "US0000000002", "dataSource": "YAHOO", "currency": "USD"}
+    finding = comparison(monkeypatch, [destination(assetProfile=profile)])[0]
+    assert identity([finding])["isin"]["status"] == "fail"
+    assert finding["category"] == "uncertain" and "gross_delta" not in finding
