@@ -2037,6 +2037,59 @@ def _readable_set(label, kind, reason=None, related=()):
     return {"class": kind, "label": label, "reason": reason, "related": list(related)}
 
 
+def _match_candidates(finding, twins):
+    """Candidate Ghostfolio rows of one IBKR dividend, deduplicated by activity id.
+
+    Sources, in order: compared rows, legacy-comment twins, historical-comment rows,
+    proximity-window rows. Read-only: nothing here selects, repairs or writes.
+    """
+    rows = [(item, "compared", True) for item in finding.get("destination", [])]
+    rows += [(twin["destination"][0], "twin", False) for twin in twins]
+    for key, origin in (("historical_comment", "historical comment"), ("proximity", "proximity")):
+        listed = finding.get(key)
+        listed = listed["candidates"] if isinstance(listed, dict) else listed or []
+        rows += [(item, origin, item.get("comment") == finding["source"]) for item in listed]
+    seen = set()
+    candidates = []
+    for item, origin, canonical in rows:
+        if item["activity_id"] in seen:
+            continue
+        seen.add(item["activity_id"])
+        candidates.append({"activity_id": item["activity_id"], "origin": origin, "canonical": canonical,
+                           "symbol": item["symbol"], "local_date": item["local_date"],
+                           "utc_date": item["utc_date"], "values": item["values"]})
+    return candidates
+
+
+def _match_is_strong(finding, candidate):
+    """Strong: same security, local day, gross and fee (quantity is shown, never scored)."""
+    values = _readable_values(candidate)
+    return (values is not None and "source_gross" in finding
+            and candidate["symbol"] == finding["security"]["symbol"]
+            and candidate["local_date"] == finding["source_date"]
+            and values == (finding["source_gross"], finding["source_fee"], finding["source_currency"]))
+
+
+def _propose_strong_match(finding, twins):
+    """Return the strong proposal (rows labelled Keep/Duplicate/Differs) or None.
+
+    Keep goes to the equal row with a canonical comment, else the compared row, else
+    the lowest activity id; other equal rows are Duplicate, unequal rows Differs.
+    """
+    candidates = _match_candidates(finding, twins)
+    strong = [row for row in candidates if _match_is_strong(finding, row)]
+    if not strong:
+        return None
+    keep = min(strong, key=lambda row: (not row["canonical"], row["origin"] != "compared",
+                                        str(row["activity_id"])))
+    for row in candidates:
+        row["label"] = "Keep" if row is keep else "Duplicate" if row in strong else "Differs"
+    action = next((row for row in candidates if row["label"] == "Duplicate"),
+                  next((row for row in candidates if row["label"] == "Differs"), None))
+    return {"confidence": "strong", "rows": candidates,
+            "action_activity_id": action["activity_id"] if action else None}
+
+
 def classify_dividend_findings(findings):
     """Attach finding["readable"] (class, label, reason, related ids) to every finding.
 
@@ -2126,6 +2179,11 @@ def classify_dividend_findings(findings):
     for group in compared:
         if twins[id(group)]:
             group["readable"]["related"] = [tid for twin in twins[id(group)] for tid in twin["activity_ids"]]
+    for finding in findings:
+        if finding["source"] is not None:
+            match = _propose_strong_match(finding, twins.get(id(finding), []))
+            if match:
+                finding["match"] = match
     return findings
 
 
