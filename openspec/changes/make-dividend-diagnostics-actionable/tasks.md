@@ -16,7 +16,7 @@ Each task is one vertical slice of about one hour. Run offline checks with synth
 
 ## 4. Readable findings and counts
 
-- [ ] 4.1 Render security/date/value anomaly blocks, failed-check counts, outside-window values, and non-certifying `skipped by proximity` explanations for both absent groups. Test levels, privacy, and notification compatibility. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_actionable'` and `.venv/bin/python -m pytest -q tests/test_finalize.py`.
+- [x] 4.1 Render security/date/value anomaly blocks, failed-check counts, outside-window values, and non-certifying `skipped by proximity` explanations for both absent groups. Test levels, privacy, and notification compatibility. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_actionable'` and `.venv/bin/python -m pytest -q tests/test_finalize.py`.
 
 ## 5. README and user docs
 

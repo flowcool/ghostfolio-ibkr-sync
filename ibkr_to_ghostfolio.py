@@ -1635,6 +1635,48 @@ def _historical_identity_checks(item, dividend, symbol):
     return checks
 
 
+def _historical_destination(item, checks=None):
+    """Describe one destination activity for private reports: security, dates, values."""
+    row = item["activity"]
+    profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
+    dates = {"utc": None, "local": None}
+    for check in checks or []:
+        if check["check"] == "date" and check["activity_id"] == row.get("id"):
+            dates = check["observed"]
+    if dates["utc"] is None:
+        try:
+            instant = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
+            if instant.tzinfo is not None:
+                dates = {"utc": instant.astimezone(timezone.utc).date().isoformat(), "local": None}
+        except (ValueError, TypeError, AttributeError):
+            pass
+    values, reason = _historical_values(item)
+    return {"activity_id": row.get("id"), "symbol": profile.get("symbol"), "isin": profile.get("isin") or None,
+            "utc_date": dates["utc"], "local_date": dates["local"],
+            "values": values if values is not None else {"unavailable": reason}}
+
+
+def _historical_proximity(positions, account_id, evidence, symbol, dividend):
+    """Weak candidates that make the import path skip an absent group by proximity.
+
+    Mirrors the import-time proximity check; never certifies identity.
+    """
+    if not symbol:
+        return None
+    matched = _dividend_date_matches(positions, {"accountId": account_id, "symbol": symbol,
+                                                 "date": f"{dividend['date']}T00:00:00+00:00"})
+    if not matched:
+        return None
+    candidates = []
+    for item in evidence:
+        row = item["activity"]
+        profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
+        if (item["active"] and profile.get("dataSource") == "YAHOO" and profile.get("symbol") == symbol
+                and (row.get("date") or "")[:10] == matched):
+            candidates.append({**_historical_destination(item), "comment": row.get("comment") or None})
+    return {"matched_date": matched, "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates}
+
+
 def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None):
     """Compare retained history conservatively, independently of import selection.
 
@@ -1660,12 +1702,19 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             continue
         reference = f"dividend#{dividend['isin'] or dividend['symbol']}#{dividend['date']}"
         candidates = [item for item in evidence if item["activity"].get("comment") == reference]
+        symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
         finding = {"source": reference, "activity_ids": [item["activity"].get("id") for item in candidates],
-                   "category": "uncertain", "reason": "destination identity not proven"}
+                   "category": "uncertain", "reason": "destination identity not proven",
+                   "security": {"symbol": symbol, "isin": dividend["isin"] or None},
+                   "source_date": dividend["date"]}
         findings.append(finding)
         if not candidates:
             finding["category"] = "absent"
             finding["reason"] = "no canonical destination identity; weak matches cannot certify absence"
+            proximity = _historical_proximity(positions, account_id, evidence, symbol, dividend)
+            if proximity:
+                finding["proximity"] = proximity
+                finding["reason"] += "; skipped by proximity (non-certifying)"
             continue
         claimed.update(item["index"] for item in candidates)
         if any(len(owners[item["activity"].get("id")]) != 1 for item in candidates):
@@ -1674,9 +1723,9 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         if len({item["activity"].get("id") for item in candidates}) != len(candidates):
             finding["reason"] = "duplicate destination activity identity"
             continue
-        symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
         checks = [check for item in candidates for check in _historical_identity_checks(item, dividend, symbol)]
         finding["identity_checks"] = checks
+        finding["destination"] = [_historical_destination(item, checks) for item in candidates]
         valid = not any(check["status"] == "fail" for check in checks)
         if not valid:
             finding["reason"] = "inactive, unsupported or conflicting security/date identity"
@@ -1787,23 +1836,76 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             elif not (row.get("comment") or "").startswith("dividend#"):
                 reason = "legacy destination comment cannot prove source identity"
             findings.append({"source": None, "activity_ids": [item["activity"].get("id")],
-                             "category": category, "reason": reason})
+                             "category": category, "reason": reason,
+                             "destination": [_historical_destination(item)]})
     return findings
+
+
+def _historical_money(values):
+    if "unavailable" in values:
+        return f"values unavailable ({values['unavailable']})"
+    return (f"quantity={values['quantity']} gross={values['gross']} fee={values['fee']} "
+            f"currency={values['currency']}")
+
+
+def format_historical_dividend_finding(finding, account_id):
+    """Render one finding as a private human-readable block (no repair, no selection)."""
+    lines = [f"[DRY RUN] Historical dividend finding account={account_id} category={finding['category']}"]
+    if finding["source"] is not None:
+        security = finding["security"]
+        lines.append(f"  source: {finding['source']} security={security['symbol']} "
+                     f"isin={security['isin']} source_date={finding['source_date']}")
+        if "source_gross" in finding:
+            lines.append(f"  source values: quantity={finding['source_quantity']} "
+                         f"gross={finding['source_gross']} fee={finding['source_fee']}")
+    else:
+        lines.append("  source: none (destination outside proven source coverage)")
+    lines.append(f"  reason: {finding['reason']}")
+    if "gross_delta" in finding:
+        lines.append(f"  deltas (destination - source): gross_delta={finding['gross_delta']} "
+                     f"fee_delta={finding['fee_delta']} quantity_deltas={finding['quantity_deltas']}")
+    for check in finding.get("identity_checks", []):
+        if check["status"] != "pass":
+            lines.append(f"  check {check['check']} {check['status']} activity={check['activity_id']} "
+                         f"expected={check['expected']} observed={check['observed']}"
+                         + (f" ({check['reason']})" if check.get("reason") else ""))
+    for item in finding.get("destination", []):
+        lines.append(f"  destination: id={item['activity_id']} security={item['symbol']} isin={item['isin']} "
+                     f"utc_date={item['utc_date']} local_date={item['local_date']} "
+                     + _historical_money(item["values"]))
+    proximity = finding.get("proximity")
+    if proximity:
+        lines.append(f"  skipped by proximity: import treats these as the same payment (same symbol within "
+                     f"{proximity['window_days']} days of {proximity['matched_date']}); weak candidates do "
+                     "not certify identity")
+        for item in proximity["candidates"]:
+            lines.append(f"    weak candidate: id={item['activity_id']} comment={item['comment']} "
+                         f"utc_date={item['utc_date']} " + _historical_money(item["values"]))
+    return "\n".join(lines)
 
 
 def log_historical_dividend_comparison(findings, account_id):
     """Report private diagnostic evidence without changing outcomes or persistence."""
     counts = defaultdict(int)
+    failed = defaultdict(int)
+    unavailable = defaultdict(int)
     for finding in findings:
         counts[finding["category"]] += 1
+        for check in finding.get("identity_checks", []):
+            if check["status"] == "fail":
+                failed[check["check"]] += 1
+            elif check["status"] == "unavailable":
+                unavailable[check["check"]] += 1
         if finding["category"] not in ("coherent_single", "coherent_components"):
-            log.info("[DRY RUN] Historical dividend detail: %s", finding)
+            log.info("%s", format_historical_dividend_finding(finding, account_id))
         else:
-            log.debug("[DRY RUN] Historical dividend detail: %s", finding)
+            log.debug("%s", format_historical_dividend_finding(finding, account_id))
     log.info("[DRY RUN] Historical dividends account=%s coverage=%d source_groups=%d "
-             "unmatched_destination=%d categories=%s", account_id, len(findings),
+             "unmatched_destination=%d categories=%s failed_checks=%s unavailable_checks=%s",
+             account_id, len(findings),
              sum(finding["source"] is not None for finding in findings),
-             sum(finding["source"] is None for finding in findings), dict(sorted(counts.items())))
+             sum(finding["source"] is None for finding in findings), dict(sorted(counts.items())),
+             dict(sorted(failed.items())), dict(sorted(unavailable.items())))
 
 
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
