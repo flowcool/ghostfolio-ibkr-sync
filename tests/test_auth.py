@@ -289,9 +289,10 @@ def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(en
     trade = ('<Trade tradeID="T1" symbol="KO" isin="US1912161007" assetCategory="STK" buySell="BUY" '
              'quantity="10" tradePrice="60" ibCommission="-1" currency="USD" dateTime="20260801;100000"/>')
     div = ('<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="25" dateTime="20260715;120000 EST" '
-           'isin="US1912161007" symbol="KO" currency="USD" description="KO CASH DIVIDEND"/>')
+           'isin="US1912161007" symbol="KO" currency="USD" description="KO CASH DIVIDEND" '
+           'accountId="U1" conid="1" actionID="9" exDate="20260710"/>')
     xml = (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trade}</Trades>"
-           f"<CashTransactions>{div}</CashTransactions><CashReport>"
+           f"<CashTransactions>{div}</CashTransactions><ChangeInDividendAccruals/><CashReport>"
            '<CashReportCurrency currency="BASE_SUMMARY" endingCash="100"/></CashReport>'
            "</FlexStatement></FlexStatements></FlexQueryResponse>")
     env.setattr(m, "fetch_flex_report", lambda *a, **k: xml)

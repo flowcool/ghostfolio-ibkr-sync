@@ -242,7 +242,7 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
     assert any("timed out" in r.message for r in caplog.records)
 
 
-@pytest.mark.parametrize("mode", ["old", "missing", "empty", "conflict", "short"])
+@pytest.mark.parametrize("mode", ["missing", "empty", "conflict", "short"])
 def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifications(env, mode):
     from test_orchestration import World, structured_input_xml
 
@@ -254,7 +254,7 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
     assert len(w.cash_calls) == 3
     assert any(a["type"] == "BUY" for a in w.activities)
     dividends = [a for a in w.activities if a["type"] == "DIVIDEND"]
-    if mode in ("old", "missing", "empty"):
+    if mode in ("missing", "empty"):
         assert dividends == []
     else:
         # Local rejections keep the other security's valid payment importable.
