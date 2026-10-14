@@ -105,6 +105,14 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 
    Currency-rate rows are not used by this tool. It does not convert the cash balance or commissions between currencies.
 
+   Set the date format to **YYYYMMDD** and the time format to **HHmmss TimeZone**.
+   DETAIL dividend, payment-in-lieu and withholding Cash Transactions must emit
+   `dateTime` as `YYYYMMDD;HHmmss TimeZone`, such as `20260115;120000 EST`
+   or `20260715;120000 EDT`. A missing or invalid timezone suffix fails that
+   account before any import, cash or platform write. It does not enable
+   `DRY_RUN`; other accounts retain their configured mode. Other cash types
+   are outside this validation.
+
 6. Save the query and note the Query ID (click the info icon next to the query to find it)
 
 ### Prepare for structured dividend quantities
@@ -125,7 +133,8 @@ Query** used by the connector:
    **Pay Date** and **Report Date**. Click **Save**.
 3. Preserve **Account Information**, **Trades (Execution)** and **Cash Report**.
    Keep the same single account, **XML**, and **Last 365 Calendar Days**. Preserve
-   date formatting and other existing settings. Click **Continue** and save.
+   **YYYYMMDD** dates and **HHmmss TimeZone** times. Keep other existing settings.
+   Click **Continue** and save.
 
 Structured accruals can support quantity and component identity. They do not
 replace Cash Transactions as the source of paid gross amounts and withholding.
@@ -152,10 +161,52 @@ record the previous image digest as described in [Releasing](releasing.md).
 Keep the existing ENV, credentials and mounted configuration files. Upgrade the
 image only after saving the enriched query. For runtime rollback, restore the
 previous image digest with the same ENV and mounts and recreate the connector.
-The extra Flex fields can remain because the previous runtime ignores them.
+The extra Flex fields can remain because the previous runtime ignores them;
+check its timestamp format requirements as described below.
 Runtime rollback does not restore financial data or undo written activities.
 Historical repairs require separate operator review; this upgrade does not
 certify previously imported dividend quantities.
+
+### Activate timezone-aware dividend diagnostics
+
+1. Back up Ghostfolio and record the current connector image digest. Keep ENV,
+   credentials and mounts available for rollback. Pause scheduled imports while
+   preparing the upgrade.
+2. Save the enriched Flex Query with **YYYYMMDD** dates and **HHmmss TimeZone**
+   times. Check the resulting DETAIL dividend, payment-in-lieu and withholding
+   cash rows for timezone-qualified `dateTime` values. Keep the accrual fields
+   described above.
+3. Set `TZ` to the IANA timezone used to interpret Ghostfolio historical dates,
+   for example `Europe/Warsaw`. This is required for writes even without cron.
+   Flex abbreviations such as `EST` and `EDT` are provenance, not the IANA `TZ`.
+   Missing or invalid `TZ` forces the whole run into `DRY_RUN` before accounts
+   run. One WARNING names the reason. The final notification also names it
+   when Apprise is configured, even if every account succeeds. A preview chosen
+   with `DRY_RUN=1` and valid `TZ` sends no notification.
+4. Upgrade the image and run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` and no `CRON`,
+   using the [README preview command](../README.md#dry-run-first). Read the
+   container logs. Verify no forced-preview WARNING or account suffix failure.
+   Review proposed imports, cash, anomaly blocks and failed-check counts before
+   enabling writes. The source business day is compared with the destination
+   instant's local date in `TZ`; general UTC conversion for imports is unchanged.
+   Missing profile ISIN permits amount comparison, but a conflicting ISIN blocks
+   identity. `skipped by proximity` explains a weak candidate and does not prove
+   that a payment is present or correct.
+5. Keep logs private: INFO and DEBUG can include securities, dates, activity IDs,
+   quantities and financial amounts. Capture needed evidence before removing
+   the one-off container. Do not publish raw logs or attach them to public issues.
+   The diagnostic creates no persistent report and does not repair activities.
+6. After reviewing the preview, remove `DRY_RUN` or set it to `0`, keep valid `TZ`
+   and the qualified Flex format, then resume the schedule. A missing or invalid
+   suffix still fails only its account and prevents its financial writes; the
+   whole run exits 1 through normal failure handling.
+
+For runtime rollback, restore the recorded image digest and recreate the
+connector with the retained ENV and mounts. Extra Flex fields can remain, but
+an older runtime may not accept timezone-qualified timestamps: check its format
+requirements and replay a preview before resuming writes. Restoring an image
+does not undo imported activities, cash or platform changes. Restore financial
+data only through your separately reviewed backup procedure.
 
 ## 3. Multi-account setup
 

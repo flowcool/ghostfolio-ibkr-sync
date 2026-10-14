@@ -138,9 +138,10 @@ payments retry on later runs; existing dividends are deduplicated first and stay
 untouched and unverified.
 
 Before upgrading, back up Ghostfolio and record the previous image digest. Keep
-ENV and mounts unchanged. For runtime rollback, restore that digest and recreate
-the connector. Extra fields remain compatible with the previous runtime. Rollback
-does not undo financial writes. See the [upgrade procedure](docs/ibkr-setup.md#prepare-for-structured-dividend-quantities).
+ENV and mounts available, and set a valid IANA `TZ` before enabling writes.
+For runtime rollback, restore that digest and recreate the connector. Check the
+previous runtime's timestamp format requirements before resuming writes.
+Rollback does not undo financial writes. See the [upgrade procedure](docs/ibkr-setup.md#activate-timezone-aware-dividend-diagnostics).
 
 ## Ghostfolio Setup
 
@@ -239,9 +240,9 @@ All configuration is done via environment variables:
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count) | `IBKR Individual` |
 | `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
 | `CRON` | No | Five numeric cron fields for recurring runs (Docker only); validated before startup | `0 6 * * *` |
-| `TZ` | No | Timezone for cron scheduling | `Europe/Warsaw` |
+| `TZ` | For writes | Valid IANA timezone for historical dividend dates and cron scheduling. Missing or invalid values force the whole run into `DRY_RUN`, with a WARNING and a final notification when configured | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
-| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs for failures and legacy token expiry reminders (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
+| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs for failures, legacy token expiry reminders and TZ-forced previews (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
 | `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
 | `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without financial writes to Ghostfolio; token exchange still occurs with `GHOST_ACCESS_TOKEN` | `1` |
 
@@ -339,6 +340,7 @@ If you trade on `.JO` or `.TA` and amounts look 100 times off, check this table 
 
 ```bash
 docker run --rm --network your-ghostfolio-network \
+  -e TZ=Europe/Warsaw \
   -e IBKR_TOKEN=your_token \
   -e IBKR_ACCOUNT_IDS=U1234567 \
   -e IBKR_QUERY_IDS=123456 \
@@ -361,6 +363,7 @@ export IBKR_QUERY_IDS=123456
 export GHOST_ACCESS_TOKEN=your_ghost_security_token
 export GHOST_HOST=http://localhost:3333
 export GHOST_ACCOUNT_NAMES="IBKR Main"
+export TZ=Europe/Warsaw
 .venv/bin/python ibkr_to_ghostfolio.py
 ```
 
@@ -368,12 +371,30 @@ export GHOST_ACCOUNT_NAMES="IBKR Main"
 
 Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
+Set a valid IANA `TZ`, such as `Europe/Warsaw`, even for one-off Python runs.
+Missing or invalid `TZ` forces every account into `DRY_RUN` before processing,
+with one WARNING explaining the reason. No activities, cash or platform are
+written. The final notification includes the reason when Apprise is configured,
+even if all accounts succeed. An operator-chosen preview with valid `TZ` sends
+no notification.
+
+Every DETAIL dividend, payment-in-lieu and withholding cash row must have
+`dateTime` in `YYYYMMDD;HHmmss TimeZone` form, for example
+`20260115;120000 EST` or `20260715;120000 EDT`. A missing or invalid suffix
+fails the affected account before any import, cash or platform write. It does
+not enable `DRY_RUN`; other accounts retain their configured mode. Other cash
+types are outside this check. Follow the [staged activation and rollback
+procedure](docs/ibkr-setup.md#activate-timezone-aware-dividend-diagnostics).
+
 Every dry run also compares historical dividends in the target account before
 deduplication. The INFO summary reports coverage and categories; details for
 differences or uncertainty include source comments and activity IDs. A coherent
-single activity has the canonical source comment, consistent security and UTC
-date, and exactly equal quantity, gross and fee. Gross comes from broker cash;
-accruals establish quantity. Component quantities are never summed. Several
+single activity has the canonical source comment, consistent security and local
+date in `TZ`, and exactly equal quantity, gross and fee. The IBKR `YYYYMMDD`
+is the source business day; the destination instant is rendered in `TZ` for
+comparison. Flex suffixes provide provenance; import UTC conversion is unchanged.
+Gross comes from broker cash; accruals establish quantity. Component quantities
+are never summed. Several
 activities with the same group comment do not prove a component partition,
 even when their amounts sum correctly; that comparison stays uncertain.
 An independently identified component set must cover every source component
@@ -396,7 +417,7 @@ float precision. Source fee is the positive part of the negative net cash
 withholding; signed withholding and refund rows and their total remain separate
 evidence. Coherence requires exact quantity, gross and fee agreement; a complete
 representation with a discrepancy is not coherent.
-The diagnostic adds no reads, writes, files or settings. Findings do not change
+The diagnostic adds no reads, writes or files. Findings do not change
 import selection, cash updates, exit codes or notifications. Live runs do not
 run this comparison. Use the one-off command below without `CRON`.
 
@@ -404,6 +425,15 @@ run this comparison. Use the one-off command below without `CRON`.
 that a payment is missing: legacy comments, symbol-only comments, proximity and
 timezone explanations cannot certify identity. Inactive or unsupported records,
 conflicting security/date context and missing/conflicting accruals stay uncertain.
+Missing destination profile ISIN is unavailable evidence and permits amount
+comparison; a nonempty conflicting ISIN blocks identity. Details name the
+active, activity-ID, data-source, symbol, local-date and ISIN checks with
+expected and observed values. INFO counts failed checks and shows anomaly
+blocks with securities, source and destination UTC/local dates, activity IDs,
+quantity, gross, fee and currency. An `absent` group suppressed by deduplication
+shows `skipped by proximity` and nearby candidate values; it remains absent
+and does not certify identity. Outside-window records also show their security,
+date and values.
 The summary counts source payment groups and unmatched destination dividends
 separately. Every unmatched target-account dividend remains visible. A UTC date
 outside explicit, consistent Flex statement `fromDate`/`toDate` bounds is reported
@@ -423,6 +453,7 @@ failures still fail the run; diagnostic findings do not send notifications.
 
 ```bash
 docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
+  -e TZ=Europe/Warsaw \
   -e IBKR_TOKEN=your_token -e IBKR_ACCOUNT_IDS=U1234567 -e IBKR_QUERY_IDS=123456 \
   -e GHOST_ACCESS_TOKEN=your_ghost_security_token -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
@@ -481,8 +512,13 @@ of days remaining (`0` means expired). If the run also fails, the reminder is in
 in the same failure notification. At most one notification is sent per completed run;
 there is no daily state, so multiple runs in one day can repeat the reminder.
 
-**When nothing is sent:** successful runs without an expiry reminder, runs that only
-logged other warnings (for example unmapped ISINs), dry runs (`DRY_RUN` is honoured even when the rest of the configuration is
+Missing or invalid IANA `TZ` also sends a final notification naming the forced
+`DRY_RUN` reason, even on success. It shares the single summary with any
+failures or expiry reminder. Notification delivery does not change exit status.
+
+**When nothing is sent:** successful runs without an expiry reminder or forced
+preview, runs that only logged other warnings (for example unmapped ISINs),
+operator-chosen dry runs with valid `TZ` (`DRY_RUN` is honoured even when the rest of the configuration is
 invalid), runs stopped by a signal, and when `APPRISE_URLS` is blank or `[]`. If
 `APPRISE_URLS` or `APPRISE_TIMEOUT` is invalid, the run logs
 `APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled` and syncs as usual.
@@ -553,7 +589,7 @@ services:
       GHOST_ACCOUNT_NAMES: "IBKR Individual"
       MAPPING_FILE: /app/mapping.yaml
       CRON: "0 6 * * *"
-      # Optional: one alert per failed run (see Failure notifications)
+      # Optional: one summary for failure, token expiry or TZ-forced preview.
       # APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic"]'
     volumes:
       - ./mapping.yaml:/app/mapping.yaml:ro
