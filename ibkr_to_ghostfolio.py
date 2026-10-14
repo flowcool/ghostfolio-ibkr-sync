@@ -2244,7 +2244,7 @@ def _readable_action(readable):
 
 
 MATCH_REASONS = {"strong": "same security, local day, gross and fee",
-                 "weak": "same security and local day only, or dates inside the proximity window"}
+                 "weak": "candidate rows exist, none equal in gross and fee"}
 
 
 def _match_action(match):
