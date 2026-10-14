@@ -27,7 +27,7 @@ def registry_version_absent(repository, tag, username, password):
     with requests.Session() as session:
         session.trust_env = False
         response = session.get("https://ghcr.io/token", params={"service": "ghcr.io",
-            "scope": f"repository:{repository}:pull,push"}, auth=(username, password),
+            "scope": f"repository:{repository}:pull"}, auth=(username, password),
             timeout=(10, 30), allow_redirects=False)
         print(f"Registry token endpoint HTTP {response.status_code}", file=sys.stderr)
         if response.status_code != 200:

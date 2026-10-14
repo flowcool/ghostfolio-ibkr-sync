@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 import subprocess
+import tarfile
+import tempfile
 from pathlib import Path
 
 
@@ -27,8 +29,17 @@ def verify(image, digest, arch):
             text=True, timeout=60))
     index = inspect(image + "@" + digest)
     manifest = inspect(image + "@" + native_manifest_digest(index, arch))
-    local = subprocess.check_output(["docker", "inspect", "--format", "{{.Id}}",
-        "ibkr-release:check"], text=True, timeout=15).strip()
+    # Image IDs depend on Docker's storage backend. Hash the saved config bytes.
+    with tempfile.TemporaryDirectory() as directory:
+        saved = Path(directory, "checked-image.tar")
+        subprocess.run(["docker", "image", "save", "--output", str(saved),
+                        "ibkr-release:check"], check=True, timeout=120)
+        with tarfile.open(saved) as archive:
+            entries = json.load(archive.extractfile("manifest.json"))
+            if len(entries) != 1:
+                raise RuntimeError("Exactly one checked local image is required")
+            config = archive.extractfile(entries[0]["Config"]).read()
+        local = "sha256:" + hashlib.sha256(config).hexdigest()
     if manifest.get("config", {}).get("digest") != local:
         raise RuntimeError("Published native configuration differs from the tested image")
     print(f"Verified linux/{arch} configuration {local} in published {digest}")
