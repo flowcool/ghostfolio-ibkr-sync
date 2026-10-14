@@ -5,7 +5,7 @@
 
 ## 2. Report text
 
-- [ ] 2.1 Render the "Proposed match" section with labels and action line in every block of the dividend; prove classes, counts and exits are unchanged. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_match_unchanged'`.
+- [x] 2.1 Render the "Proposed match" section with labels and action line in every block of the dividend; prove classes, counts and exits are unchanged. Check: `.venv/bin/python -m pytest -v tests -k 'dividend_match_unchanged'`.
 
 ## 3. Real validation
 

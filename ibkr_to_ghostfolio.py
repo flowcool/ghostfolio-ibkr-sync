@@ -2191,6 +2191,9 @@ def classify_dividend_findings(findings):
     for finding in findings:
         if finding["source"] is not None:
             finding["match"] = _propose_match(finding, twins.get(id(finding), []))
+            for twin in twins.get(id(finding), []):
+                twin["match"] = finding["match"]
+                twin["match_source"] = finding
     return findings
 
 
@@ -2238,6 +2241,49 @@ def _readable_action(readable):
     if readable["class"] in ("coherent", "outside_window", "noise"):
         return "No action needed."
     return READABLE_ACTIONS.get(readable["label"], READABLE_ACTIONS["uncertain"])
+
+
+MATCH_REASONS = {"strong": "same security, local day, gross and fee",
+                 "weak": "candidate rows exist, none equal in gross and fee"}
+
+
+def _match_action(match):
+    """One action line naming the row to act on (wording follows READABLE_ACTIONS)."""
+    if match["confidence"] == "weak":
+        return (f"Compare activity {match['action_activity_id']} and the other rows with the IBKR "
+                "statement by hand; no row is proposed to keep.")
+    row = next((row for row in match["rows"] if row["activity_id"] == match["action_activity_id"]), None)
+    if row is None:
+        keep = next(row for row in match["rows"] if row["label"] == "Keep")
+        return f"No action needed: keep activity {keep['activity_id']}."
+    if row["label"] == "Duplicate":
+        return (f"Check whether activity {row['activity_id']} repeats the IBKR dividend; "
+                "delete it by hand if it does.")
+    return (f"Compare activity {row['activity_id']} with the IBKR statement; "
+            "fix it by hand if IBKR is right.")
+
+
+def _format_match(finding):
+    """Lines of the Proposed match section: IBKR side, labelled rows side by side, one action."""
+    match = finding.get("match")
+    if match is None:
+        return []
+    source = finding.get("match_source", finding)
+    if match["confidence"] == "none":
+        return ["  Proposed match: no confident match"]
+    lines = [f"  Proposed match ({match['confidence']}: {MATCH_REASONS[match['confidence']]})"]
+    if "source_gross" in source:
+        lines.append(f"    IBKR {source['source']}: quantity {_plain(source['source_quantity'])}, "
+                     f"gross {_plain(source['source_gross'])} {source['source_currency']}, "
+                     f"fee {_plain(source['source_fee'])} {source['source_currency']}")
+    else:
+        lines.append(f"    IBKR {source['source']}: values unavailable")
+    for row in match["rows"]:
+        lines.append(f"    {row['label']}: activity {row['activity_id']} ({row['symbol']}), "
+                     f"local day {row['local_date']}, UTC date {row['utc_date']}, "
+                     + _plain_values(row["values"]))
+    lines.append("    Proposed action: " + _match_action(match))
+    return lines
 
 
 def format_historical_dividend_finding(finding, account_id):
@@ -2299,6 +2345,7 @@ def format_historical_dividend_finding(finding, account_id):
             lines.append(f"    Weak candidate: activity {item['activity_id']} (comment {item['comment']}, "
                          f"{item['utc_date']}), " + _plain_values(item["values"]))
     lines.append(f"  Action: {_readable_action(readable)}")
+    lines += _format_match(finding)
     lines.append("  Nothing was written.")
     return "\n".join(lines)
 
