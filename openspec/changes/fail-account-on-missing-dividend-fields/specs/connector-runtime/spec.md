@@ -6,7 +6,7 @@ Before any Ghostfolio financial write, including cash and platform updates, each
 
 An attribute SHALL be missing when no row of its section carries it. Required `CashTransaction` attributes on those rows SHALL be `accountId`, `conid`, `currency`, `actionID` and `exDate`. `ChangeInDividendAccruals` SHALL be mandatory once relevant cash rows exist. When that section has rows, its attributes SHALL cover the cash keys plus `quantity`, `code`, `date`, `payDate` and `reportDate`. A present but empty section SHALL stay valid.
 
-A missing attribute or section SHALL fail the account through the normal failure outcome with one ERROR line. The line SHALL name every missing XML attribute with the IBKR field to select, and SHALL NOT enable `DRY_RUN`. A single empty or malformed value SHALL keep the local rejection of "Enriched dividend input and local rejection".
+A missing attribute or section SHALL fail the account through the normal failure outcome with one ERROR line. The line SHALL name every missing XML attribute with the IBKR field to select, and SHALL NOT enable `DRY_RUN`. For an attribute or section absent from every relevant row, this requirement SHALL take precedence over "Missing section/relevant attributes SHALL block account dividends" in "Enriched dividend input and local rejection": the account fails before any write instead of a dividends-only block. A single empty or malformed value SHALL keep the local rejection of "Enriched dividend input and local rejection".
 
 #### Scenario: Cash field not ticked
 - **WHEN** `.venv/bin/python -m pytest -v tests -k 'dividend_field_prerequisites'` runs a report with dividend rows but no `conid`, and no new dividend

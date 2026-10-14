@@ -2,10 +2,9 @@
 
 Add one preflight function next to `flex_provenance_failures`
 (`ibkr_to_ghostfolio.py`, called in `process_account` right after that check).
-Reuse its row filter: `DIVIDEND_CASH_TYPES`, `WITHHOLDING_CASH_TYPE`, DETAIL level.
-Reuse the failure path of the time-zone check: `log.error`, then `return {}, False`.
-That path runs before any import, cash or platform write and, in the main run
-loop, feeds the existing failure notification.
+Reuse its row filter (`DIVIDEND_CASH_TYPES`, `WITHHOLDING_CASH_TYPE`, DETAIL) and
+the time-zone failure path: `log.error`, then `return {}, False`. That path runs
+before any write and feeds the existing failure notification.
 
 ## Checks, in order
 
@@ -22,19 +21,18 @@ loop, feeds the existing failure notification.
 
 ## Message
 
-One ERROR per account, listing all gaps at once. Each XML attribute maps to its
-IBKR field name through one constant dict. The names come from
-`docs/ibkr-setup.md`. The message points to the README, like the time-zone one.
+One ERROR per account listing all gaps. One constant dict maps each XML attribute to its IBKR field name. The message points to the README.
 
 ## Kept as is
 
-`dividend_input_compatible` stays as the per-candidate backstop. It still
-covers rows that hold the attribute but are incomplete elsewhere.
-`DRY_RUN` runs the same preflight and fails the same way, because the
-time-zone failure does the same.
+`dividend_input_compatible` stays as the per-candidate backstop.
+`DRY_RUN` runs the same preflight and fails the same way.
 
-## Open question
+## Decisions
 
-IBKR field names for `reportDate` and `exDate` in the accrual section are taken
-from the setup guide. The task checks them against the real report before
-release.
+IBKR field names come from `docs/ibkr-setup.md`; the XML carries no UI labels.
+
+Presence rule, not non-empty. In both saved reports, all 50 Withholding Tax
+DETAIL rows carry the five payment keys as attributes, except `conid` in the old
+query. `exDate` is present but empty on 50/50 rows in both. The check therefore
+tests attribute presence only. Empty values stay local rejections.
