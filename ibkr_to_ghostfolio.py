@@ -445,6 +445,15 @@ def parse_cash_dividends(xml_text):
     return list(groups.values())
 
 
+DIVIDEND_PAYMENT_KEYS = ("accountId", "conid", "currency", "actionID", "exDate")
+DIVIDEND_ACCRUAL_REQUIRED = DIVIDEND_PAYMENT_KEYS + ("quantity", "code", "date", "payDate", "reportDate")
+DIVIDEND_FIELD_NAMES = {
+    "accountId": "ClientAccountID", "conid": "ConID (Contract ID)",
+    "currency": "CurrencyPrimary", "actionID": "ActionID", "exDate": "Ex Date",
+    "quantity": "Quantity", "code": "Code", "date": "Date",
+    "payDate": "Pay Date", "reportDate": "Report Date",
+}
+
 FLEX_SUFFIX_PATTERN = re.compile(r"^\d{8};\d{6}\s+[A-Za-z]{2,5}$")
 
 
@@ -467,6 +476,38 @@ def flex_provenance_failures(xml_text):
         if not FLEX_SUFFIX_PATTERN.match(date_time) or not parse_ibkr_datetime(date_time):
             failures[tx_type] = failures.get(tx_type, 0) + 1
     return failures
+
+
+def dividend_field_prerequisites(xml_text):
+    """List the required dividend attributes or section absent from the whole report.
+
+    Without DETAIL dividend, payment-in-lieu or withholding cash rows nothing is
+    required. An attribute is missing when no row of its section carries it; an
+    empty value on one row stays a local rejection. Returns a list of
+    "Section.attribute (IBKR field)" strings, empty when the report passes.
+    """
+    root = ET.fromstring(xml_text)
+    rows = [el.attrib for el in root.iter("CashTransaction")
+            if (el.attrib.get("type", "") in DIVIDEND_CASH_TYPES
+                or el.attrib.get("type", "") == WITHHOLDING_CASH_TYPE)
+            and el.attrib.get("levelOfDetail", "DETAIL").upper() == "DETAIL"]
+    if not rows:
+        return []
+
+    def label(section, field):
+        return f"{section}.{field} ({DIVIDEND_FIELD_NAMES[field]})"
+
+    gaps = [label("CashTransaction", field) for field in DIVIDEND_PAYMENT_KEYS
+            if not any(field in row for row in rows)]
+    section = next(root.iter("ChangeInDividendAccruals"), None)
+    if section is None:
+        gaps.append("ChangeInDividendAccruals section (Change in Dividend Accruals)")
+    else:
+        accruals = [el.attrib for el in root.iter("ChangeInDividendAccrual")]
+        if accruals:
+            gaps += [label("ChangeInDividendAccrual", field) for field in DIVIDEND_ACCRUAL_REQUIRED
+                     if not any(field in row for row in accruals)]
+    return gaps
 
 
 def _dividend_decimal(value):
@@ -507,8 +548,8 @@ def dividend_input_compatible(candidates, quiet=False):
     Attribute absence blocks account dividends. Empty values remain local
     quantity rejections. A nonempty mismatching key proves a row unrelated.
     """
-    keys = ("accountId", "conid", "currency", "actionID", "exDate")
-    required = keys + ("quantity", "code", "date", "payDate", "reportDate")
+    keys = DIVIDEND_PAYMENT_KEYS
+    required = DIVIDEND_ACCRUAL_REQUIRED
     for dividend in candidates:
         if not dividend.get("accrual_section"):
             if not quiet:
@@ -550,7 +591,7 @@ def dividend_structured_quantity(dividend, quiet=False):
     if len({row.get("currency", "") for row in cash_rows}) > 1:
         return reject("contradictory cash currencies")
     actions = defaultdict(list)
-    keys = ("accountId", "conid", "currency", "actionID", "exDate")
+    keys = DIVIDEND_PAYMENT_KEYS
     for row in dividend.get("payments", []):
         key = tuple(row.get(field, "") for field in keys)
         if not all(key):
@@ -1801,7 +1842,7 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         if quantity is None:
             finding["reason"] = "missing or conflicting source quantity evidence"
             continue
-        keys = ("accountId", "conid", "currency", "actionID", "exDate")
+        keys = DIVIDEND_PAYMENT_KEYS
         components = defaultdict(list)
         for row in dividend["payments"]:
             components[tuple(row.get(key, "") for key in keys)].append(row)
@@ -2030,6 +2071,14 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
                   "(%s); account failed before any write. Add Date/Time with time zone to the "
                   "query, see README", query_id,
                   ", ".join(f"{kind}: {count}" for kind, count in sorted(provenance.items())))
+        return {}, False
+
+    # Required dividend fields are a prerequisite too, even with no new dividend
+    gaps = dividend_field_prerequisites(xml_text)
+    if gaps:
+        log.error("Flex Query %s: required dividend fields missing from the report (%s); account "
+                  "failed before any write. Tick these fields in the query, see README",
+                  query_id, ", ".join(gaps))
         return {}, False
 
     # Parse trades and dividends
