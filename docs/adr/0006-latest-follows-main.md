@@ -1,7 +1,10 @@
 # Publish latest from stable releases and leave upgrade control to the operator
 
-Date: 2026-10-12. Status: superseded by the stable-channel decision approved
-2026-10-14 (recorded below). The filename remains for existing links.
+Date: 2026-10-12. Status: accepted (existing behavior).
+
+The original decision below was superseded by the stable-channel decision
+approved on 2026-10-14. The replacement is recorded in this ADR; the filename
+remains for existing links.
 
 ## Original decision
 
