@@ -4,7 +4,7 @@ Each task is one vertical slice of about one hour. Run offline checks with synth
 
 ## 1. Parser with timezone suffix
 
-- [ ] 1.1 Make `parse_ibkr_datetime()` accept `YYYYMMDD;HHmmss TimeZone`, including observed EST/EDT, without changing current UTC conversion; add compatibility tests. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_parser'`.
+- [x] 1.1 Make `parse_ibkr_datetime()` accept `YYYYMMDD;HHmmss TimeZone`, including observed EST/EDT, without changing current UTC conversion; add compatibility tests. Verify `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_parser'`.
 
 ## 2. Prerequisites before writes
 

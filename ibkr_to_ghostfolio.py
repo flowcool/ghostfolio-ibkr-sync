@@ -1275,6 +1275,10 @@ def parse_ibkr_datetime(dt_str):
     if not dt_str:
         return None
 
+    # Flex may append a timezone name ("20260801;143000 EST"); the wall time
+    # keeps the existing UTC labelling, the suffix is not converted.
+    dt_str = re.sub(r"(?<=\d)\s+[A-Za-z]{2,5}$", "", dt_str.strip())
+
     # Try common IBKR formats
     for fmt in ("%Y%m%d;%H%M%S", "%Y-%m-%d, %H:%M:%S", "%Y-%m-%d;%H:%M:%S",
                 "%Y%m%d", "%Y-%m-%d"):
