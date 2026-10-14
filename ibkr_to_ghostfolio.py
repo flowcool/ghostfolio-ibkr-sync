@@ -1539,9 +1539,11 @@ def historical_dividend_report_window(xml_text):
     """Use explicit, consistent statement bounds; never infer them from payments."""
     windows = []
     for statement in ET.fromstring(xml_text).iter("FlexStatement"):
+        bounds = [statement.get(key, "") for key in ("fromDate", "toDate")]
+        if any(len(value) != 8 or not value.isascii() or not value.isdigit() for value in bounds):
+            return None
         try:
-            start, end = [datetime.strptime(statement.get(key, ""), "%Y%m%d").date().isoformat()
-                          for key in ("fromDate", "toDate")]
+            start, end = [datetime.strptime(value, "%Y%m%d").date().isoformat() for value in bounds]
         except ValueError:
             return None
         if start > end:

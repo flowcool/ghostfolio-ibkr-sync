@@ -362,6 +362,9 @@ def test_evidence_incomplete_source_quantity_is_uncertain(monkeypatch, mode):
 @pytest.mark.parametrize("bounds,expected", [
     ('fromDate="20260701" toDate="20260731"', ("2026-07-01", "2026-07-31")),
     ("", None), ('fromDate="bad" toDate="20260731"', None),
+    ('fromDate="2026071" toDate="20260731"', None),
+    ('fromDate="20260701" toDate="2026073"', None),
+    ('fromDate="２０２６０７０１" toDate="20260731"', None),
     ('fromDate="20260801" toDate="20260731"', None),
 ])
 def test_evidence_window_requires_explicit_valid_bounds(bounds, expected):
