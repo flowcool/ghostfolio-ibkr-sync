@@ -1,4 +1,6 @@
 """Offline tests: Ghostfolio API helpers (requests mocked, no network)."""
+import logging
+
 import pytest
 
 import ibkr_to_ghostfolio as m
@@ -230,7 +232,7 @@ def test_cash_balance_payload_is_the_five_whitelisted_fields(monkeypatch):
         {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1", "comment": "x",
          "isExcluded": False, "balance": 1, "value": 5}))
     monkeypatch.setattr(m.requests, "put", lambda url, headers, json, timeout, **kwargs: sent.update(json) or Resp({}, 200))
-    assert m.ghost_update_cash_balance(CFG, "9", 123.456) is True
+    assert m.ghost_update_cash_balance(CFG, "9", 123.456, "EUR") is True
     assert sent == {"balance": 123.456, "currency": "EUR", "id": "9", "name": "IBKR", "platformId": "p1"}
 
 
@@ -243,7 +245,7 @@ def test_cash_balance_get_rejects_redirect_without_following(monkeypatch):
 
     monkeypatch.setattr(m.requests, "get", get)
     with pytest.raises(RuntimeError, match="Ghostfolio request redirected"):
-        m.ghost_update_cash_balance(CFG, "9", 123.456)
+        m.ghost_update_cash_balance(CFG, "9", 123.456, "EUR")
     assert calls == [{"headers": m.ghost_headers("tok"), "timeout": 30, "allow_redirects": False}]
 
 
@@ -257,14 +259,50 @@ def test_cash_balance_put_rejects_redirect_without_following(monkeypatch, caplog
         return Resp({}, 302)
 
     monkeypatch.setattr(m.requests, "put", put)
-    assert m.ghost_update_cash_balance(CFG, "9", 123.456) is False
+    assert m.ghost_update_cash_balance(CFG, "9", 123.456, "EUR") is False
     assert "Ghostfolio request redirected" in caplog.text
     assert calls[0]["allow_redirects"] is False
 
 
-def test_cash_balance_dry_run_does_not_touch_the_api(monkeypatch):
-    monkeypatch.setattr(m.requests, "get", lambda *a, **k: pytest.fail("no API call in dry run"))
-    assert m.ghost_update_cash_balance({**CFG, "dry_run": True}, "9", 1.0) is True
+def test_cash_currency_guard_dry_run_reads_but_never_writes(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(
+        {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1"}))
+    monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT in dry run"))
+    assert m.ghost_update_cash_balance({**CFG, "dry_run": True}, "9", 1.0, "EUR") is True
+    assert "[DRY RUN] would set cash balance" in caplog.text
+
+
+def test_cash_currency_guard_dry_run_reports_a_mismatch(monkeypatch, caplog):
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(
+        {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1"}))
+    monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT in dry run"))
+    assert m.ghost_update_cash_balance({**CFG, "dry_run": True}, "9", 1.0, "USD") is False
+    assert "USD" in caplog.text and "EUR" in caplog.text
+
+
+def test_cash_currency_guard_mismatch_sends_no_put(monkeypatch, caplog):
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(
+        {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1"}))
+    monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT on mismatch"))
+    assert m.ghost_update_cash_balance(CFG, "9", 123.456, "USD") is False
+    assert "USD" in caplog.text and "EUR" in caplog.text
+
+
+@pytest.mark.parametrize("currency", [None, ""])
+def test_cash_currency_guard_absent_base_currency_sends_no_put(monkeypatch, caplog, currency):
+    monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT without currency"))
+    assert m.ghost_update_cash_balance(CFG, "9", 123.456, currency) is False
+    assert "CurrencyPrimary" in caplog.text
+
+
+def test_cash_currency_guard_match_keeps_the_update_and_log(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(m.requests, "get", lambda *a, **k: Resp(
+        {"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1"}))
+    monkeypatch.setattr(m.requests, "put", lambda *a, **k: Resp({}, 200))
+    assert m.ghost_update_cash_balance(CFG, "9", 123.456, "EUR") is True
+    assert "Updated cash balance for account 9" in caplog.text
 
 
 @pytest.mark.parametrize("kind", ["BUY", "SELL", "DIVIDEND"])

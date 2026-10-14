@@ -280,6 +280,8 @@ def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(en
         reads.append((url, headers["Authorization"]))
         if url.endswith("/api/v1/activities"):
             return R({"activities": [], "count": 0})
+        if url.endswith("/api/v1/account/gf-1"):
+            return R({"id": "gf-1", "name": "U1", "currency": "USD"})
         return R([{"id": "gf-1", "name": "U1"}])
 
     env.setattr(m.requests, "post", post)
@@ -291,8 +293,9 @@ def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(en
     div = ('<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="25" dateTime="20260715;120000 EST" '
            'isin="US1912161007" symbol="KO" currency="USD" description="KO CASH DIVIDEND" '
            'accountId="U1" conid="1" actionID="9" exDate="20260710"/>')
-    xml = (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trade}</Trades>"
-           f"<CashTransactions>{div}</CashTransactions><ChangeInDividendAccruals/><CashReport>"
+    xml = (f"<FlexQueryResponse><FlexStatements><FlexStatement>"
+           '<AccountInformation accountId="U1" currency="USD"/>'
+           f"<Trades>{trade}</Trades><CashTransactions>{div}</CashTransactions><ChangeInDividendAccruals/><CashReport>"
            '<CashReportCurrency currency="BASE_SUMMARY" endingCash="100"/></CashReport>'
            "</FlexStatement></FlexStatements></FlexQueryResponse>")
     env.setattr(m, "fetch_flex_report", lambda *a, **k: xml)
