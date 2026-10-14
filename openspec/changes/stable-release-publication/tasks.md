@@ -6,7 +6,7 @@
 
 ## 2. Stable publication
 
-- [ ] 2.1 Add `release-image.yml`, `scripts/release_image.py` and `scripts/verify_release_image.py` using the design's sibling mechanisms. Deliver metadata/ancestry, registry, configuration/manifest and latest guards. Verify `gh run view <release-run-id> --log` scenarios; real publication requires explicit operator authorization.
+- [x] 2.1 Add `release-image.yml`, `scripts/release_image.py` and `scripts/verify_release_image.py` using the design's sibling mechanisms. Deliver metadata/ancestry, registry, configuration/manifest and latest guards. Verify `gh run view <release-run-id> --log` scenarios; real publication requires explicit operator authorization.
 
 ## 3. Operator migration
 
