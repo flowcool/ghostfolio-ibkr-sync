@@ -216,3 +216,14 @@ def test_dividend_structured_numeric_decimal_arithmetic_overflow_stays_local(qua
     dividend = div(quantity=quantity)
     dividend["payments"] = [dict(dividend["payments"][0], amount=amount) for _ in range(copies)]
     assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+
+
+@pytest.mark.parametrize("side", ["SELL (Ca.)", "", "sell", "Buy", " BUY", None])
+def test_unknown_trade_side_conversion_rejected(side):
+    assert m.convert_trade_to_activity(trade(buySell=side), "acc", {}, {}) is None
+
+
+def test_unknown_trade_side_conversion_keeps_buy_and_sell():
+    buy = m.convert_trade_to_activity(trade(buySell="BUY"), "acc", {}, {})
+    sell = m.convert_trade_to_activity(trade(buySell="SELL", quantity="-4"), "acc", {}, {})
+    assert (buy["type"], sell["type"], sell["quantity"]) == ("BUY", "SELL", 4.0)

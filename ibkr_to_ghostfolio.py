@@ -1251,7 +1251,10 @@ def convert_trade_to_activity(trade, ghost_account_id, mapping, unmapped):
     fee *= minor_factor
 
     # Determine activity type
-    activity_type = "BUY" if buy_sell == "BUY" else "SELL"
+    if buy_sell not in ("BUY", "SELL"):
+        log.error("Unknown buySell '%s' for trade %s; trade rejected", buy_sell, trade_id)
+        return None
+    activity_type = buy_sell
 
     # Parse date - IBKR format is typically "YYYYMMDD;HHMMSS" or "YYYY-MM-DD, HH:MM:SS"
     iso_date = parse_ibkr_datetime(date_time)
