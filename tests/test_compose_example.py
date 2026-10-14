@@ -1,5 +1,6 @@
 """Offline checks for the README's scheduled Compose example."""
 from pathlib import Path
+import re
 
 import pytest
 import yaml
@@ -56,3 +57,23 @@ def test_compose_credentials_require_operator_values_not_inline_secrets():
         assert env['IBKR_TOKEN'] == '${IBKR_TOKEN:?Set IBKR_TOKEN}'
         assert env['GHOST_ACCESS_TOKEN'] == '${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}'
         assert 'GHOST_TOKEN' not in env
+
+
+IMAGE_REF = re.compile(r'ghcr\.io/flowcool/ghostfolio-ibkr-sync([:@][^\s`\'"]*)')
+# Release CI moves :latest only to the current stable release, so it never needs a
+# bump PR; a digest pins one exact artifact. A version tag in the README would age.
+ALLOWED_REF = re.compile(r':latest|@sha256:(?:[0-9a-f]{64}|\.\.\.|<[^>]+>)')
+
+
+def stale_image_refs(text):
+    return [ref for ref in IMAGE_REF.findall(text) if not ALLOWED_REF.fullmatch(ref)]
+
+
+def test_readme_image_refs_use_latest_or_digest():
+    readme = (Path(__file__).resolve().parents[1] / 'README.md').read_text(encoding='utf-8')
+    assert IMAGE_REF.findall(readme)
+    assert stale_image_refs(readme) == []
+
+
+def test_readme_version_tag_is_rejected():
+    assert stale_image_refs('image: ghcr.io/flowcool/ghostfolio-ibkr-sync:2.4.1\n') == [':2.4.1']
