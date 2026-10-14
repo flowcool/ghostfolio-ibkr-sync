@@ -1,11 +1,12 @@
 # Architecture decision records
 
-Recorded on 2026-10-12. These retrospective records describe existing behavior,
-not new financial policies or approval to redesign it. The date is the recording
+Records 0001-0007 were recorded on 2026-10-12. These retrospective records describe
+existing behavior, not new financial policies or approval to redesign it. The date is the recording
 date, not a claim about when the original choice was made. Code and the linked
-operational guides remain authoritative; revisit these records when behavior changes.
+operational guides remain authoritative; revisit these records when behavior changes. Record 0008 (2026-10-14) documents
+the 3.0 prerequisite policy.
 
-| Record | Existing decision |
+| Record | Decision |
 | --- | --- |
 | [0001](0001-single-file-runtime.md) | Single-file Python runtime |
 | [0002](0002-comment-and-proximity-deduplication.md) | Comment identities and dividend proximity matching |
@@ -14,5 +15,6 @@ operational guides remain authoritative; revisit these records when behavior cha
 | [0005](0005-flex-window-and-corporate-actions.md) | 365-day history and no corporate-action processing |
 | [0006](0006-latest-follows-main.md) | Latest image follows stable releases; release-candidate channel |
 | [0007](0007-pinned-degiro-core.md) | Reviewed propagation to the pinned DEGIRO core |
+| [0008](0008-fail-account-on-missing-flex-prerequisite.md) | Account fails before any write when a Flex prerequisite is missing |
 
 [Back to development guidance](../../README.md#development).
