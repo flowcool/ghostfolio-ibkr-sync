@@ -2,13 +2,14 @@
 
 ## Why
 
-The first real v2.5.0 dry run produced 114 unusable historical-dividend findings: 44 groups shared one compound reason and details omitted the evidence. Saved Flex and Ghostfolio data exposed missing profile ISINs, Paris-local dates, and two proximity skips.
+The first real v2.5.0 dry run produced 114 unusable historical-dividend findings: 44 groups shared one compound reason and details omitted the evidence. Saved Flex and Ghostfolio evidence measured missing Ghostfolio profile ISIN in 44/44 groups, dates at midnight in Europe/Paris in 5/44, and no other failed identity check. After this change, all 44 groups must reach amount comparison in the real dry run. Two separate absent groups need proximity explanations.
 
 ## What Changes
 
 - Split identity into named checks with expected/observed values. Missing profile ISIN is unavailable; a nonempty conflict blocks identity.
-- Compare the IBKR business day with the Ghostfolio instant rendered in IANA `TZ`. Accept Flex `HHmmss TimeZone` without changing general UTC conversion.
-- **BREAKING**: require `TZ` and timezone-qualified dividend/PIL/withholding rows. Invalid input fails the account before any Ghostfolio write, including cash; it never enables `DRY_RUN`.
+- Compare the IBKR business day with the Ghostfolio instant rendered in IANA `TZ`. Accept Flex `YYYYMMDD;HHmmss TimeZone` without changing general UTC conversion. Query 1671605 already emits this format; v2.5.0 returns `None`.
+- Missing or invalid IANA `TZ` forces the entire run into `DRY_RUN` before any write, with one WARNING line and a final-notification mention.
+- **BREAKING**: require timezone-qualified dividend/PIL/withholding rows. A missing or invalid Flex suffix fails the account before any Ghostfolio write, including cash; this failure never enables `DRY_RUN`.
 - Add readable anomaly blocks, failed-check counts, proximity explanations, and migration guidance.
 
 ## Flex Records
