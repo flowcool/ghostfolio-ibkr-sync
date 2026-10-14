@@ -15,7 +15,7 @@ Stable publication SHALL require a published, non-draft, non-prerelease GitHub R
 A published, non-draft GitHub prerelease with an exact tag `vX.Y.Z-rc.N` (`N >= 1`, no leading zeros) on main SHALL publish only `X.Y.Z-rc.N`, with the same checks and single-publication guard as stable. It SHALL NOT create or move `latest`, `X.Y.Z` or `X.Y`. Any other prerelease tag, a stable tag flagged prerelease, drafts and tag pushes SHALL publish nothing.
 
 #### Scenario: RC validation offline
-- **WHEN** `python scripts/release_image.py` runs against synthetic event files for `v3.0.0-rc.1` (prerelease true), `v3.0.0-rc.0`, `v3.0.0-rc.01`, `v3.0.0-beta.1` and a draft
+- **WHEN** `.venv/bin/python -m pytest -q tests -k 'release_candidate_metadata'` runs synthetic events for `v3.0.0-rc.1` (prerelease true), `v3.0.0-rc.0`, `v3.0.0-rc.01`, `v3.0.0-beta.1` and a draft
 - **THEN** only the first prints the tag and version `3.0.0-rc.1`; the others exit with a refusal.
 
 #### Scenario: Latest untouched
@@ -27,12 +27,12 @@ A published, non-draft GitHub prerelease with an exact tag `vX.Y.Z-rc.N` (`N >= 
 When a tag `vX.Y.Z-rc.N` exists, the stable tag `vX.Y.Z` SHALL be refused unless it points to the same commit as the highest `N`. With no RC for `X.Y.Z`, stable publication SHALL proceed as before. The refusal SHALL name both tags.
 
 #### Scenario: Stable commit check
-- **WHEN** the preflight runs in a scratch repository with tags `v3.0.0-rc.1` and `v3.0.0-rc.2` and a stable `v3.0.0` on a later commit, then on the `rc.2` commit
+- **WHEN** `.venv/bin/python -m pytest -q tests -k 'release_candidate_stable_commit'` runs the check with tags `v3.0.0-rc.1` and `v3.0.0-rc.2` and a stable `v3.0.0` on a later commit, then on the `rc.2` commit
 - **THEN** the first run fails naming `v3.0.0-rc.2`; the second succeeds.
 
 ### Requirement: RC operator guidance
 
-Guidance SHALL describe cutting an RC, validating it in production as a separate operation, and promoting by tagging stable on the same commit. It SHALL state that an RC never moves `latest` and how a consumer's Renovate excludes `-rc.` versions. ADR 0006 SHALL record the channel.
+Guidance SHALL describe cutting an RC, validating it in production as a separate operation, and promoting by tagging stable on the same commit. It SHALL state that an RC never moves `latest` and why a consumer's Renovate does not propose `-rc.` tags, with the documentation link. ADR 0006 SHALL record the channel.
 
 #### Scenario: Guidance present
 - **WHEN** `rg -n 'rc\.|release candidate' docs/releasing.md docs/adr/0006-latest-follows-main.md README.md .github/BUILD.md` is run
