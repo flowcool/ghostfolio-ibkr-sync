@@ -453,7 +453,7 @@ def _dividend_cash_sum(rows):
             return None
 
 
-def dividend_input_compatible(candidates):
+def dividend_input_compatible(candidates, quiet=False):
     """Check schema only for new payments and potentially associated accruals.
 
     Attribute absence blocks account dividends. Empty values remain local
@@ -463,26 +463,29 @@ def dividend_input_compatible(candidates):
     required = keys + ("quantity", "code", "date", "payDate", "reportDate")
     for dividend in candidates:
         if not dividend.get("accrual_section"):
-            log.warning("Incompatible dividend input: missing ChangeInDividendAccruals section "
-                        "— account dividends not imported; enrich the Flex query")
+            if not quiet:
+                log.warning("Incompatible dividend input: missing ChangeInDividendAccruals section "
+                            "— account dividends not imported; enrich the Flex query")
             return False
         for payment in dividend["payments"]:
             if any(field not in payment for field in keys):
-                log.warning("Incompatible dividend input: missing payment attributes "
-                            "— account dividends not imported; enrich the Flex query")
+                if not quiet:
+                    log.warning("Incompatible dividend input: missing payment attributes "
+                                "— account dividends not imported; enrich the Flex query")
                 return False
             for row in dividend["accruals"]:
                 if any(row.get(field) and payment.get(field)
                        and row[field] != payment[field] for field in keys):
                     continue
                 if any(field not in row for field in required):
-                    log.warning("Incompatible dividend input: missing relevant accrual attributes "
-                                "— account dividends not imported; enrich the Flex query")
+                    if not quiet:
+                        log.warning("Incompatible dividend input: missing relevant accrual attributes "
+                                    "— account dividends not imported; enrich the Flex query")
                     return False
     return True
 
 
-def dividend_structured_quantity(dividend):
+def dividend_structured_quantity(dividend, quiet=False):
     """Return the common exact quantity for net-positive cash actions, or None.
 
     Match account/contract/currency/action/ex-date, then require one payment
@@ -490,8 +493,9 @@ def dividend_structured_quantity(dividend):
     Cash totals stay authoritative. Validation is separate from cash parsing.
     """
     def reject(reason):
-        log.warning("Dividend %s %s: %s — not imported",
-                    dividend["symbol"], dividend["date"], reason)
+        if not quiet:
+            log.warning("Dividend %s %s: %s — not imported",
+                        dividend["symbol"], dividend["date"], reason)
         return None
 
     cash_rows = dividend.get("cash_rows", [])
@@ -1547,10 +1551,10 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
         if len(candidates) != 1:
             finding["reason"] = "component partition identity not proven"
             continue
-        if not dividend_input_compatible([dividend]):
+        if not dividend_input_compatible([dividend], quiet=True):
             finding["reason"] = "incompatible source quantity schema"
             continue
-        quantity = dividend_structured_quantity(dividend)
+        quantity = dividend_structured_quantity(dividend, quiet=True)
         if quantity is None:
             finding["reason"] = "missing or conflicting source quantity evidence"
             continue
