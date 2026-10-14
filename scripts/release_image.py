@@ -10,13 +10,19 @@ from pathlib import Path
 import requests
 
 
+STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+RC_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.([1-9][0-9]*)")
+
+
 def release_metadata(event):
     release = event.get("release", {})
     tag = release.get("tag_name", "")
+    prerelease = release.get("prerelease")
     if (event.get("action") != "published" or release.get("draft") is not False
-            or release.get("prerelease") is not False
-            or not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag)):
-        raise RuntimeError("A published stable vX.Y.Z release is required")
+            or not isinstance(tag, str)
+            or not ((prerelease is False and STABLE_TAG.fullmatch(tag))
+                    or (prerelease is True and RC_TAG.fullmatch(tag)))):
+        raise RuntimeError("A published stable vX.Y.Z release or vX.Y.Z-rc.N prerelease is required")
     return tag, tag[1:]
 
 
@@ -85,7 +91,7 @@ def main():
         tagged = subprocess.check_output(["git", "rev-parse", tag + "^{commit}"], text=True, timeout=15).strip()
         if head != tagged:
             raise RuntimeError("Release checkout does not match tag")
-        print(f"Stable release {tag}: version={version}, commit={head}, ancestor of origin/main")
+        print(f"Release {tag}: version={version}, commit={head}, ancestor of origin/main")
         if args.registry_login:
             phase = "registry login"
             registry_login(os.environ["GITHUB_ACTOR"], os.environ["GH_TOKEN"])
