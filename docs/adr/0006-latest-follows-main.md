@@ -36,6 +36,24 @@ Publishing does not deploy or recreate a container. Operators retain control of
 upgrades. This accepts slower security delivery in exchange for stable artifacts
 and explicit releases.
 
+## Release-candidate channel
+
+Date: 2026-10-14.
+
+Decision: a published GitHub prerelease with an exact `vX.Y.Z-rc.N` tag
+(`N >= 1`, no leading zeros) publishes only `:X.Y.Z-rc.N`. It never moves
+`:latest`, `:X.Y.Z` or `:X.Y`. When an RC exists for a version, the stable
+`vX.Y.Z` tag must sit on the commit of the highest RC; the preflight enforces
+this and fails otherwise. With no RC, the stable path is unchanged, which keeps
+the hotfix path.
+
+Reason: test a release in production before `:latest` moves for everyone.
+
+Consequences: an RC number is single-use, because the registry check blocks
+republishing a version. Renovate treats the suffix after `-` as a compatibility
+suffix, so consumers on `X.Y.Z` are not offered RC tags. See
+[release and recovery guide](../releasing.md) for the operator procedure.
+
 Sources: [Docker image](../../README.md#docker-image),
 [build guarantees](../../.github/BUILD.md),
 [release and recovery guide](../releasing.md), and

@@ -10,4 +10,4 @@
 ## 3. Documentation
 
 - [x] 3.1 Add the RC section to `docs/releasing.md` (cut, validate, promote; consumer Renovate behavior with its documentation link); update README image section and `.github/BUILD.md`. Check: `rg -n 'rc\.' docs/releasing.md README.md .github/BUILD.md`.
-- [ ] 3.2 Record the RC channel in ADR 0006. Check: `rg -n 'rc\.' docs/adr/0006-latest-follows-main.md`.
+- [x] 3.2 Record the RC channel in ADR 0006. Check: `rg -n 'rc\.' docs/adr/0006-latest-follows-main.md`.
