@@ -2070,16 +2070,24 @@ def _match_is_strong(finding, candidate):
             and values == (finding["source_gross"], finding["source_fee"], finding["source_currency"]))
 
 
-def _propose_strong_match(finding, twins):
-    """Return the strong proposal (rows labelled Keep/Duplicate/Differs) or None.
+def _propose_match(finding, twins):
+    """Return the proposal for one IBKR dividend: strong, weak or "none".
 
-    Keep goes to the equal row with a canonical comment, else the compared row, else
-    the lowest activity id; other equal rows are Duplicate, unequal rows Differs.
+    Strong: Keep goes to the equal row with a canonical comment, else the compared row,
+    else the lowest activity id; other equal rows are Duplicate, unequal rows Differs.
+    Weak (candidates exist, none strong: same security and local day, or inside the
+    proximity window; a quantity or one-unit gap lands here): every row is Differs, no
+    Keep, and the action asks for a manual comparison. None: no candidate at all.
     """
     candidates = _match_candidates(finding, twins)
+    if not candidates:
+        return {"confidence": "none", "rows": [], "action_activity_id": None, "manual_comparison": False}
     strong = [row for row in candidates if _match_is_strong(finding, row)]
     if not strong:
-        return None
+        for row in candidates:
+            row["label"] = "Differs"
+        return {"confidence": "weak", "rows": candidates,
+                "action_activity_id": candidates[0]["activity_id"], "manual_comparison": True}
     keep = min(strong, key=lambda row: (not row["canonical"], row["origin"] != "compared",
                                         str(row["activity_id"])))
     for row in candidates:
@@ -2087,7 +2095,8 @@ def _propose_strong_match(finding, twins):
     action = next((row for row in candidates if row["label"] == "Duplicate"),
                   next((row for row in candidates if row["label"] == "Differs"), None))
     return {"confidence": "strong", "rows": candidates,
-            "action_activity_id": action["activity_id"] if action else None}
+            "action_activity_id": action["activity_id"] if action else None,
+            "manual_comparison": False}
 
 
 def classify_dividend_findings(findings):
@@ -2181,9 +2190,7 @@ def classify_dividend_findings(findings):
             group["readable"]["related"] = [tid for twin in twins[id(group)] for tid in twin["activity_ids"]]
     for finding in findings:
         if finding["source"] is not None:
-            match = _propose_strong_match(finding, twins.get(id(finding), []))
-            if match:
-                finding["match"] = match
+            finding["match"] = _propose_match(finding, twins.get(id(finding), []))
     return findings
 
 
