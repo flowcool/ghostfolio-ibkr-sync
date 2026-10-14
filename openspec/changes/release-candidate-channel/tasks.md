@@ -5,7 +5,7 @@
 
 ## 2. Workflow
 
-- [ ] 2.1 Skip `latest` promotion explicitly for RC tags. Check: `rg -n 'rc' .github/workflows/release-image.yml` and a YAML parse of the file.
+- [x] 2.1 Skip `latest` promotion explicitly for RC tags. Check: `rg -n 'rc' .github/workflows/release-image.yml` and a YAML parse of the file.
 
 ## 3. Documentation
 
