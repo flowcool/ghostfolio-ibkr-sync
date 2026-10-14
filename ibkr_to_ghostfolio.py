@@ -1535,7 +1535,24 @@ def _historical_representations(candidates, components):
     return complete, None
 
 
-def historical_dividend_comparison(dividends, account_id, mapping, positions):
+def historical_dividend_report_window(xml_text):
+    """Use explicit, consistent statement bounds; never infer them from payments."""
+    windows = []
+    for statement in ET.fromstring(xml_text).iter("FlexStatement"):
+        bounds = [statement.get(key, "") for key in ("fromDate", "toDate")]
+        if any(len(value) != 8 or not value.isascii() or not value.isdigit() for value in bounds):
+            return None
+        try:
+            start, end = [datetime.strptime(value, "%Y%m%d").date().isoformat() for value in bounds]
+        except ValueError:
+            return None
+        if start > end:
+            return None
+        windows.append((start, end))
+    return windows[0] if windows and len(set(windows)) == 1 else None
+
+
+def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None):
     """Compare retained history conservatively, independently of import selection.
 
     A canonical comment proves group identity only with matching security/date.
@@ -1565,6 +1582,7 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
         findings.append(finding)
         if not candidates:
             finding["category"] = "absent"
+            finding["reason"] = "no canonical destination identity; weak matches cannot certify absence"
             continue
         claimed.update(item["index"] for item in candidates)
         if any(len(owners[item["activity"].get("id")]) != 1 for item in candidates):
@@ -1678,8 +1696,26 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions):
         finding["reason"] = "exact identity-proven representation comparison"
     for item in evidence:
         if item["index"] not in claimed:
+            row = item["activity"]
+            category = "uncertain"
+            reason = "destination outside proven source coverage"
+            try:
+                date = datetime.fromisoformat(row.get("date", "").replace("Z", "+00:00"))
+                utc_day = (date.date().isoformat() if date.tzinfo is not None
+                           and date.utcoffset().total_seconds() == 0 else None)
+            except (ValueError, TypeError, AttributeError):
+                utc_day = None
+            if utc_day and report_window and not report_window[0] <= utc_day <= report_window[1]:
+                category = "outside_window"
+                reason = "destination UTC date outside explicit report window; source evidence unavailable"
+            elif not item["active"]:
+                reason = "inactive destination outside proven source coverage"
+            elif not utc_day:
+                reason = "timezone or invalid destination date cannot prove source identity"
+            elif not (row.get("comment") or "").startswith("dividend#"):
+                reason = "legacy destination comment cannot prove source identity"
             findings.append({"source": None, "activity_ids": [item["activity"].get("id")],
-                             "category": "uncertain", "reason": "destination outside proven source coverage"})
+                             "category": category, "reason": reason})
     return findings
 
 
@@ -1692,8 +1728,10 @@ def log_historical_dividend_comparison(findings, account_id):
             log.info("[DRY RUN] Historical dividend detail: %s", finding)
         else:
             log.debug("[DRY RUN] Historical dividend detail: %s", finding)
-    log.info("[DRY RUN] Historical dividends account=%s coverage=%d categories=%s",
-             account_id, len(findings), dict(sorted(counts.items())))
+    log.info("[DRY RUN] Historical dividends account=%s coverage=%d source_groups=%d "
+             "unmatched_destination=%d categories=%s", account_id, len(findings),
+             sum(finding["source"] is not None for finding in findings),
+             sum(finding["source"] is None for finding in findings), dict(sorted(counts.items())))
 
 
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
@@ -1807,7 +1845,8 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
 
     # Establish identity and deduplicate before checking quantity or schema.
     if config.get("dry_run"):
-        findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions)
+        findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
+                                                 historical_dividend_report_window(xml_text))
         log_historical_dividend_comparison(findings, ghost_account_id)
     div_activities = []
     div_skipped_dup = 0

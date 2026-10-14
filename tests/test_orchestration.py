@@ -994,6 +994,24 @@ def test_historical_diagnostic_coherent_live_pipeline_unchanged(monkeypatch):
     assert w.cash_calls == [(ACC, 100.5)]
 
 
+def test_historical_diagnostic_report_window_and_unmatched_coverage(monkeypatch, caplog):
+    from test_dividend_diagnostics import destination, read
+    import logging
+    rows = [destination(), destination(id="older", comment="legacy dividend",
+                                      date="2025-07-15T00:00:00Z")]
+    ids, comments, pos = read(monkeypatch, rows)
+    xml = report(divs=div_xml()).replace("<FlexStatement>",
+        '<FlexStatement fromDate="20260701" toDate="20260731">')
+    monkeypatch.setattr(m, "fetch_flex_report", lambda *args: xml)
+    monkeypatch.setattr(m, "ghost_find_account_id", lambda *args: ACC)
+    for verb in ("post", "put", "patch", "delete"):
+        monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+    caplog.set_level(logging.INFO)
+    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
+    assert "outside_window" in caplog.text and "older" in caplog.text
+    assert "source_groups=1 unmatched_destination=1" in caplog.text
+
+
 @pytest.mark.parametrize("mode", ["schema", "quantity"])
 @pytest.mark.parametrize("existing", [True, False])
 def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monkeypatch, caplog, mode, existing):

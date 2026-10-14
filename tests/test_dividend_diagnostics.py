@@ -334,3 +334,65 @@ def test_representations_unsupported_currency_context_stays_uncertain(monkeypatc
     finding = representations(monkeypatch, [destination(currency="AAA")])[0]
     assert finding["category"] == "uncertain"
     assert finding["reason"] == "missing or unsupported currency context"
+
+
+@pytest.mark.parametrize("changes", [
+    {"comment": "legacy KO dividend"}, {"comment": "dividend#KO#2026-07-15"},
+    {"date": "2026-07-14T22:00:00Z"}, {"date": "2026-07-15T00:00:00+02:00"},
+    {"isDraft": True}, {"isExcluded": True},
+    {"assetProfile": {"symbol": "KO", "isin": ISIN_KO, "dataSource": "MANUAL"}},
+    {"assetProfile": {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO"}},
+])
+def test_evidence_weak_history_is_accounted_without_certification(monkeypatch, changes):
+    findings = comparison(monkeypatch, [destination(**changes)])
+    assert sum(finding["source"] is not None for finding in findings) == 1
+    assert any("dividend-1" in finding["activity_ids"] for finding in findings)
+    assert all(finding["category"] in ("absent", "uncertain") for finding in findings)
+    assert all("representations" not in finding for finding in findings)
+
+
+@pytest.mark.parametrize("mode", ["old", "missing", "empty", "conflict", "short"])
+def test_evidence_incomplete_source_quantity_is_uncertain(monkeypatch, mode):
+    from test_orchestration import structured_input_xml
+    finding = comparison(monkeypatch, [destination()], structured_input_xml(mode))[0]
+    assert finding["category"] == "uncertain"
+    assert "source quantity" in finding["reason"]
+
+
+@pytest.mark.parametrize("bounds,expected", [
+    ('fromDate="20260701" toDate="20260731"', ("2026-07-01", "2026-07-31")),
+    ("", None), ('fromDate="bad" toDate="20260731"', None),
+    ('fromDate="2026071" toDate="20260731"', None),
+    ('fromDate="20260701" toDate="2026073"', None),
+    ('fromDate="２０２６０７０１" toDate="20260731"', None),
+    ('fromDate="20260801" toDate="20260731"', None),
+])
+def test_evidence_window_requires_explicit_valid_bounds(bounds, expected):
+    xml = report().replace("<FlexStatement>", f"<FlexStatement {bounds}>")
+    assert m.historical_dividend_report_window(xml) == expected
+
+
+def test_evidence_conflicting_statement_windows_are_not_inferred():
+    xml = ('<R><FlexStatement fromDate="20260701" toDate="20260731"/>'
+           '<FlexStatement fromDate="20260801" toDate="20260831"/></R>')
+    assert m.historical_dividend_report_window(xml) is None
+
+
+@pytest.mark.parametrize("window,category", [(None, "uncertain"),
+    (("2026-07-01", "2026-07-31"), "outside_window")])
+def test_evidence_unmatched_older_history_and_empty_report(monkeypatch, window, category):
+    _, _, pos = read(monkeypatch, [destination(date="2025-07-15T00:00:00Z")])
+    findings = m.historical_dividend_comparison([], ACC, {}, pos, window)
+    assert len(findings) == 1
+    assert findings[0]["category"] == category
+    assert findings[0]["source"] is None and findings[0]["activity_ids"] == ["dividend-1"]
+
+
+def test_evidence_absent_destination_and_info_coverage(monkeypatch, caplog):
+    import logging
+    findings = comparison(monkeypatch, [])
+    assert len(findings) == 1 and findings[0]["category"] == "absent"
+    caplog.set_level(logging.INFO)
+    m.log_historical_dividend_comparison(findings, ACC)
+    assert "source_groups=1 unmatched_destination=0" in caplog.text
+    assert findings[0]["source"] in caplog.text and "no canonical destination identity" in caplog.text
