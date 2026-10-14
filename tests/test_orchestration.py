@@ -252,6 +252,20 @@ def test_invalid_trade_does_not_prevent_unrelated_valid_security_import(monkeypa
     assert w.pos["qty"][(ACC, "PEP")] == 10
 
 
+def test_unknown_trade_side_run_rejects_row_and_imports_valid_rows(monkeypatch, caplog):
+    xml = report(trade_xml("B1") + trade_xml("U1", "SELL (Ca.)", 4)
+                 + trade_xml("P1", symbol="PEP", isin=ISIN_PEP))
+    w = World(monkeypatch, xml)
+    _, ok = w.run()
+    assert ok is False
+    assert [a["comment"] for a in w.activities] == ["IBKR#B1", "IBKR#P1"]
+    assert w.ids == {"B1", "P1"}
+    # the rejected row never reaches the holdings gate: 10 bought, nothing subtracted
+    assert w.pos["qty"][(ACC, "KO")] == 10
+    assert any(r.levelname == "ERROR" and "Unknown buySell" in r.message and "U1" in r.message
+               for r in caplog.records)
+
+
 def test_valid_balanced_batch_still_imports_without_existing_holdings(monkeypatch):
     w = World(monkeypatch, report(trade_xml("B1") + trade_xml("S1", "SELL")))
     assert w.run()[1] is True
