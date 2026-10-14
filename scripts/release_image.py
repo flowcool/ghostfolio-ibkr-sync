@@ -26,6 +26,26 @@ def release_metadata(event):
     return tag, tag[1:]
 
 
+def stable_follows_release_candidate(tag, tag_commits, stable_commit):
+    """A stable vX.Y.Z must sit on the commit of its highest vX.Y.Z-rc.N, when one exists."""
+    if not STABLE_TAG.fullmatch(tag):
+        return
+    best = None
+    for name in tag_commits:
+        match = RC_TAG.fullmatch(name)
+        if match and name.startswith(tag + "-rc.") and (best is None or int(match.group(4)) > best[0]):
+            best = (int(match.group(4)), name)
+    if best and tag_commits[best[1]] != stable_commit:
+        raise RuntimeError(f"Stable tag {tag} must point to the commit of {best[1]}")
+
+
+def release_candidate_commits(tag):
+    """Map each vX.Y.Z-rc.* tag of a stable tag to its commit; the git wrapper for the pure check."""
+    names = subprocess.check_output(["git", "tag", "--list", tag + "-rc.*"], text=True, timeout=15).split()
+    return {name: subprocess.check_output(["git", "rev-parse", name + "^{commit}"], text=True,
+                                          timeout=15).strip() for name in names}
+
+
 def registry_version_absent(repository, tag, username, password):
     """Only an authenticated missing manifest or repository allows initial publication."""
     if not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository):
@@ -91,6 +111,8 @@ def main():
         tagged = subprocess.check_output(["git", "rev-parse", tag + "^{commit}"], text=True, timeout=15).strip()
         if head != tagged:
             raise RuntimeError("Release checkout does not match tag")
+        if STABLE_TAG.fullmatch(tag):
+            stable_follows_release_candidate(tag, release_candidate_commits(tag), tagged)
         print(f"Release {tag}: version={version}, commit={head}, ancestor of origin/main")
         if args.registry_login:
             phase = "registry login"
