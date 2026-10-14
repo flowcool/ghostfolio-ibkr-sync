@@ -2091,80 +2091,145 @@ def classify_dividend_findings(findings):
     return findings
 
 
-def _historical_money(values):
+def _plain(value):
+    """Plain decimal text: no Decimal(...), no exponent."""
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return format(Decimal(str(value)), "f")
+    return "unknown" if value is None else str(value)
+
+
+def _plain_signed(value):
+    text = _plain(value)
+    return text if text.startswith("-") or text == "unknown" else "+" + text
+
+
+def _plain_values(values):
     if "unavailable" in values:
         return f"values unavailable ({values['unavailable']})"
-    return (f"quantity={values['quantity']} gross={values['gross']} fee={values['fee']} "
-            f"currency={values['currency']}")
+    return (f"quantity {_plain(values['quantity'])}, gross {_plain(values['gross'])} {values['currency']}, "
+            f"fee {_plain(values['fee'])} {values['currency']}")
+
+
+def _plain_deltas(row):
+    quantities = ", ".join(_plain_signed(delta) for delta in row["quantity_deltas"])
+    return (f"quantity {quantities}, gross {_plain_signed(row['gross_delta'])}, "
+            f"fee {_plain_signed(row['fee_delta'])}")
+
+
+READABLE_ACTIONS = {
+    "quantity difference": "Compare the quantity in Ghostfolio with the IBKR statement; fix the activity by hand if IBKR is right.",
+    "minimal difference, cause unknown": "Check whether IBKR revised the amount after the import; the gap is one minor unit.",
+    "amount difference": "Compare the amounts with the IBKR statement; fix the activity by hand if IBKR is right.",
+    "repeated representation": "Compare each representation with the IBKR statement; delete by hand only the ones confirmed as duplicates.",
+    "probable duplicate": "Check whether this row repeats the IBKR dividend; delete it by hand if it does.",
+    "possibly missing in Ghostfolio": "Check whether the dividend is missing in Ghostfolio; add it by hand if it is.",
+    "uncertain": "Read the reason and compare both sides by hand.",
+}
+
+
+def _readable_action(readable):
+    if readable["class"] == "information":
+        return "No action needed."
+    if readable["class"] in ("coherent", "outside_window", "noise"):
+        return "No action needed."
+    return READABLE_ACTIONS.get(readable["label"], READABLE_ACTIONS["uncertain"])
 
 
 def format_historical_dividend_finding(finding, account_id):
-    """Render one finding as a private human-readable block (no repair, no selection)."""
-    lines = [f"[DRY RUN] Historical dividend finding account={account_id} category={finding['category']}"]
+    """Render one finding as plain English lines (no repair, no selection, nothing written)."""
+    readable = finding["readable"]
+    kind = {"to_check": "to check", "information": "information", "noise": "noise",
+            "coherent": "coherent", "outside_window": "outside report window"}[readable["class"]]
+    lines = [f"[DRY RUN] Dividend {kind}: {readable['label']} (account {account_id})"]
     if finding["source"] is not None:
         security = finding["security"]
-        lines.append(f"  source: {finding['source']} security={security['symbol']} "
-                     f"isin={security['isin']} source_date={finding['source_date']}")
+        lines.append(f"  Security: {security['symbol']} (ISIN {security['isin'] or 'unknown'}), "
+                     f"dividend date {finding['source_date']}, reference {finding['source']}")
         if "source_gross" in finding:
-            lines.append(f"  source values: quantity={finding['source_quantity']} "
-                         f"gross={finding['source_gross']} fee={finding['source_fee']} "
-                         f"currency={finding['source_currency']}")
+            lines.append(f"  IBKR: quantity {_plain(finding['source_quantity'])}, "
+                         f"gross {_plain(finding['source_gross'])} {finding['source_currency']}, "
+                         f"fee {_plain(finding['source_fee'])} {finding['source_currency']}")
+        else:
+            lines.append(f"  IBKR: {finding['source']}")
     else:
-        lines.append("  source: none (destination outside proven source coverage)")
-    lines.append(f"  reason: {finding['reason']}")
+        lines.append("  IBKR: no dividend of the report is tied to this Ghostfolio row")
+    for item in finding.get("destination", []):
+        lines.append(f"  Ghostfolio: activity {item['activity_id']} ({item['symbol']}) on "
+                     f"{item['utc_date']}, " + _plain_values(item["values"]))
     if "gross_delta" in finding:
-        lines.append(f"  deltas (destination - source): gross_delta={finding['gross_delta']} "
-                     f"fee_delta={finding['fee_delta']} quantity_deltas={finding['quantity_deltas']}")
+        lines.append("  Difference (Ghostfolio minus IBKR): " + _plain_deltas(finding))
+    elif len(finding.get("representations", [])) > 1:
+        for number, row in enumerate(finding["representations"], 1):
+            lines.append(f"  Difference of representation {number} (Ghostfolio minus IBKR): "
+                         + _plain_deltas(row))
+    lines.append(f"  Reason: {readable['reason'] or readable['label']}")
+    if readable["label"] == "probable duplicate":
+        lines.append("  This row looks like a duplicate: legacy comment, same security and same day as the "
+                     "IBKR dividend (activity " + ", ".join(map(str, readable["related"])) + ").")
+    elif readable["related"] and readable["class"] == "to_check" and finding["source"] is not None:
+        lines.append("  Probable duplicates: legacy-comment rows with the same security and day "
+                     "(activity " + ", ".join(map(str, readable["related"])) + ").")
     for check in finding.get("identity_checks", []):
         if check["status"] != "pass":
-            lines.append(f"  check {check['check']} {check['status']} activity={check['activity_id']} "
-                         f"expected={check['expected']} observed={check['observed']}"
+            observed = check["observed"]
+            if isinstance(observed, dict):
+                observed = (f"local date {_plain(observed.get('local'))} "
+                            f"(UTC date {_plain(observed.get('utc'))})")
+            lines.append(f"  Identity check {check['check']} {check['status']} for activity "
+                         f"{check['activity_id']}: expected {check['expected']}, found {observed}"
                          + (f" ({check['reason']})" if check.get("reason") else ""))
     context = finding.get("currency_context")
     if context:
-        lines.append(f"  currency context: source={context['source']} "
-                     f"destination={','.join(map(str, context['destination']))} "
-                     f"provenance={','.join(context['provenance'])}")
-    for item in finding.get("destination", []):
-        lines.append(f"  destination: id={item['activity_id']} security={item['symbol']} isin={item['isin']} "
-                     f"utc_date={item['utc_date']} local_date={item['local_date']} "
-                     + _historical_money(item["values"]))
-    carriers = finding.get("historical_comment")
-    if carriers is not None:
-        lines.append("  skipped by historical comment: import treats an existing dividend comment of this "
-                     "account (active or not) as the same payment; carriers do not certify identity")
-        for item in carriers:
-            lines.append(f"    carrier: id={item['activity_id']} active={item['active']} "
-                         f"comment={item['comment']} utc_date={item['utc_date']} "
-                         f"local_date={item['local_date']} " + _historical_money(item["values"]))
+        lines.append(f"  Currency: IBKR {context['source']}, Ghostfolio "
+                     f"{', '.join(map(str, context['destination']))} "
+                     f"(from {', '.join(context['provenance'])})")
+    for item in finding.get("historical_comment") or []:
+        lines.append(f"  Skipped by historical comment: activity {item['activity_id']} "
+                     f"(comment {item['comment']}, {item['utc_date']}), " + _plain_values(item["values"]))
     proximity = finding.get("proximity")
     if proximity:
-        lines.append(f"  skipped by proximity: import treats these as the same payment (same symbol within "
-                     f"{proximity['window_days']} days of {proximity['matched_date']}); weak candidates do "
-                     "not certify identity")
+        lines.append(f"  Skipped by proximity: same symbol within {proximity['window_days']} days of "
+                     f"{proximity['matched_date']}; weak candidates do not certify identity")
         for item in proximity["candidates"]:
-            lines.append(f"    weak candidate: id={item['activity_id']} active=True comment={item['comment']} "
-                         f"utc_date={item['utc_date']} local_date={item['local_date']} "
-                         + _historical_money(item["values"]))
+            lines.append(f"    Weak candidate: activity {item['activity_id']} (comment {item['comment']}, "
+                         f"{item['utc_date']}), " + _plain_values(item["values"]))
+    lines.append(f"  Action: {_readable_action(readable)}")
+    lines.append("  Nothing was written.")
     return "\n".join(lines)
 
 
 def log_historical_dividend_comparison(findings, account_id):
-    """Report private diagnostic evidence without changing outcomes or persistence."""
+    """Report private diagnostic evidence without changing outcomes or persistence.
+
+    Information blocks come first, then the summary line, then each item to check.
+    Coherent, outside-window and noise findings log at DEBUG only.
+    """
     counts = defaultdict(int)
+    classes = defaultdict(int)
     failed = defaultdict(int)
     unavailable = defaultdict(int)
+    to_check = []
     for finding in findings:
         counts[finding["category"]] += 1
+        classes[finding["readable"]["class"]] += 1
         for check in finding.get("identity_checks", []):
             if check["status"] == "fail":
                 failed[check["check"]] += 1
             elif check["status"] == "unavailable":
                 unavailable[check["check"]] += 1
-        if finding["category"] not in ("coherent_single", "coherent_components"):
+        klass = finding["readable"]["class"]
+        if klass == "to_check":
+            to_check.append(finding)
+        elif klass == "information":
             log.info("%s", format_historical_dividend_finding(finding, account_id))
         else:
             log.debug("%s", format_historical_dividend_finding(finding, account_id))
+    log.info("[DRY RUN] Dividend report: %d to check, %d informational, %d noise",
+             classes["to_check"], classes["information"], classes["noise"])
+    for finding in to_check:
+        log.info("%s", format_historical_dividend_finding(finding, account_id))
     log.info("[DRY RUN] Historical dividends account=%s coverage=%d source_groups=%d "
              "unmatched_destination=%d categories=%s failed_checks=%s unavailable_checks=%s",
              account_id, len(findings),
