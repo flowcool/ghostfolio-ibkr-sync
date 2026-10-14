@@ -8,7 +8,7 @@ Implementation starts only after operator review. Each task is a separate work i
 
 ## 2. Extended GetStatement window
 
-- [ ] 2.1 Implement the delta's "Extended statement polling and preserved guards": default sixty attempts at five seconds, unchanged Warn/1019 detection, overrides, timeout and other-error failures. Add late-success/default-exhaustion coverage in `tests/test_orchestration.py` with patched sleeps; complete README's "Retry guidance" with the 300-second polling window and no ENV change. Files: `ibkr_to_ghostfolio.py`, `tests/test_orchestration.py`, `README.md`. Verify `.venv/bin/python -m pytest -v tests/test_orchestration.py tests/test_parsing.py -k 'flex_fetch or fetch_flex_report or flex_transient or ibkr_get'` (late success, sixty-request exhaustion and existing guards pass) and `rg -n -A 22 'Flex retry policy' README.md` (both budgets and exhaustion behavior visible).
+- [x] 2.1 Implement the delta's "Extended statement polling and preserved guards": default sixty attempts at five seconds, unchanged Warn/1019 detection, overrides, timeout and other-error failures. Add late-success/default-exhaustion coverage in `tests/test_orchestration.py` with patched sleeps; complete README's "Retry guidance" with the 300-second polling window and no ENV change. Files: `ibkr_to_ghostfolio.py`, `tests/test_orchestration.py`, `README.md`. Verify `.venv/bin/python -m pytest -v tests/test_orchestration.py tests/test_parsing.py -k 'flex_fetch or fetch_flex_report or flex_transient or ibkr_get'` (late success, sixty-request exhaustion and existing guards pass) and `rg -n -A 22 'Flex retry policy' README.md` (both budgets and exhaustion behavior visible).
 
 ## 3. Stable release
 

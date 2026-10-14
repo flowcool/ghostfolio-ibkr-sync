@@ -512,6 +512,19 @@ def test_flex_fetch_gives_up_after_max_retries(monkeypatch):
     assert len(urls) == 4 and len(sleeps) == 3
 
 
+def test_flex_fetch_default_polling_recovers_after_more_than_ten_pending_responses(monkeypatch):
+    urls, sleeps = script_flex(monkeypatch, SEND_OK, *[WARN] * 11, READY)
+    assert m.fetch_flex_report("TOK", "1") == READY
+    assert len(urls) == 13 and sleeps == [5] * 11
+
+
+def test_flex_transient_polling_default_exhausts_after_sixty_pending_responses(monkeypatch):
+    urls, sleeps = script_flex(monkeypatch, SEND_OK, *[WARN] * 60)
+    with pytest.raises(RuntimeError, match="Timed out"):
+        m.fetch_flex_report("TOK", "1")
+    assert len(urls) == 61 and sleeps == [5] * 60 and sum(sleeps) == 300
+
+
 def test_flex_fetch_send_request_failure_is_reported(monkeypatch):
     script_flex(monkeypatch, "<R><Status>Fail</Status><ErrorMessage>Invalid token</ErrorMessage></R>")
     with pytest.raises(RuntimeError, match="SendRequest failed: Invalid token"):

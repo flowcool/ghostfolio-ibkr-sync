@@ -288,7 +288,7 @@ def _redact(text, secret):
     return text
 
 
-def fetch_flex_report(token, query_id, max_retries=10, retry_delay=5):
+def fetch_flex_report(token, query_id, max_retries=60, retry_delay=5):
     """Fetch a Flex Query report from IBKR (two-step process)."""
     log.debug("Requesting Flex Query %s from IBKR...", query_id)
 
