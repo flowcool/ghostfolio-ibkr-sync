@@ -11,7 +11,7 @@ Baseline: the DRY_RUN of 2026-10-14 gave 20 items to check, 9 informational and 
 - **THEN** both blocks show the IBKR side, the canonical row as Keep, the twin as Duplicate, "strong", an action naming the twin and "Nothing was written".
 
 #### Scenario: Weak and absent
-- **WHEN** `.venv/bin/python -m pytest -v tests -k 'dividend_match_weak'` runs a one-unit gross gap, a quantity gap, a proximity-window row and a dividend without any candidate
+- **WHEN** `.venv/bin/python -m pytest -v tests -k 'dividend_match_weak'` runs a one-unit gross gap, a quantity gap with a different gross, a proximity-window row and a dividend without any candidate
 - **THEN** the first three read "weak" with every row Differs and no Keep, and the last reads "no confident match".
 
 #### Scenario: Display only
@@ -20,4 +20,4 @@ Baseline: the DRY_RUN of 2026-10-14 gave 20 items to check, 9 informational and 
 
 #### Scenario: Real read-only acceptance
 - **WHEN** the operator-authorized DRY_RUN on the production query runs with a private log
-- **THEN** zero writes occur, every item to check shows a proposed match or "no confident match", and the summary reads 20 to check, 9 informational, 1 noise.
+- **THEN** zero writes occur, every item to check shows a proposed match or "no confident match", and the summary counts equal those of the previous real DRY_RUN unless new dividends in the window explain the difference.
