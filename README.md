@@ -578,7 +578,7 @@ python3 -m venv .venv
 
 CI runs tests, an audit of the complete Python CI environment and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; use synthetic fixtures and mocked HTTP for regression checks. See [Contributing](CONTRIBUTING.md) for review and reporting guidance.
 
-Every runtime dependency is pinned. A daily workflow ([`dependency-release-watch.yml`](.github/workflows/dependency-release-watch.yml)) opens one `dependency-release` issue per new stable release of a pin (`requirements.txt` from PyPI, supercronic from GitHub): read the release notes, bump the pin in a PR if needed, then close the issue. Dependabot waits 14 days before proposing a pip update, except for security fixes.
+Every runtime dependency is pinned. Renovate proposes ordinary Python, GitHub Actions and image updates; Dependabot handles security update PRs. The daily [dependency release watch](.github/workflows/dependency-release-watch.yml) opens one `dependency-release` issue per new stable Supercronic release. Adoption requires updating the version and both architecture checksums together in a reviewed PR. Python packages do not produce release notices. The separate [Ghostfolio release watch](.github/workflows/upstream-release-watch.yml) opens compatibility notices. Both watches deduplicate against open and closed issues. See the [upstream inventory](docs/upstreams.md) for pins and monitoring paths.
 
 ## Credits and license
 
