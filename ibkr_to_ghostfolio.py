@@ -148,7 +148,6 @@ def load_config():
         "ghost_token": ghost_token,
         "ghost_access_token": access_token,
         "ghost_host": ghost_host,
-        "ghost_currency": os.environ.get("GHOST_CURRENCY", "USD"),
         "ghost_platform_id": os.environ.get("GHOST_PLATFORM_ID", ""),
         "mapping_file": os.environ.get("MAPPING_FILE", "mapping.yaml"),
         "dry_run": dry_run_requested(),

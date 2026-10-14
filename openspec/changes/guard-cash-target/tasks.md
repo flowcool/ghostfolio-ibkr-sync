@@ -1,6 +1,6 @@
 ## 1. Remove the unused setting
 
-- [ ] 1.1 Remove `GHOST_CURRENCY` from `load_config`, README and its test. Check: `.venv/bin/python -m pytest -q tests -k 'load_config'`.
+- [x] 1.1 Remove `GHOST_CURRENCY` from `load_config`, README and its test. Check: `.venv/bin/python -m pytest -q tests -k 'load_config'`.
 
 ## 2. Duplicate target
 

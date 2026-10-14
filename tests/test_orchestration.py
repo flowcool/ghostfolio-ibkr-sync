@@ -323,7 +323,7 @@ def env(monkeypatch):
     for k, v in {"IBKR_TOKEN": "tok", "IBKR_ACCOUNT_IDS": "U1,U2", "IBKR_QUERY_IDS": "q1,q2",
                  "GHOST_TOKEN": "g", "GHOST_HOST": "http://ghost:3333/", "MAPPING_FILE": ""}.items():
         monkeypatch.setenv(k, v)
-    for k in ("GHOST_ACCOUNT_NAMES", "DRY_RUN", "GHOST_CURRENCY", "GHOST_PLATFORM_ID",
+    for k in ("GHOST_ACCOUNT_NAMES", "DRY_RUN", "GHOST_PLATFORM_ID",
               "GHOST_ACCESS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     return monkeypatch
@@ -425,7 +425,7 @@ def test_load_config_defaults_and_normalisation(env):
     cfg = m.load_config()
     assert cfg["account_ids"] == ["U1", "U2"] and cfg["query_ids"] == ["q1", "q2"]
     assert cfg["ghost_host"] == "http://ghost:3333"                  # trailing slash stripped
-    assert (cfg["ghost_currency"], cfg["account_names"], cfg["dry_run"]) == ("USD", [], False)
+    assert (cfg["account_names"], cfg["dry_run"]) == ([], False)
 
 
 def test_load_config_missing_variables_are_all_named(env):
