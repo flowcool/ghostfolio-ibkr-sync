@@ -980,6 +980,28 @@ def summary_of(findings):
             sorted(f["readable"]["class"] for f in findings))
 
 
+def test_dividend_match_identity_failed_row_is_differs_and_weak(monkeypatch):
+    for change in ({"isDraft": True}, {"isExcluded": True},
+                   {"assetProfile": {"symbol": "KO", "isin": "US0000000000", "dataSource": "YAHOO",
+                                     "currency": "USD"}}):
+        match = match_of(readable(monkeypatch, [destination(**change)]))
+        assert match["confidence"] == "weak" and match["manual_comparison"] is True
+        assert [(row["activity_id"], row["label"]) for row in match["rows"]] == [("dividend-1", "Differs")]
+
+
+def test_dividend_match_identity_unavailable_isin_stays_keep(monkeypatch):
+    profile = {"symbol": "KO", "dataSource": "YAHOO", "currency": "USD"}
+    match = match_of(readable(monkeypatch, [destination(assetProfile=profile)]))
+    assert match["confidence"] == "strong"
+    assert [(row["activity_id"], row["label"]) for row in match["rows"]] == [("dividend-1", "Keep")]
+
+
+def test_dividend_match_identity_failed_row_leaves_categories_unchanged(monkeypatch):
+    findings = readable(monkeypatch, [destination(isDraft=True)])
+    assert findings[0]["category"] == "uncertain"
+    assert findings[0]["reason"] == "inactive, unsupported or conflicting security/date identity"
+
+
 def test_dividend_match_unchanged_strong_block_on_both_sides(monkeypatch, caplog):
     twin = destination(id="dividend-2", comment="legacy KO dividend")
     findings = readable(monkeypatch, [destination(), twin])

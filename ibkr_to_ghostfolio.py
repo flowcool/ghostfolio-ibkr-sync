@@ -2049,6 +2049,9 @@ def _match_candidates(finding, twins):
         listed = finding.get(key)
         listed = listed["candidates"] if isinstance(listed, dict) else listed or []
         rows += [(item, origin, item.get("comment") == finding["source"]) for item in listed]
+    # Only "fail" blocks; "unavailable" (legacy rows without ISIN) stays eligible.
+    failed = {check["activity_id"] for check in finding.get("identity_checks", [])
+              if check["status"] == "fail"}
     seen = set()
     candidates = []
     for item, origin, canonical in rows:
@@ -2056,6 +2059,7 @@ def _match_candidates(finding, twins):
             continue
         seen.add(item["activity_id"])
         candidates.append({"activity_id": item["activity_id"], "origin": origin, "canonical": canonical,
+                           "identity_failed": item["activity_id"] in failed or item.get("active") is False,
                            "symbol": item["symbol"], "local_date": item["local_date"],
                            "utc_date": item["utc_date"], "values": item["values"]})
     return candidates
@@ -2078,11 +2082,14 @@ def _propose_match(finding, twins):
     Weak (candidates exist, none strong: same security and local day, or inside the
     proximity window; a quantity or one-unit gap lands here): every row is Differs, no
     Keep, and the action asks for a manual comparison. None: no candidate at all.
+    A row failing an identity check (inactive, or a "fail" check; "unavailable" does not
+    count) is always Differs and never makes a proposal strong.
     """
     candidates = _match_candidates(finding, twins)
     if not candidates:
         return {"confidence": "none", "rows": [], "action_activity_id": None, "manual_comparison": False}
-    strong = [row for row in candidates if _match_is_strong(finding, row)]
+    strong = [row for row in candidates
+              if not row["identity_failed"] and _match_is_strong(finding, row)]
     if not strong:
         for row in candidates:
             row["label"] = "Differs"
