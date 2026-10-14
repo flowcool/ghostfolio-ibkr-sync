@@ -519,7 +519,7 @@ def test_historical_diagnostic_actionable_proximity_skip_is_explained_not_certif
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison(findings, ACC)
     assert "skipped by proximity" in caplog.text
-    assert "weak candidate: id=dividend-1 comment=legacy KO dividend utc_date=2026-07-17" in caplog.text
+    assert "weak candidate: id=dividend-1 active=True comment=legacy KO dividend utc_date=2026-07-17" in caplog.text
     assert "quantity=100 gross=25.00" in caplog.text
 
 
@@ -570,3 +570,81 @@ def test_historical_diagnostic_actionable_destination_before_duplicate_identity_
     assert finding["reason"] == "duplicate destination activity identity"
     assert [item["activity_id"] for item in finding["destination"]] == ["dup", "dup"]
     assert all(item["utc_date"] == "2026-07-15" for item in finding["destination"])
+
+
+def skip_cause(monkeypatch, rows, xml=None):
+    _, comments, positions = read(monkeypatch, rows)
+    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
+    return m.historical_dividend_comparison(source, ACC, {}, positions, None, comments)[0]
+
+
+def test_historical_diagnostic_skip_cause_old_symbol_comment_beats_proximity(monkeypatch, caplog):
+    import logging
+    carrier = destination(id="old", comment="dividend#KO#2026-07-15", date="2026-07-17T00:00:00Z")
+    finding = skip_cause(monkeypatch, [carrier])
+    assert finding["category"] == "absent" and "proximity" not in finding
+    assert "skipped by historical comment" in finding["reason"]
+    assert [(item["activity_id"], item["active"]) for item in finding["historical_comment"]] == [("old", True)]
+    caplog.set_level(logging.INFO)
+    m.log_historical_dividend_comparison([finding], ACC)
+    assert "skipped by historical comment" in caplog.text and "carrier: id=old active=True" in caplog.text
+    assert "skipped by proximity" not in caplog.text
+    assert "quantity=100 gross=25.00" in caplog.text
+
+
+def test_historical_diagnostic_skip_cause_inactive_carrier(monkeypatch):
+    carrier = destination(id="old", comment="dividend#KO#2026-07-15", date="2026-07-17T00:00:00Z",
+                          isDraft=True)
+    finding = skip_cause(monkeypatch, [carrier])
+    assert finding["category"] == "absent"
+    assert "skipped by historical comment" in finding["reason"]
+    assert [(item["activity_id"], item["active"]) for item in finding["historical_comment"]] == [("old", False)]
+
+
+def test_historical_diagnostic_skip_cause_proximity_only(monkeypatch):
+    finding = skip_cause(monkeypatch, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
+    assert finding["category"] == "absent" and "historical_comment" not in finding
+    assert "skipped by proximity" in finding["reason"]
+
+
+def test_historical_diagnostic_skip_cause_other_account_comment_ignored(monkeypatch):
+    carrier = destination(comment="dividend#KO#2026-07-15", accountId="other-account",
+                          date="2026-07-25T00:00:00Z")
+    finding = skip_cause(monkeypatch, [carrier])
+    assert "historical_comment" not in finding and "proximity" not in finding
+
+
+def currency_finding(monkeypatch, rows, xml=None):
+    return comparison(monkeypatch, rows, xml)[0]
+
+
+def test_historical_diagnostic_skip_cause_unsupported_destination_currency(monkeypatch):
+    finding = currency_finding(monkeypatch, [destination(currency="KRW")])
+    assert finding["category"] == "uncertain"
+    assert finding["reason"] == "missing or unsupported currency context"
+    assert finding["currency_context"] == {"source": "USD", "destination": ["KRW"], "provenance": ["activity"]}
+    assert "currency context: source=USD destination=KRW provenance=activity" in \
+        m.format_historical_dividend_finding(finding, ACC)
+
+
+def test_historical_diagnostic_skip_cause_missing_destination_currency(monkeypatch):
+    row = destination()
+    del row["currency"]
+    del row["assetProfile"]["currency"]
+    finding = currency_finding(monkeypatch, [row])
+    assert finding["reason"] == "missing or unsupported currency context"
+    assert finding["currency_context"]["destination"] == [None]
+
+
+def test_historical_diagnostic_skip_cause_conflicting_currency(monkeypatch):
+    finding = currency_finding(monkeypatch, [destination(currency="EUR")])
+    assert finding["reason"] == "missing, conflicting or unsupported source money evidence"
+    assert finding["currency_context"] == {"source": "USD", "destination": ["EUR"], "provenance": ["activity"]}
+
+
+def test_historical_diagnostic_skip_cause_unsupported_source_currency(monkeypatch):
+    finding = currency_finding(monkeypatch, [destination(currency="KRW")],
+                               xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))
+    assert finding["category"] == "uncertain"
+    assert finding["currency_context"]["source"] == "KRW"
+    assert "currency context: source=KRW destination=KRW" in m.format_historical_dividend_finding(finding, ACC)

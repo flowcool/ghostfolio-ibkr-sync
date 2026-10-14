@@ -410,7 +410,9 @@ It never reconstructs exact evidence from floats. Activity currency determines
 the denomination; only an explicit null permits profile currency fallback, with
 its provenance retained. Supported denominations are USD, EUR, GBP, CHF, JPY,
 CAD, AUD, NZD, HKD, SGD, SEK, NOK, DKK, PLN, CZK, HUF, ILS, ZAR and the existing
-GBp, ZAc and ILA minor units. Missing or unsupported context stays uncertain.
+GBp, ZAc and ILA minor units. Missing or unsupported context stays uncertain;
+the log then shows the observed source and destination currency and provenance
+on a `currency context:` line, whatever the supported list says.
 Gross and fee differences use destination minus source, without a tolerance.
 Every nonzero exact delta remains visible, including differences smaller than
 float precision. Source fee is the positive part of the negative net cash
@@ -431,8 +433,10 @@ active, activity-ID, data-source, symbol, local-date and ISIN checks with
 expected and observed values. INFO counts failed checks and shows anomaly
 blocks with securities, source and destination UTC/local dates, activity IDs,
 quantity, gross, fee and currency. An `absent` group suppressed by deduplication
-shows `skipped by proximity` and nearby candidate values; it remains absent
-and does not certify identity. Outside-window records also show their security,
+shows the skip path that import selection takes: `skipped by historical comment`
+when the account has an old `dividend#<symbol>#<date>` comment (active or not),
+else `skipped by proximity`. Each shows candidate values and active status; the
+group remains absent and neither label certifies identity. Outside-window records also show their security,
 date and values.
 The summary counts source payment groups and unmatched destination dividends
 separately. Every unmatched target-account dividend remains visible. A UTC date
