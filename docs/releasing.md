@@ -80,6 +80,61 @@ release advances `:latest`. Check that the release notes show the head text and
 generated list. Fill in "Published artifacts" with the workflow link, version
 and verified manifest digest from its `release-manifest` artifact.
 
+## Release candidate (optional)
+
+A release candidate (RC) lets a maintainer validate an image before the stable
+tag exists. Use it for risky changes; normal patch releases may skip it.
+
+Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
+
+1. **Cut.** Tag a commit on main and publish a GitHub prerelease. The notes come
+   from `.github/release.yml`, as for a stable release.
+
+   ```bash
+   git tag -a vX.Y.Z-rc.N <merge-sha> -m "vX.Y.Z-rc.N"
+   git push origin vX.Y.Z-rc.N
+   gh release create vX.Y.Z-rc.N --verify-tag --prerelease \
+     --title "vX.Y.Z-rc.N" --generate-notes
+   ```
+
+   `release-image.yml` runs the same checks and the same single-publication
+   guard as for stable, and publishes only `:X.Y.Z-rc.N`.
+2. **Validate.** Validation in production is a separate operator-validated
+   operation. This guide does not describe it. A fix creates a new RC
+   (`N + 1`); never replace a published RC tag.
+3. **Promote.** Tag stable `vX.Y.Z` on the same commit as the highest RC, then
+   follow [Publish](#publish). Pass `--notes-start-tag <previous stable>` to
+   `gh release create` so the generated notes cover the whole version, not only
+   the changes since the last RC.
+
+   ```bash
+   gh release create vX.Y.Z --verify-tag --latest --notes-start-tag <previous-stable-tag> \
+     --title "vX.Y.Z — <short summary>" --notes-file head.md --generate-notes
+   ```
+
+What the workflow refuses:
+
+- Any prerelease tag that is not an exact `vX.Y.Z-rc.N` (for example `-beta.1`,
+  `-rc.0`, `-rc.01`), a stable tag flagged prerelease, drafts and tag pushes.
+- A stable `vX.Y.Z` when a `vX.Y.Z-rc.N` tag exists and the stable tag is not on
+  the commit of the highest `N`. The error names both tags. With no RC, stable
+  publication is unchanged.
+
+An RC never creates or moves `:latest`, `:X.Y.Z` or `:X.Y`. The workflow skips
+`latest` promotion for RC tags.
+
+### Consumer Renovate
+
+A consumer pinned to `X.Y.Z` is not expected to be offered `X.Y.Z-rc.N`. The
+[Renovate docker versioning documentation](https://docs.renovatebot.com/modules/versioning/docker/)
+states: "Renovate treats the text after the first hyphen as a type of
+platform/compatibility indicator", and gives the example that users on
+`-alpine` do not want updates to `12.16.0` or `12.16.0-stretch`. So `-rc.N` is a
+suffix that marks a separate compatibility track. The page does not mention
+prereleases or `-rc.` tags, and does not say explicitly that a plain `X.Y.Z` is
+not offered a suffixed variant. This is an inference from the suffix rule;
+consumers who need certainty should check their Renovate dry-run output.
+
 ## Recover a failed latest promotion
 
 A version may exist even when its `latest` promotion failed. A workflow rerun

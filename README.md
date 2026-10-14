@@ -89,6 +89,10 @@ identify the installed artifact before upgrading. Select a full version for
 controlled upgrades or pin its digest for exact artifact selection. Container
 tags remain mutable outside the workflow's overwrite guards.
 
+A `vX.Y.Z-rc.N` release candidate tag may also exist. It is a maintainer
+validation step, not for normal use: it never moves `:latest` or `:X.Y.Z`. See
+[the release candidate steps](docs/releasing.md#release-candidate-optional).
+
 To roll back, select the saved digest and recreate the connector with the same
 ENV and mounts. This does not restore financial records or undo cash updates.
 Image publication does not deploy or recreate a container. A failed `latest`
