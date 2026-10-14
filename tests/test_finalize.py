@@ -348,3 +348,17 @@ def test_historical_diagnostic_preflight_raw_dry_run_stays_silent(env):
     sent = spy_send(env)
     accounts(env, ALL_OK)
     assert m.main() == 0 and sent == []
+
+
+def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, caplog):
+    from test_dividend_diagnostics import destination, read
+    from test_orchestration import World, report, div_xml
+    import logging
+    env.setenv("DRY_RUN", "1")
+    ids, comments, pos = read(env, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
+    World(env, report(divs=div_xml()))
+    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
+    sent = spy_send(env)
+    caplog.set_level(logging.INFO)
+    assert m.main() == 0 and sent == []
+    assert "skipped by proximity" in caplog.text and "failed_checks=" in caplog.text

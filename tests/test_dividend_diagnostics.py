@@ -479,3 +479,94 @@ def test_historical_diagnostic_identity_invalid_tz_makes_date_unavailable(monkey
     assert date["status"] == "unavailable" and date["reason"] == f"{reason}; forced preview"
     assert date["observed"] == {"utc": "2026-07-15", "local": None}
     assert not any(check["status"] == "fail" for check in finding["identity_checks"])
+
+
+def test_historical_diagnostic_actionable_anomaly_block_and_failed_check_counts(monkeypatch, caplog):
+    import logging
+    profile = {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO", "currency": "USD"}
+    findings = comparison(monkeypatch, [destination(date="2026-07-16T00:00:00Z", assetProfile=profile)])
+    caplog.set_level(logging.INFO)
+    m.log_historical_dividend_comparison(findings, ACC)
+    text = caplog.text
+    assert "category=uncertain" in text and f"security=KO isin={ISIN_KO} source_date=2026-07-15" in text
+    assert "check symbol fail activity=dividend-1 expected=KO observed=PEP" in text
+    assert "check date fail" in text and "'utc': '2026-07-16'" in text
+    assert "destination: id=dividend-1 security=PEP" in text and "utc_date=2026-07-16" in text
+    assert "quantity=100 gross=25.00 fee=0 currency=USD" in text
+    assert "failed_checks={'date': 1, 'symbol': 1}" in text
+
+
+def test_historical_diagnostic_actionable_outside_window_shows_destination_values(monkeypatch, caplog):
+    import logging
+    _, _, pos = read(monkeypatch, [destination(date="2025-07-15T00:00:00Z")])
+    findings = m.historical_dividend_comparison([], ACC, {}, pos, ("2026-07-01", "2026-07-31"))
+    caplog.set_level(logging.INFO)
+    m.log_historical_dividend_comparison(findings, ACC)
+    assert "category=outside_window" in caplog.text
+    assert "destination: id=dividend-1 security=KO" in caplog.text
+    assert "utc_date=2025-07-15" in caplog.text and "quantity=100 gross=25.00" in caplog.text
+    assert findings[0]["source"] is None
+
+
+def test_historical_diagnostic_actionable_proximity_skip_is_explained_not_certified(monkeypatch, caplog):
+    import logging
+    weak = destination(comment="legacy KO dividend", date="2026-07-17T00:00:00Z")
+    findings = comparison(monkeypatch, [weak])
+    absent = findings[0]
+    assert absent["category"] == "absent" and "representations" not in absent
+    assert absent["proximity"]["matched_date"] == "2026-07-17"
+    assert [item["activity_id"] for item in absent["proximity"]["candidates"]] == ["dividend-1"]
+    caplog.set_level(logging.INFO)
+    m.log_historical_dividend_comparison(findings, ACC)
+    assert "skipped by proximity" in caplog.text
+    assert "weak candidate: id=dividend-1 comment=legacy KO dividend utc_date=2026-07-17" in caplog.text
+    assert "quantity=100 gross=25.00" in caplog.text
+
+
+def test_historical_diagnostic_actionable_no_proximity_note_beyond_window(monkeypatch):
+    far = destination(comment="legacy", date="2026-07-25T00:00:00Z")
+    absent = comparison(monkeypatch, [far])[0]
+    assert absent["category"] == "absent" and "proximity" not in absent
+    assert "skipped by proximity" not in absent["reason"]
+
+
+def test_historical_diagnostic_actionable_levels_and_privacy(monkeypatch, caplog):
+    import logging
+    coherent = comparison(monkeypatch, [destination()])
+    caplog.set_level(logging.INFO)
+    m.log_historical_dividend_comparison(coherent, ACC)
+    assert "Historical dividend finding" not in caplog.text  # coherent detail is DEBUG only
+    assert "failed_checks={}" in caplog.text
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    m.log_historical_dividend_comparison(coherent, ACC)
+    assert "category=coherent_single" in caplog.text
+    assert CFG["ghost_host"] not in caplog.text
+
+
+def test_historical_diagnostic_actionable_proximity_lists_every_weak_candidate_with_local_date(monkeypatch):
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    rows = [destination(id="near-1", comment="legacy", date="2026-07-16T22:00:00Z"),
+            destination(id="near-2", comment="legacy", date="2026-07-18T00:00:00Z"),
+            destination(id="far", comment="legacy", date="2026-07-25T00:00:00Z")]
+    proximity = comparison(monkeypatch, rows)[0]["proximity"]
+    assert [item["activity_id"] for item in proximity["candidates"]] == ["near-1", "near-2"]
+    assert proximity["candidates"][0]["utc_date"] == "2026-07-16"
+    assert proximity["candidates"][0]["local_date"] == "2026-07-17"
+
+
+def test_historical_diagnostic_actionable_source_values_survive_failed_identity(monkeypatch):
+    profile = {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO", "currency": "USD"}
+    finding = comparison(monkeypatch, [destination(assetProfile=profile)])[0]
+    assert finding["category"] == "uncertain"
+    assert (finding["source_quantity"], finding["source_gross"], finding["source_fee"],
+            finding["source_currency"]) == (Decimal(100), Decimal("25.00"), Decimal(0), "USD")
+    text = m.format_historical_dividend_finding(finding, ACC)
+    assert "source values: quantity=100 gross=25.00 fee=0 currency=USD" in text
+
+
+def test_historical_diagnostic_actionable_destination_before_duplicate_identity_early_return(monkeypatch):
+    finding = comparison(monkeypatch, [destination(id="dup"), destination(id="dup")])[0]
+    assert finding["reason"] == "duplicate destination activity identity"
+    assert [item["activity_id"] for item in finding["destination"]] == ["dup", "dup"]
+    assert all(item["utc_date"] == "2026-07-15" for item in finding["destination"])
