@@ -43,9 +43,10 @@ def div_xml(amount="25.00", date="20260715", isin=ISIN_KO, symbol="KO"):
             f'isin="{isin}" symbol="{symbol}" currency="USD" description="X CASH DIVIDEND USD 0.25 PER SHARE"/>')
 
 
-def report(trades="", divs="", cash="100.5", cash_section=True):
+def report(trades="", divs="", cash="100.5", cash_section=True, base_currency="USD"):
     cash_xml = (f'<CashReport><CashReportCurrency currency="BASE_SUMMARY" endingCash="{cash}"/></CashReport>'
                 if cash is not None else "")
+    info = f'<AccountInformation accountId="broker-account" currency="{base_currency}"/>' if base_currency else ""
     ct = f"<CashTransactions>{divs}</CashTransactions>" if cash_section else ""
     # Enrich existing fixtures; input compatibility scenarios belong to task 2.1.
     accruals = []
@@ -57,7 +58,7 @@ def report(trades="", divs="", cash="100.5", cash_section=True):
                      date=row.get("dateTime", "")[:8], reportDate=row.get("dateTime", "")[:8])
         accruals.append(ET.tostring(ET.Element("ChangeInDividendAccrual", attrs), encoding="unicode"))
     evidence = "<ChangeInDividendAccruals>" + "".join(accruals) + "</ChangeInDividendAccruals>"
-    return (f"<FlexQueryResponse><FlexStatements><FlexStatement><Trades>{trades}</Trades>{ct}{cash_xml}{evidence}"
+    return (f"<FlexQueryResponse><FlexStatements><FlexStatement>{info}<Trades>{trades}</Trades>{ct}{cash_xml}{evidence}"
             f"</FlexStatement></FlexStatements></FlexQueryResponse>")
 
 
