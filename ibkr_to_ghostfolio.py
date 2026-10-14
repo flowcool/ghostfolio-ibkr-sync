@@ -1528,8 +1528,8 @@ def _historical_currency(currency):
     return None
 
 
-def _historical_values(evidence):
-    """Read quantity/gross/fee only from original JSON, with currency provenance."""
+def _historical_destination_currency(evidence):
+    """Observed destination currency value and where it was read from."""
     row = evidence["activity"]
     profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
     currency = row.get("currency")
@@ -1537,6 +1537,21 @@ def _historical_values(evidence):
     if "currency" in row and currency is None:
         currency = profile.get("currency")
         provenance = "assetProfile" if "assetProfile" in row else "SymbolProfile"
+    return currency, provenance
+
+
+def _historical_currency_context(dividend, candidates):
+    """Observed source and destination currency values for a currency-blocked finding."""
+    observed = [_historical_destination_currency(item) for item in candidates]
+    return {"source": dividend.get("currency"),
+            "destination": [currency for currency, _ in observed],
+            "provenance": [provenance for _, provenance in observed]}
+
+
+def _historical_values(evidence):
+    """Read quantity/gross/fee only from original JSON, with currency provenance."""
+    currency, provenance = _historical_destination_currency(evidence)
+    row = evidence["activity"]
     unit = _historical_currency(currency) if isinstance(currency, str) else None
     if unit is None:
         return None, "missing or unsupported currency context"
@@ -1715,12 +1730,14 @@ def _historical_proximity(positions, account_id, evidence, symbol, dividend):
     return {"matched_date": matched, "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates}
 
 
-def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None):
+def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None,
+                                   existing_dividend_comments=()):
     """Compare retained history conservatively, independently of import selection.
 
     A canonical comment proves group identity only with matching security/date.
     It cannot partition several activities into ordinary/bonus or PIL components.
     Never use matching amounts to manufacture that missing component identity.
+    existing_dividend_comments is the unmutated set import selection reads.
     """
     findings = []
     evidence = [item for item in positions.get("dividend_evidence", [])
@@ -1749,6 +1766,15 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         if not candidates:
             finding["category"] = "absent"
             finding["reason"] = "no canonical destination identity; weak matches cannot certify absence"
+            # Same predicate and order as import selection: comment first, then proximity.
+            comments = {reference, f"dividend#{symbol}#{dividend['date']}"}
+            if any((account_id, comment) in existing_dividend_comments for comment in comments):
+                finding["historical_comment"] = [
+                    {**_historical_destination(item), "comment": item["activity"].get("comment"),
+                     "active": item["active"]}
+                    for item in evidence if item["activity"].get("comment") in comments]
+                finding["reason"] += "; skipped by historical comment (non-certifying)"
+                continue
             proximity = _historical_proximity(positions, account_id, evidence, symbol, dividend)
             if proximity:
                 finding["proximity"] = proximity
@@ -1791,6 +1817,8 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             decoded[item["index"]] = values
         if reason:
             finding["reason"] = reason
+            if reason == "missing or unsupported currency context":
+                finding["currency_context"] = _historical_currency_context(dividend, candidates)
             continue
         unit = _historical_currency(dividend.get("currency"))
         gross = _dividend_cash_sum(dividend["payments"])
@@ -1800,6 +1828,8 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         if (unit is None or any(unit[0] != value["currency"] for value in decoded.values())
                 or gross is None or tax is None or gross <= 0):
             finding["reason"] = "missing, conflicting or unsupported source money evidence"
+            if unit is None or any(unit[0] != value["currency"] for value in decoded.values()):
+                finding["currency_context"] = _historical_currency_context(dividend, candidates)
             continue
         with localcontext() as context:
             numbers = [gross, tax, quantity] + [value[field] for value in decoded.values()
@@ -1908,17 +1938,30 @@ def format_historical_dividend_finding(finding, account_id):
             lines.append(f"  check {check['check']} {check['status']} activity={check['activity_id']} "
                          f"expected={check['expected']} observed={check['observed']}"
                          + (f" ({check['reason']})" if check.get("reason") else ""))
+    context = finding.get("currency_context")
+    if context:
+        lines.append(f"  currency context: source={context['source']} "
+                     f"destination={','.join(map(str, context['destination']))} "
+                     f"provenance={','.join(context['provenance'])}")
     for item in finding.get("destination", []):
         lines.append(f"  destination: id={item['activity_id']} security={item['symbol']} isin={item['isin']} "
                      f"utc_date={item['utc_date']} local_date={item['local_date']} "
                      + _historical_money(item["values"]))
+    carriers = finding.get("historical_comment")
+    if carriers is not None:
+        lines.append("  skipped by historical comment: import treats an existing dividend comment of this "
+                     "account (active or not) as the same payment; carriers do not certify identity")
+        for item in carriers:
+            lines.append(f"    carrier: id={item['activity_id']} active={item['active']} "
+                         f"comment={item['comment']} utc_date={item['utc_date']} "
+                         f"local_date={item['local_date']} " + _historical_money(item["values"]))
     proximity = finding.get("proximity")
     if proximity:
         lines.append(f"  skipped by proximity: import treats these as the same payment (same symbol within "
                      f"{proximity['window_days']} days of {proximity['matched_date']}); weak candidates do "
                      "not certify identity")
         for item in proximity["candidates"]:
-            lines.append(f"    weak candidate: id={item['activity_id']} comment={item['comment']} "
+            lines.append(f"    weak candidate: id={item['activity_id']} active=True comment={item['comment']} "
                          f"utc_date={item['utc_date']} local_date={item['local_date']} "
                          + _historical_money(item["values"]))
     return "\n".join(lines)
@@ -2069,7 +2112,8 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
     # Establish identity and deduplicate before checking quantity or schema.
     if config.get("dry_run"):
         findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
-                                                 historical_dividend_report_window(xml_text))
+                                                 historical_dividend_report_window(xml_text),
+                                                 existing_dividend_comments)
         log_historical_dividend_comparison(findings, ghost_account_id)
     div_activities = []
     div_skipped_dup = 0

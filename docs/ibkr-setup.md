@@ -190,8 +190,9 @@ certify previously imported dividend quantities.
    enabling writes. The source business day is compared with the destination
    instant's local date in `TZ`; general UTC conversion for imports is unchanged.
    Missing profile ISIN permits amount comparison, but a conflicting ISIN blocks
-   identity. `skipped by proximity` explains a weak candidate and does not prove
-   that a payment is present or correct.
+   identity. `skipped by historical comment` and `skipped by proximity` name the skip path
+   import selection takes; neither proves that a payment is present or correct.
+   A `currency context:` line shows the observed source and destination currency.
 5. Keep logs private: INFO and DEBUG can include securities, dates, activity IDs,
    quantities and financial amounts. Capture needed evidence before removing
    the one-off container. Do not publish raw logs or attach them to public issues.
