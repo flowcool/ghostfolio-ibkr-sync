@@ -49,7 +49,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install runtime, development and audit dependencies
-        run: pip install -r requirements-dev.txt pip-audit==2.9.0
+        run: pip install -r requirements-dev.txt
       - name: Audit the complete Python CI environment
         run: pip-audit
 
