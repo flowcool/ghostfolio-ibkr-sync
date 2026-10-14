@@ -1,6 +1,6 @@
 ## 1. Reject unknown side
 
-- [ ] 1.1 In `convert_trade_to_activity`, return `None` unless `buySell` is exact `BUY` or `SELL`; offline tests: unknown values return `None`, BUY/SELL unchanged. Check: `.venv/bin/python -m pytest -q tests -k 'unknown_trade_side_conversion'`.
+- [x] 1.1 In `convert_trade_to_activity`, return `None` unless `buySell` is exact `BUY` or `SELL`; offline tests: unknown values return `None`, BUY/SELL unchanged. Check: `.venv/bin/python -m pytest -q tests -k 'unknown_trade_side_conversion'`.
 
 ## 2. Run behavior and docs
 
