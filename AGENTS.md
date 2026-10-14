@@ -39,6 +39,9 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   one self-contained item per task (spec path, requirement, scenario, acceptance
   command, files to touch). Closing an item ticks its task in `tasks.md`; archive
   the change when every item is closed.
+- **Release.** A change that touches shipped code ends with a release item after
+  its last task: archive, replay on `main`, semver tag on the operator's go,
+  image pullable; the parent item closes only after it.
 - **One item = one fresh session.** Claim, implement, prove, close, stop. Do not
   start the next item or arm a goal across items. Budget about 150 tool calls;
   above that, stop and report the state.
@@ -72,3 +75,7 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Ask the operator only for:** an IBKR or Ghostfolio fact missing from the spec,
   a run against real services, a Ghostfolio write, a scope change. One question at
   a time, in plain French, with your recommended answer.
+- **Decision items.** Work only the item's numbered decision list, inside its
+  authorization envelope. Start each question with `Décision n/N`; anything
+  else (new question, spec, contract or code change, action outside the
+  envelope) is `HORS CHEMIN`: note it in the item and stop.
