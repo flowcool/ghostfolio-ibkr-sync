@@ -1,4 +1,5 @@
 """Offline tests: orchestration (process_account, main, load_config) and the IBKR Flex fetch."""
+import logging
 from collections import defaultdict
 import xml.etree.ElementTree as ET
 
@@ -932,7 +933,6 @@ def structured_input_xml(mode="valid", field="quantity"):
 
 
 @pytest.mark.parametrize("mode,reason", [
-    ("old", "missing ChangeInDividendAccruals section"),
     ("missing", "missing relevant accrual attributes"),
     ("payment_missing", "missing payment attributes"),
 ])
@@ -976,7 +976,7 @@ def test_dividend_structured_input_nonempty_mismatch_excludes_unrelated(monkeypa
     assert [a["type"] for a in w.activities] == ["BUY", "DIVIDEND", "DIVIDEND"]
 
 
-@pytest.mark.parametrize("mode", ["old", "missing", "conflict", "blank"])
+@pytest.mark.parametrize("mode", ["missing", "conflict", "blank"])
 @pytest.mark.parametrize("dedup", ["comment", "legacy", "proximity"])
 def test_dividend_structured_input_dedup_before_evidence(monkeypatch, caplog, mode, dedup):
     root = ET.fromstring(structured_input_xml(mode))
@@ -1086,6 +1086,9 @@ def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monk
     root = ET.fromstring(report(divs=div_xml()))
     accrual = root.find(".//ChangeInDividendAccrual")
     if mode == "schema":
+        # Same attribute on a second accrual row: the field exists, one row lacks it.
+        ET.SubElement(root.find(".//ChangeInDividendAccruals"), "ChangeInDividendAccrual",
+                      {**accrual.attrib, "conid": "other"})
         del accrual.attrib["quantity"]
     else:
         accrual.set("quantity", "bad")
@@ -1151,3 +1154,75 @@ def test_historical_diagnostic_preflight_bad_suffix_does_not_enable_dry_run_and_
     good = World(monkeypatch, report(trades=trade_xml("T1"), divs=div_xml()))
     good_result = good.run()
     assert good_result[1] is True and good.imported and good.cash_calls
+
+
+# --- dividend field prerequisites: whole-report absence fails the account -------
+
+def _prerequisite_xml(mutate=None, divs=None):
+    root = ET.fromstring(report(trade_xml("PRE-T"), div_xml() if divs is None else divs))
+    if mutate:
+        mutate(root)
+    return ET.tostring(root, encoding="unicode")
+
+
+def _drop(tag, field):
+    def mutate(root):
+        for el in root.iter(tag):
+            el.attrib.pop(field, None)
+    return mutate
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_dividend_field_prerequisites_missing_cash_field_fails_account(monkeypatch, caplog, dry_run):
+    w = World(monkeypatch, _prerequisite_xml(_drop("CashTransaction", "conid")))
+    assert m.process_account({**CFG, "dry_run": dry_run}, "U1", "q1", "IBKR", {ISIN_KO: "KO"},
+                             set(), set(), positions()) == ({}, False)
+    assert w.imported == [] and w.cash_calls == []
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1 and "CashTransaction.conid (ConID (Contract ID))" in errors[0].getMessage()
+    assert "actionID" not in errors[0].getMessage()
+    assert CFG.get("dry_run") is not True
+
+
+def test_dividend_field_prerequisites_lists_every_gap_in_one_error(monkeypatch, caplog):
+    def mutate(root):
+        _drop("CashTransaction", "exDate")(root)
+        _drop("ChangeInDividendAccrual", "payDate")(root)
+    w = World(monkeypatch, _prerequisite_xml(mutate))
+    assert w.run() == ({}, False)
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "CashTransaction.exDate" in errors[0] and "ChangeInDividendAccrual.payDate" in errors[0]
+
+
+def test_dividend_field_prerequisites_missing_accrual_section_fails_account(monkeypatch, caplog):
+    def mutate(root):
+        root.find(".//FlexStatement").remove(root.find(".//ChangeInDividendAccruals"))
+    w = World(monkeypatch, _prerequisite_xml(mutate))
+    assert w.run() == ({}, False)
+    assert w.imported == [] and "ChangeInDividendAccruals section" in caplog.text
+
+
+def test_dividend_field_prerequisites_complete_empty_and_no_cash_rows_pass(monkeypatch, caplog):
+    assert m.dividend_field_prerequisites(_prerequisite_xml()) == []
+    # No relevant cash rows: nothing required, even without the accrual section.
+    assert m.dividend_field_prerequisites(report(trade_xml("T"))) == []
+    only_other = report(divs=_cash_row("Deposits/Withdrawals", "20260715"))
+    assert m.dividend_field_prerequisites(only_other) == []
+    # Present but empty accrual section, cash keys all present.
+    def mutate(root):
+        section = root.find(".//ChangeInDividendAccruals")
+        for child in list(section):
+            section.remove(child)
+    assert m.dividend_field_prerequisites(_prerequisite_xml(mutate)) == []
+    assert "required dividend fields missing" not in caplog.text
+
+
+def test_dividend_field_prerequisites_isolated_bad_row_keeps_local_rejection(monkeypatch, caplog):
+    def mutate(root):
+        root.findall(".//CashTransaction")[0].set("conid", "")
+    xml = _prerequisite_xml(mutate, divs=div_xml() + div_xml(isin=ISIN_PEP, symbol="PEP"))
+    assert m.dividend_field_prerequisites(xml) == []
+    w = World(monkeypatch, xml)
+    assert w.run()[1] is True
+    assert "required dividend fields missing" not in caplog.text
