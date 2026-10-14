@@ -48,8 +48,8 @@ def verify(image, digest, arch):
 
 def assemble(image, version):
     if (not re.fullmatch(r"ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+", image)
-            or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)):
-        raise RuntimeError("Invalid stable publication reference")
+            or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?", version)):
+        raise RuntimeError("Invalid release publication reference")
     sources = []
     expected = {}
     for arch in ("amd64", "arm64"):
