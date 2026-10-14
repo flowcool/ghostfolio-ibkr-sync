@@ -480,13 +480,15 @@ connector retries it by `ErrorCode`, never by message text.
   600 seconds between them: 18 minutes of scheduled waiting. Network timeouts and
   connection retries come on top of that.
 - **Exhaustion:** the run fails with the last IBKR message (token redacted), the
-  statement is never requested, and nothing is written.
+  statement is never requested, and nothing is written for the affected account.
+  Other accounts in a multi-account run are still processed.
 - **GetStatement window:** after SendRequest succeeds, the connector polls up to 60
   times, waiting 5 seconds after each pending response: 300 seconds of scheduled
   waiting (previously 10 attempts). Pending means status `Warn` or `ErrorCode`
   `1019`; any other error fails at once.
 - **Polling exhaustion:** if all 60 responses stay pending, the run fails with a
-  timeout and nothing is written.
+  timeout and nothing is written for the affected account. Other accounts in a
+  multi-account run are still processed.
 
 No ENV change is needed. This is connector policy based on IBKR's
 [Version 3 error table](https://www.ibkrguides.com/clientportal/performanceandstatements/flex3error.htm),
