@@ -13,7 +13,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import datetime, timezone
-from decimal import Decimal, DecimalException, localcontext
+from decimal import Decimal, DecimalException, ROUND_HALF_UP, localcontext
 from math import ceil, isfinite
 from zoneinfo import ZoneInfo
 from urllib.parse import quote, quote_plus, urlsplit
@@ -1595,14 +1595,20 @@ def _dividend_date_matches(positions, activity):
     return None
 
 
-ZERO_DECIMAL_CURRENCIES = {"JPY"}
+CURRENCY_MINOR_UNITS = {
+    "USD": Decimal("0.01"), "EUR": Decimal("0.01"), "GBP": Decimal("0.01"),
+    "CHF": Decimal("0.01"), "JPY": Decimal("1"), "KRW": Decimal("1"),
+    "CAD": Decimal("0.01"), "AUD": Decimal("0.01"), "NZD": Decimal("0.01"),
+    "HKD": Decimal("0.01"), "SGD": Decimal("0.01"), "SEK": Decimal("0.01"),
+    "NOK": Decimal("0.01"), "DKK": Decimal("0.01"), "PLN": Decimal("0.01"),
+    "CZK": Decimal("0.01"), "HUF": Decimal("0.01"), "ILS": Decimal("0.01"),
+    "ZAR": Decimal("0.01"),
+}
 
 
 def _historical_currency(currency):
     """Return common denomination and exact scale; unknown context stays unknown."""
-    major = {"USD", "EUR", "GBP", "CHF", "JPY", "CAD", "AUD", "NZD", "HKD",
-             "SGD", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "ILS", "ZAR"}
-    if currency in major:
+    if currency in CURRENCY_MINOR_UNITS:
         return currency, Decimal(1)
     for base, minor, factor in MINOR_UNIT_MARKETS.values():
         if currency == minor:
@@ -1611,8 +1617,8 @@ def _historical_currency(currency):
 
 
 def _historical_minor_unit(currency):
-    """Smallest amount of a major currency: 1 for zero-decimal currencies, else 0.01."""
-    return Decimal(1) if currency in ZERO_DECIMAL_CURRENCIES else Decimal("0.01")
+    """Return the explicit smallest amount of a supported major currency."""
+    return CURRENCY_MINOR_UNITS.get(currency)
 
 
 def classify_dividend_deltas(currency, quantity_deltas, gross_deltas, fee_deltas):
@@ -1658,13 +1664,29 @@ def _historical_currency_context(dividend, candidates):
             "provenance": [provenance for _, provenance in observed]}
 
 
+def _historical_currency_reason(dividend, candidates):
+    """Return the precise currency problem, or None when all codes agree."""
+    observed = [dividend.get("currency")]
+    observed += [_historical_destination_currency(item)[0] for item in candidates]
+    if any(not isinstance(currency, str) or not currency for currency in observed):
+        return "missing currency"
+    normalized = [_historical_currency(currency) for currency in observed]
+    if any(currency is None for currency in normalized):
+        return "unsupported currency"
+    if len({currency[0] for currency in normalized}) != 1:
+        return "conflicting currencies"
+    return None
+
+
 def _historical_values(evidence):
     """Read quantity/gross/fee only from original JSON, with currency provenance."""
     currency, provenance = _historical_destination_currency(evidence)
     row = evidence["activity"]
-    unit = _historical_currency(currency) if isinstance(currency, str) else None
+    if not isinstance(currency, str) or not currency:
+        return None, "missing currency"
+    unit = _historical_currency(currency)
     if unit is None:
-        return None, "missing or unsupported currency context"
+        return None, "unsupported currency"
     if not evidence["exact_json"]:
         return None, "original JSON numeric evidence unavailable"
     numbers = [row.get(field) for field in ("quantity", "unitPrice", "fee")]
@@ -1930,19 +1952,21 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             decoded[item["index"]] = values
         if reason:
             finding["reason"] = reason
-            if reason == "missing or unsupported currency context":
+            if reason in ("missing currency", "unsupported currency"):
                 finding["currency_context"] = _historical_currency_context(dividend, candidates)
             continue
+        currency_reason = _historical_currency_reason(dividend, candidates)
         unit = _historical_currency(dividend.get("currency"))
         gross = _dividend_cash_sum(dividend["payments"])
         tax_rows = [row for row in dividend.get("cash_rows", [])
                     if row.get("type") == WITHHOLDING_CASH_TYPE]
         tax = _dividend_cash_sum(tax_rows)
-        if (unit is None or any(unit[0] != value["currency"] for value in decoded.values())
-                or gross is None or tax is None or gross <= 0):
-            finding["reason"] = "missing, conflicting or unsupported source money evidence"
-            if unit is None or any(unit[0] != value["currency"] for value in decoded.values()):
-                finding["currency_context"] = _historical_currency_context(dividend, candidates)
+        if currency_reason:
+            finding["reason"] = currency_reason
+            finding["currency_context"] = _historical_currency_context(dividend, candidates)
+            continue
+        if gross is None or tax is None or gross <= 0:
+            finding["reason"] = "missing or invalid source money evidence"
             continue
         with localcontext() as context:
             numbers = [gross, tax, quantity] + [value[field] for value in decoded.values()
@@ -2179,8 +2203,10 @@ def classify_dividend_findings(findings):
             context = finding.get("currency_context")
             destination = finding.get("destination", [])
             values = [_readable_values(row) for row in destination]
-            if context and context["source"] and _historical_currency(context["source"]) is None:
-                result = _readable_set("unsupported currency", "information", finding["reason"])
+            if context and finding["reason"] in (
+                    "missing currency", "conflicting currencies", "unsupported currency"):
+                kind = "information" if finding["reason"] == "unsupported currency" else "to_check"
+                result = _readable_set(finding["reason"], kind, finding["reason"])
             elif (len(destination) > 1 and "source_gross" in finding and all(values)
                   and not any(check["status"] == "fail" for check in finding.get("identity_checks", []))
                   and finding["reason"] not in ("contested destination ownership",
@@ -2213,25 +2239,42 @@ def _plain(value):
         return format(value, "f")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return format(Decimal(str(value)), "f")
-    return "unknown" if value is None else str(value)
+    return "unavailable" if value is None or value == "" else str(value)
 
 
 def _plain_signed(value):
     text = _plain(value)
-    return text if text.startswith("-") or text == "unknown" else "+" + text
+    return text if text.startswith("-") or text == "unavailable" else "+" + text
+
+
+def _plain_money(value, currency):
+    """Quantize one displayed monetary value to its explicit currency unit."""
+    unit = _historical_minor_unit(currency)
+    if unit is None or value is None:
+        return "unavailable"
+    number = value if isinstance(value, Decimal) else Decimal(str(value))
+    with localcontext() as context:
+        context.prec = max(28, len(number.as_tuple().digits) + abs(number.adjusted()) + 4)
+        return format(number.quantize(unit, rounding=ROUND_HALF_UP), "f")
+
+
+def _plain_signed_money(value, currency):
+    text = _plain_money(value, currency)
+    return text if text.startswith("-") or text == "unavailable" else "+" + text
 
 
 def _plain_values(values):
     if "unavailable" in values:
         return f"values unavailable ({values['unavailable']})"
-    return (f"quantity {_plain(values['quantity'])}, gross {_plain(values['gross'])} {values['currency']}, "
-            f"fee {_plain(values['fee'])} {values['currency']}")
+    currency = values["currency"]
+    return (f"quantity {_plain(values['quantity'])}, gross {_plain_money(values['gross'], currency)} "
+            f"{currency}, fee {_plain_money(values['fee'], currency)} {currency}")
 
 
-def _plain_deltas(row):
+def _plain_deltas(row, currency):
     quantities = ", ".join(_plain_signed(delta) for delta in row["quantity_deltas"])
-    return (f"quantity {quantities}, gross {_plain_signed(row['gross_delta'])}, "
-            f"fee {_plain_signed(row['fee_delta'])}")
+    return (f"quantity {quantities}, gross {_plain_signed_money(row['gross_delta'], currency)} "
+            f"{currency}, fee {_plain_signed_money(row['fee_delta'], currency)} {currency}")
 
 
 READABLE_ACTIONS = {
@@ -2274,7 +2317,7 @@ def _match_action(match):
 
 
 def _format_match(finding):
-    """Lines of the Proposed match section: IBKR side, labelled rows side by side, one action."""
+    """Lines of the Proposed match section, without the block's sole action line."""
     match = finding.get("match")
     if match is None:
         return []
@@ -2283,17 +2326,29 @@ def _format_match(finding):
         return ["  Proposed match: no confident match"]
     lines = [f"  Proposed match ({match['confidence']}: {MATCH_REASONS[match['confidence']]})"]
     if "source_gross" in source:
-        lines.append(f"    IBKR {source['source']}: quantity {_plain(source['source_quantity'])}, "
-                     f"gross {_plain(source['source_gross'])} {source['source_currency']}, "
-                     f"fee {_plain(source['source_fee'])} {source['source_currency']}")
+        currency = source["source_currency"]
+        lines.append(f"    IBKR {_plain(source['source'])}: quantity {_plain(source['source_quantity'])}, "
+                     f"gross {_plain_money(source['source_gross'], currency)} {currency}, "
+                     f"fee {_plain_money(source['source_fee'], currency)} {currency}")
     else:
-        lines.append(f"    IBKR {source['source']}: values unavailable")
+        lines.append(f"    IBKR {_plain(source['source'])}: values unavailable")
     for row in match["rows"]:
-        lines.append(f"    {row['label']}: activity {row['activity_id']} ({row['symbol']}), "
-                     f"local day {row['local_date']}, UTC date {row['utc_date']}, "
+        lines.append(f"    {row['label']}: activity {_plain(row['activity_id'])} "
+                     f"({_plain(row['symbol'])}), local day {_plain(row['local_date'])}, "
+                     f"UTC date {_plain(row['utc_date'])}, "
                      + _plain_values(row["values"]))
-    lines.append("    Proposed action: " + _match_action(match))
     return lines
+
+
+def _finding_action(finding):
+    match = finding.get("match")
+    if match is not None and match["confidence"] != "none":
+        if match["action_activity_id"] is None and finding["readable"]["class"] == "to_check":
+            keep = next(row for row in match["rows"] if row["label"] == "Keep")
+            return (f"Compare activity {keep['activity_id']} with the IBKR statement; "
+                    "fix it by hand if IBKR is right.")
+        return _match_action(match)
+    return _readable_action(finding["readable"])
 
 
 def format_historical_dividend_finding(finding, account_id):
@@ -2304,32 +2359,36 @@ def format_historical_dividend_finding(finding, account_id):
     lines = [f"[DRY RUN] Dividend {kind}: {readable['label']} (account {account_id})"]
     if finding["source"] is not None:
         security = finding["security"]
-        lines.append(f"  Security: {security['symbol']} (ISIN {security['isin'] or 'unknown'}), "
-                     f"dividend date {finding['source_date']}, reference {finding['source']}")
+        lines.append(f"  Security: {_plain(security['symbol'])} (ISIN {_plain(security['isin'])}), "
+                     f"dividend date {_plain(finding['source_date'])}, reference {_plain(finding['source'])}")
         if "source_gross" in finding:
+            currency = finding["source_currency"]
             lines.append(f"  IBKR: quantity {_plain(finding['source_quantity'])}, "
-                         f"gross {_plain(finding['source_gross'])} {finding['source_currency']}, "
-                         f"fee {_plain(finding['source_fee'])} {finding['source_currency']}")
+                         f"gross {_plain_money(finding['source_gross'], currency)} {currency}, "
+                         f"fee {_plain_money(finding['source_fee'], currency)} {currency}")
         else:
-            lines.append(f"  IBKR: {finding['source']}")
+            lines.append(f"  IBKR: {_plain(finding['source'])}")
     else:
         lines.append("  IBKR: no dividend of the report is tied to this Ghostfolio row")
     for item in finding.get("destination", []):
-        lines.append(f"  Ghostfolio: activity {item['activity_id']} ({item['symbol']}) on "
-                     f"{item['utc_date']}, " + _plain_values(item["values"]))
+        lines.append(f"  Ghostfolio: activity {_plain(item['activity_id'])} "
+                     f"({_plain(item['symbol'])}) on {_plain(item['utc_date'])}, "
+                     + _plain_values(item["values"]))
     if "gross_delta" in finding:
-        lines.append("  Difference (Ghostfolio minus IBKR): " + _plain_deltas(finding))
+        lines.append("  Difference (Ghostfolio minus IBKR): "
+                     + _plain_deltas(finding, finding["source_currency"]))
     elif len(finding.get("representations", [])) > 1:
         for number, row in enumerate(finding["representations"], 1):
             lines.append(f"  Difference of representation {number} (Ghostfolio minus IBKR): "
-                         + _plain_deltas(row))
+                         + _plain_deltas(row, finding["source_currency"]))
     lines.append(f"  Reason: {readable['reason'] or readable['label']}")
     if readable["label"] == "probable duplicate":
         lines.append("  This row looks like a duplicate: legacy comment, same security and same day as the "
-                     "IBKR dividend (activity " + ", ".join(map(str, readable["related"])) + ").")
+                     "IBKR dividend (activity "
+                     + ", ".join(_plain(value) for value in readable["related"]) + ").")
     elif readable["related"] and readable["class"] == "to_check" and finding["source"] is not None:
         lines.append("  Probable duplicates: legacy-comment rows with the same security and day "
-                     "(activity " + ", ".join(map(str, readable["related"])) + ").")
+                     "(activity " + ", ".join(_plain(value) for value in readable["related"]) + ").")
     for check in finding.get("identity_checks", []):
         if check["status"] != "pass":
             observed = check["observed"]
@@ -2337,27 +2396,35 @@ def format_historical_dividend_finding(finding, account_id):
                 observed = (f"local date {_plain(observed.get('local'))} "
                             f"(UTC date {_plain(observed.get('utc'))})")
             lines.append(f"  Identity check {check['check']} {check['status']} for activity "
-                         f"{check['activity_id']}: expected {check['expected']}, found {observed}"
+                         f"{_plain(check['activity_id'])}: expected {_plain(check['expected'])}, "
+                         f"found {_plain(observed)}"
                          + (f" ({check['reason']})" if check.get("reason") else ""))
     context = finding.get("currency_context")
     if context:
-        lines.append(f"  Currency: IBKR {context['source']}, Ghostfolio "
-                     f"{', '.join(map(str, context['destination']))} "
-                     f"(from {', '.join(context['provenance'])})")
+        lines.append(f"  Currency: IBKR {_plain(context['source'])}, Ghostfolio "
+                     f"{', '.join(_plain(value) for value in context['destination'])} "
+                     f"(from {', '.join(_plain(value) for value in context['provenance'])})")
     for item in finding.get("historical_comment") or []:
-        lines.append(f"  Skipped by historical comment: activity {item['activity_id']} "
-                     f"(comment {item['comment']}, {item['utc_date']}), " + _plain_values(item["values"]))
+        lines.append(f"  Skipped by historical comment: activity {_plain(item['activity_id'])} "
+                     f"(comment {_plain(item['comment'])}, {_plain(item['utc_date'])}), "
+                     + _plain_values(item["values"]))
     proximity = finding.get("proximity")
     if proximity:
-        lines.append(f"  Skipped by proximity: same symbol within {proximity['window_days']} days of "
-                     f"{proximity['matched_date']}; weak candidates do not certify identity")
+        lines.append(f"  Skipped by proximity: same symbol within {_plain(proximity['window_days'])} "
+                     f"days of {_plain(proximity['matched_date'])}; weak candidates do not certify identity")
         for item in proximity["candidates"]:
-            lines.append(f"    Weak candidate: activity {item['activity_id']} (comment {item['comment']}, "
-                         f"{item['utc_date']}), " + _plain_values(item["values"]))
-    lines.append(f"  Action: {_readable_action(readable)}")
+            lines.append(f"    Weak candidate: activity {_plain(item['activity_id'])} "
+                         f"(comment {_plain(item['comment'])}, {_plain(item['utc_date'])}), "
+                         + _plain_values(item["values"]))
     lines += _format_match(finding)
+    lines.append(f"  Action: {_finding_action(finding)}")
     lines.append("  Nothing was written.")
     return "\n".join(lines)
+
+
+def _plain_counts(counts):
+    """Deterministic name:count summary, or none when empty."""
+    return ",".join(f"{name}:{count}" for name, count in sorted(counts.items())) or "none"
 
 
 def log_historical_dividend_comparison(findings, account_id):
@@ -2394,8 +2461,8 @@ def log_historical_dividend_comparison(findings, account_id):
              "unmatched_destination=%d categories=%s failed_checks=%s unavailable_checks=%s",
              account_id, len(findings),
              sum(finding["source"] is not None for finding in findings),
-             sum(finding["source"] is None for finding in findings), dict(sorted(counts.items())),
-             dict(sorted(failed.items())), dict(sorted(unavailable.items())))
+             sum(finding["source"] is None for finding in findings), _plain_counts(counts),
+             _plain_counts(failed), _plain_counts(unavailable))
     return {"to_check": classes["to_check"], "informational": classes["information"],
             "noise": classes["noise"]}
 
