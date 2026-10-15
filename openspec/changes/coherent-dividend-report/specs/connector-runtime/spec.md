@@ -8,7 +8,7 @@ Every truthy DRY_RUN SHALL compare cash distributions with existing target-accou
 
 The diagnostic SHALL retain original JSON decimal numeric evidence from the existing GET before float decoding; reconstructing evidence from decoded floats SHALL NOT establish exactness. The existing import/position numeric path, return shape, indexes, read count and failure contract SHALL remain unchanged. Destination gross SHALL be exact stored quantity × unitPrice, summed only within a complete representation; fees SHALL use the same representation. Source gross SHALL remain exact cash payments; source fee SHALL use the existing max(0,-cash withholding) convention. Raw signed withholding/refund rows and their total SHALL remain separate evidence. For a source group with exactly one net-positive action, the finite `grossRate` on the unique matched payment `Re` SHALL be retained as declared-rate evidence. Other source shapes SHALL have no group declared-rate evidence. The rate SHALL NOT replace cash gross.
 
-Gross/fee deltas SHALL be destination minus source after normalization. A gross or fee delta whose absolute value is below half a minor unit of the source currency SHALL be classified rounding noise and SHALL stay counted in the summary and visible at DEBUG. Every other nonzero delta, and every quantity delta, SHALL remain visible without comparison tolerance. Display rounding SHALL NOT change classification.
+Gross/fee deltas SHALL be destination minus source after normalization. A gross or fee delta whose absolute value is below half a minor unit of the source currency SHALL be classified rounding noise and SHALL stay counted in the summary and visible at DEBUG. Every other nonzero delta, and every quantity delta, SHALL remain visible without comparison tolerance. No percentage threshold SHALL apply. Display rounding SHALL NOT change classification.
 
 A nonempty activity currency SHALL determine the denomination of its price and fee. Only null activity currency SHALL permit fallback to a supported profile currency, with explicit provenance. Each supported currency SHALL have an explicit minor-unit definition; JPY and KRW SHALL use one whole unit. Missing currency, conflicting currencies and a code without a minor-unit definition SHALL remain three distinct uncertain reasons. Major/minor market units SHALL be normalized exactly without overwriting activity denomination; a GBP activity with a GBp profile SHALL NOT be rescaled as though its activity values were GBp.
 
@@ -80,7 +80,7 @@ Every monetary value shown in a block, including gross, fee and monetary deltas 
 
 The classes SHALL remain coherent, information, noise, outside window and to check. `unsupported currency` SHALL appear only when a nonempty code has no explicit minor-unit definition. Missing currency SHALL read `missing currency`; unequal supported codes SHALL read `conflicting currencies`. A source and destination that both use KRW SHALL be comparable, not unsupported.
 
-A complete single legacy activity with equal quantity and fee SHALL be `legacy declared-rate rounding` information when its Ghostfolio gross equals quantity × the matched payment `Re` `grossRate` and the paid cash gross differs by exactly one minor unit. Its reason SHALL state that the legacy row uses the declared rate and IBKR paid a rounded cash amount. Its sole action SHALL say that the operator can optionally adjust the named activity's unit price so its gross equals the IBKR paid gross, or otherwise keep it. It SHALL NOT suggest that IBKR revised the amount after import. Other one-minor-unit differences SHALL remain to check.
+A complete single legacy activity with equal quantity and fee SHALL be `legacy declared-rate rounding` information when its Ghostfolio gross equals quantity × the matched payment `Re` `grossRate` and the paid cash gross differs by exactly one minor unit. Its reason SHALL state that the legacy row uses the declared rate and IBKR paid a rounded cash amount. Its sole action SHALL read `No action: IBKR rounding accepted.` The block SHALL stay visible at INFO as audit information. It SHALL NOT suggest that IBKR revised the amount after import. A one-minor-unit fee difference, or any one-minor-unit gross difference outside this proven pattern, SHALL remain to check as `minimal difference, cause unknown`. No finding SHALL automatically correct an activity.
 
 After informational findings, one INFO line SHALL read `N to check, N informational, N noise`, followed by each item to check. Findings SHALL NOT change exits or notifications.
 
@@ -90,7 +90,7 @@ After informational findings, one INFO line SHALL read `N to check, N informatio
 
 #### Scenario: Classes from synthetic inputs
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k 'dividend_readable_classes or dividend_readable_pairs or coherent_dividend_one_jpy'` runs noise, one-unit, larger, quantity, legacy, split, absent and unsupported cases
-- **THEN** existing classes stay stable except the complete declared-rate one-unit pattern, which becomes information with its known reason and action.
+- **THEN** existing classes stay stable except the complete declared-rate one-unit pattern, which becomes information with its known reason and no-action audit result.
 
 #### Scenario: Plain report
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'dividend_readable_report or coherent_dividend_format or coherent_dividend_action'` formats source, destination, identity, summary and match text
@@ -101,8 +101,8 @@ After informational findings, one INFO line SHALL read `N to check, N informatio
 - **THEN** only the unknown code reads `unsupported currency`; equal KRW compares; the other states use their distinct reasons.
 
 #### Scenario: One-JPY legacy row
-- **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k coherent_dividend_one_jpy` runs equal quantity and fee, Ghostfolio gross equal to quantity × `grossRate`, and paid cash gross one JPY higher or lower
-- **THEN** one information block gives the declared-rate rounding reason and the optional unit-price correction; nearby cases that fail one condition remain to check.
+- **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k coherent_dividend_one_jpy` runs equal quantity and fee, Ghostfolio gross equal to quantity × `grossRate`, paid cash gross one JPY higher or lower, and one-JPY fee or incomplete-pattern boundaries
+- **THEN** the proven gross pattern gives one visible information block with the declared-rate rounding reason and `No action: IBKR rounding accepted.`; one-unit fee differences and other cases that fail one condition remain to check as `minimal difference, cause unknown`.
 
 #### Scenario: Real read-only acceptance
 - **WHEN** the operator-authorized real dry-run log is passed to `python3 scripts/check_dividend_report.py <private-log>` and every emitted dividend block is then read

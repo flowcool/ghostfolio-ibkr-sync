@@ -10,7 +10,7 @@ The current dividend dry-run report contradicts its import summary and can descr
 - Treat a matching legacy `dividend#<symbol>#<date>` comment as the same report identity and emit one block.
 - Emit one coherent action per block. Remove raw Python representations and round monetary output to the currency minor unit.
 - Separate missing, conflicting and unsupported currency states. Support KRW as a zero-decimal currency.
-- Recognize a legacy row whose gross equals quantity times the IBKR declared rate while paid cash differs by one minor unit. Report the known rounding cause and an optional manual unit-price correction.
+- Recognize a legacy row whose gross equals quantity times the IBKR declared rate while paid cash differs by one minor unit. Report the known rounding cause as visible audit information, with no action because the IBKR rounding is accepted.
 - Require the real dry-run log to pass `scripts/check_dividend_report.py` with zero violations, then require a human reading of every block.
 
 ## Flex Record Scope
