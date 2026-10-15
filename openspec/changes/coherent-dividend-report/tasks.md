@@ -16,4 +16,4 @@
 
 ## 4. Real report acceptance
 
-- [ ] 4.1 After tasks 1.1, 2.1, 3.1 and 3.2 are merged, run one Florent-authorized real DRY_RUN from the fixed `main` under a validated operation plan. Prove zero financial writes. Run `python3 scripts/check_dividend_report.py <private-log>` and require exit 0 with zero violations. Read every dividend block. Report one verdict per block to Florent without private amounts or identifiers. Verify that the operation note contains the pinned commit, dry-run proof, checker output, block count and complete reading verdict.
+- [x] 4.1 After tasks 1.1, 2.1, 3.1 and 3.2 are merged, run one Florent-authorized real DRY_RUN from the fixed `main` under a validated operation plan. Prove zero financial writes. Run `python3 scripts/check_dividend_report.py <private-log>` and require exit 0 with zero violations. Read every dividend block. Report one verdict per block to Florent without private amounts or identifiers. Verify that the operation note contains the pinned commit, dry-run proof, checker output, block count and complete reading verdict.
