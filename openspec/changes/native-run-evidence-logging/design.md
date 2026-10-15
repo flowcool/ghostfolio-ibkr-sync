@@ -1,35 +1,25 @@
 ## Context
 
-See proposal.md. The existing observer captures `window`, `preview`, `provider`, `import` and `cash`. Native logs omit complete identities, outcomes and cash precision. The acceptance checks also use external snapshots and run metadata.
+The removed lab adapter emitted `LAB_EVIDENCE` JSON. Preserve its `window`, `preview` and `cash` value shapes so the consumer can use native logs.
 
 ## Goals / Non-Goals
 
-Expose existing financial decisions through native logs. Keep provider validation and stored-state verification in the acceptance consumer. Add no HTTP request or financial gate.
+Add three DEBUG evidence kinds in one task. Keep existing behavior and INFO output unchanged. Do not add run metadata, lifecycle events, import stages or provider requests.
 
 ## Decisions
 
-Use `log.debug` only (Florent 2026-10-15: evidence never at INFO; existing INFO lines unchanged) with message `RUN_EVIDENCE ` followed by compact JSON. The envelope is `v`, `runId`, `account`, `accountId`, `dry_run`, `kind`, `value`. See the delta for exact fields. JSON escapes embedded newlines and preserves payload numbers. Human-only text was rejected because it loses field identity and precision.
+Use a small logging helper in the single runtime file. It serializes compact JSON with `allow_nan=False` and calls `log.debug`. Skip serialization when DEBUG is disabled. If a value cannot be serialized as finite JSON, omit that evidence without changing the financial operation. The lab rejects missing evidence.
 
-`main` creates the invocation ID; `run_sync` supplies account ordinals; `finalize_run` emits the normal terminal event. Missing terminal events invalidate acceptance. Existing notifications remain unchanged.
+- `fetch_flex_report`: after each successful fetch, reuse `historical_dividend_report_window`. Emit its two-date tuple as a JSON list, or null when bounds are unavailable. Do not invent a period or add a guard.
+- `ghost_import_activities`: in dry run, emit the full input list once per call, including an empty list. Keep every payload field and timezone-qualified date. Keep the readable preview unchanged. Emit no preview in real mode.
+- `ghost_update_cash_balance`: after existing currency guards, emit the target before the dry-run return or PUT. Use `accountId`, `balance` and `currency`. Do not round balance. This line describes a target, not confirmed stored state.
 
-| Evidence | Native line | Existing mechanism reused |
-| --- | --- | --- |
-| window | `kind=window`: status, fromDate, toDate | `process_account`, `historical_dividend_report_window` |
-| preview | `kind=activity`: stage, ten payload fields | `ghost_import_activities` |
-| provider inputs | activity dataSource, symbol, currency | Existing converted payload |
-| import | `kind=import`: requested, accepted, simulated, ok | `process_account`, `ghost_import_activities`, `accepted_import_subset` |
-| cash | `kind=cash`: status, accountId, currency, balance | `ghost_update_cash_balance`, `parse_cash_report`, `parse_base_currency` |
-
-Log proposed rows once before import retries; log accepted rows only from verified responses. Aggregate import counts once per account. Unknown acceptance is null, never zero. Cash success follows existing guards and response handling; decimal display rounding is excluded.
-
-`log_historical_dividend_comparison` and existing creation counters retain their text. New evidence lines are separate messages, outside report blocks.
+Each message is `LAB_EVIDENCE ` plus an object with only `kind` and `value`. The normal timestamp and DEBUG prefix precede it. JSON escaping keeps each message on one physical line. Do not serialize configuration, ENV, XML, URLs, headers or credentials.
 
 ## Risks / Trade-offs
 
-- Financial identifiers in logs → keep logs private; publish synthetic examples only; whitelist fields and exclude credentials, URLs, headers and response bodies.
-- Consumer compatibility → version the grammar; migrate the external consumer separately. Its provider GET supplies marketPrice and validates the logged triple.
-- Missing evidence → acceptance fails closed; connector behavior stays unchanged.
+Private logs contain payload identifiers and financial values. Use synthetic public examples. Missing or nonfinite evidence cannot prove lab acceptance. Stored-state readback and provider checks remain external.
 
-## Migration Plan
+## Verification and Rollback
 
-Approve first; implement one task per session. Document the grammar in README. Review shared-helper propagation downstream. Target rc.3 with a new soak. A separate release item owns archive, main replay, operator-authorized tag and pullable image. Deployment, lab gates and soak require their own authorized work. Roll back to the prior image digest and matching consumer; never undo financial records automatically.
+Use synthetic reports and mocked HTTP. Compare formatted INFO bytes with the pre-change implementation under a fixed timestamp. Check exact payload equality, precision, escaping, invalid bounds, nonfinite values and existing guard results. Run the full offline pytest suite. Revert the code commit to remove the logs. The coordinator owns archive and release.
