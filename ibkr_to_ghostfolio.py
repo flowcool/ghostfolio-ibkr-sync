@@ -2156,7 +2156,11 @@ def _propose_match(finding, twins):
     keep = min(strong, key=lambda row: (not row["canonical"], row["origin"] != "compared",
                                         str(row["activity_id"])))
     for row in candidates:
-        row["label"] = "Keep" if row is keep else "Duplicate" if row in strong else "Differs"
+        if row is keep:
+            row["label"] = ("Keep" if row["values"]["quantity"] == finding["source_quantity"]
+                            else "Keep, quantity differs")
+        else:
+            row["label"] = "Duplicate" if row in strong else "Differs"
     action = next((row for row in candidates if row["label"] == "Duplicate"),
                   next((row for row in candidates if row["label"] == "Differs"), None))
     return {"confidence": "strong", "rows": candidates,
@@ -2356,7 +2360,7 @@ def _match_action(match):
                 "statement by hand; no row is proposed to keep.")
     row = next((row for row in match["rows"] if row["activity_id"] == match["action_activity_id"]), None)
     if row is None:
-        keep = next(row for row in match["rows"] if row["label"] == "Keep")
+        keep = next(row for row in match["rows"] if row["label"] in ("Keep", "Keep, quantity differs"))
         return f"No action needed: keep activity {keep['activity_id']}."
     if row["label"] == "Duplicate":
         return (f"Check whether activity {row['activity_id']} repeats the IBKR dividend; "
@@ -2393,9 +2397,26 @@ def _finding_action(finding):
     if finding["readable"]["label"] == "legacy declared-rate rounding":
         return "No action: IBKR rounding accepted."
     match = finding.get("match")
+    # Twins share the proposal, but each block's action belongs to its compared row.
+    destination = finding.get("destination", [])
+    if destination:
+        activity_id = _plain(destination[0]["activity_id"])
+        if finding["readable"]["class"] != "to_check":
+            return _readable_action(finding["readable"])
+        if finding["readable"]["label"] == "quantity difference":
+            return (f"Compare activity {activity_id} with the IBKR statement: compare the quantity "
+                    "by hand; fix it by hand if IBKR is right.")
+        if finding["readable"]["label"] == "probable duplicate":
+            return (f"Check whether activity {activity_id} repeats the IBKR dividend; "
+                    "delete it by hand if it does.")
+        if match is not None and match["confidence"] == "weak":
+            return (f"Compare activity {activity_id} and the other rows with the IBKR "
+                    "statement by hand; no row is proposed to keep.")
+        return (f"Compare activity {activity_id} with the IBKR statement; "
+                "fix it by hand if IBKR is right.")
     if match is not None and match["confidence"] != "none":
         if match["action_activity_id"] is None and finding["readable"]["class"] == "to_check":
-            keep = next(row for row in match["rows"] if row["label"] == "Keep")
+            keep = next(row for row in match["rows"] if row["label"] in ("Keep", "Keep, quantity differs"))
             return (f"Compare activity {keep['activity_id']} with the IBKR statement; "
                     "fix it by hand if IBKR is right.")
         return _match_action(match)

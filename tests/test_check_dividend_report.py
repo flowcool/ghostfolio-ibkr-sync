@@ -3,6 +3,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 spec = importlib.util.spec_from_file_location(
     "check_dividend_report", Path(__file__).parents[1] / "scripts/check_dividend_report.py")
 check = importlib.util.module_from_spec(spec)
@@ -94,10 +96,11 @@ def test_duplicate_row_same_primary_twice():
         ("duplicate-row", 4, "same activity is the primary row of the block at line 2")]
 
 
-def test_duplicate_row_kept_then_absent_source():
+@pytest.mark.parametrize("label", ["Keep", "Keep, quantity differs"])
+def test_duplicate_row_kept_then_absent_source(label):
     text = "\n".join([
         block("Dividend information: absent source paired with outside-coverage row",
-              f"  Keep: activity {ROW_A} (TEST)",
+              f"  {label}: activity {ROW_A} (TEST)",
               f"Action: No action needed: keep activity {ROW_A}."),
         block("Dividend information: outside-coverage row paired with absent source",
               f"Ghostfolio: activity {ROW_A} (TEST)",
@@ -122,3 +125,32 @@ def test_main_exit_codes(tmp_path, capsys):
     assert check.main(["check", str(clean)]) == 0
     assert check.main(["check", str(bad)]) == 1
     assert capsys.readouterr().out == "repr line 2: Python literal in report text\n"
+
+
+ROW_C = "cccccccc-0000-4000-8000-000000000003"
+
+
+def quantity_split_block(target):
+    return block("Dividend to check: quantity difference",
+                 f"Ghostfolio: activity {ROW_A} (TEST), quantity 1, gross 1000 JPY, fee 0 JPY",
+                 "Reason: quantity difference",
+                 "Proposed match (strong: same security, local day, gross and fee)",
+                 f"  Keep, quantity differs: activity {ROW_A} (TEST), quantity 1, gross 1000 JPY",
+                 f"  Differs: activity {ROW_B} (TEST), quantity 100, gross 400 JPY",
+                 f"  Differs: activity {ROW_C} (TEST), quantity 100, gross 600 JPY",
+                 f"Action: Compare activity {target} with the IBKR statement: compare the quantity by hand.",
+                 "Nothing was written.")
+
+
+@pytest.mark.parametrize("target", [ROW_B, ROW_C])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_action_target_differs_from_compared_row(target, wrapped):
+    text = quantity_split_block(target)
+    assert check.check_report(wrap(text) if wrapped else text) == [
+        ("action-target", 8, "action targets a different activity than the compared rows")]
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_action_target_matches_compared_row(wrapped):
+    text = quantity_split_block(ROW_A)
+    assert check.check_report(wrap(text) if wrapped else text) == []
