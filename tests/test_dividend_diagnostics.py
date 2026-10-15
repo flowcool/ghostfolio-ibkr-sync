@@ -163,8 +163,7 @@ def test_historical_diagnostic_coherent_account_scoped(monkeypatch):
     assert comparison(monkeypatch, [destination(accountId="other")])[0]["category"] == "absent"
 
 
-@pytest.mark.parametrize("changes", [{"isDraft": True}, {"date": "2026-07-16T00:00:00Z"},
-                                     {"comment": "dividend#KO#2026-07-15"}])
+@pytest.mark.parametrize("changes", [{"isDraft": True}, {"date": "2026-07-16T00:00:00Z"}])
 def test_historical_diagnostic_coherent_weak_identity_never_certifies(monkeypatch, changes):
     assert all(finding["category"] != "coherent_single"
                for finding in comparison(monkeypatch, [destination(**changes)]))
@@ -338,7 +337,7 @@ def test_representations_unsupported_currency_context_stays_uncertain(monkeypatc
 
 
 @pytest.mark.parametrize("changes", [
-    {"comment": "legacy KO dividend"}, {"comment": "dividend#KO#2026-07-15"},
+    {"comment": "legacy KO dividend"},
     {"date": "2026-07-14T22:00:00Z"}, {"date": "2026-07-15T00:00:00+02:00"},
     {"isDraft": True}, {"isExcluded": True},
     {"assetProfile": {"symbol": "KO", "isin": ISIN_KO, "dataSource": "MANUAL"}},
@@ -578,33 +577,76 @@ def test_historical_diagnostic_actionable_destination_before_duplicate_identity_
     assert all(item["utc_date"] == "2026-07-15" for item in finding["destination"])
 
 
+def test_coherent_dividend_legacy_identity_claims_old_symbol_comment_once(monkeypatch):
+    row = destination(comment="dividend#KO#2026-07-15")
+    findings = comparison(monkeypatch, [row])
+    assert len(findings) == 1
+    assert findings[0]["category"] == "coherent_single"
+    assert findings[0]["activity_ids"] == ["dividend-1"]
+    assert sum("dividend-1" in finding["activity_ids"] for finding in findings) == 1
+
+
+def test_coherent_dividend_legacy_identity_uses_comment_before_row_checks(monkeypatch):
+    profile = {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO", "currency": "USD"}
+    row = destination(comment="dividend#KO#2026-07-15", date="2026-07-16T00:00:00Z",
+                      assetProfile=profile)
+    findings = comparison(monkeypatch, [row])
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding["source"] == f"dividend#{ISIN_KO}#2026-07-15"
+    assert finding["category"] == "uncertain"
+    assert [check["check"] for check in finding["identity_checks"]
+            if check["status"] == "fail"] == ["symbol", "date"]
+    assert finding["readable"]["class"] == "to_check"
+
+
+@pytest.mark.parametrize("comment", ["dividend#PEP#2026-07-15", "dividend#KO#2026-07-16"])
+def test_coherent_dividend_legacy_identity_residual_non_claim_is_accounted_once(monkeypatch, comment):
+    findings = comparison(monkeypatch, [destination(comment=comment)])
+    assert [finding["category"] for finding in findings] == ["absent", "uncertain"]
+    assert findings[0]["source"] == f"dividend#{ISIN_KO}#2026-07-15"
+    assert findings[1]["source"] is None
+    assert sum("dividend-1" in finding["activity_ids"] for finding in findings) == 1
+
+
+def test_coherent_dividend_legacy_identity_uses_resolved_symbol(monkeypatch):
+    row = destination(comment="dividend#COKE#2026-07-15")
+    row["assetProfile"]["symbol"] = "COKE"
+    _, _, positions = read(monkeypatch, [row])
+    source = m.parse_cash_dividends(report(divs=div_xml()))
+    findings = m.historical_dividend_comparison(source, ACC, {ISIN_KO: "COKE"}, positions)
+    assert len(findings) == 1 and findings[0]["category"] == "coherent_single"
+
+
 def skip_cause(monkeypatch, rows, xml=None):
     _, comments, positions = read(monkeypatch, rows)
     source = m.parse_cash_dividends(xml or report(divs=div_xml()))
     return m.historical_dividend_comparison(source, ACC, {}, positions, None, comments)[0]
 
 
-def test_historical_diagnostic_skip_cause_old_symbol_comment_beats_proximity(monkeypatch, caplog):
+def test_coherent_dividend_legacy_identity_failed_date_stays_in_claimed_block(monkeypatch, caplog):
     import logging
     carrier = destination(id="old", comment="dividend#KO#2026-07-15", date="2026-07-17T00:00:00Z")
     finding = skip_cause(monkeypatch, [carrier])
-    assert finding["category"] == "absent" and "proximity" not in finding
-    assert "skipped by historical comment" in finding["reason"]
-    assert [(item["activity_id"], item["active"]) for item in finding["historical_comment"]] == [("old", True)]
+    assert finding["category"] == "uncertain" and "proximity" not in finding
+    assert "historical_comment" not in finding
+    assert [(check["check"], check["status"]) for check in finding["identity_checks"]
+            if check["status"] == "fail"] == [("date", "fail")]
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison([finding], ACC)
-    assert "Skipped by historical comment: activity old" in caplog.text
+    assert "Identity check date fail for activity old" in caplog.text
     assert "Skipped by proximity" not in caplog.text
     assert "quantity 100, gross 25.00 USD" in caplog.text
 
 
-def test_historical_diagnostic_skip_cause_inactive_carrier(monkeypatch):
+def test_coherent_dividend_legacy_identity_inactive_carrier_stays_in_claimed_block(monkeypatch):
     carrier = destination(id="old", comment="dividend#KO#2026-07-15", date="2026-07-17T00:00:00Z",
                           isDraft=True)
     finding = skip_cause(monkeypatch, [carrier])
-    assert finding["category"] == "absent"
-    assert "skipped by historical comment" in finding["reason"]
-    assert [(item["activity_id"], item["active"]) for item in finding["historical_comment"]] == [("old", False)]
+    assert finding["category"] == "uncertain"
+    assert "historical_comment" not in finding
+    assert {check["check"] for check in finding["identity_checks"]
+            if check["status"] == "fail"} == {"active", "date"}
 
 
 def test_historical_diagnostic_skip_cause_proximity_only(monkeypatch):
@@ -744,21 +786,20 @@ def test_dividend_readable_pairs_equal_total_split(monkeypatch, prices, klass):
         assert "proven" not in finding["readable"]["label"]
 
 
-def test_dividend_readable_pairs_absent_with_outside_coverage_twin(monkeypatch):
+def test_coherent_dividend_legacy_identity_equal_row_is_not_an_absent_outside_pair(monkeypatch):
     carrier = destination(id="dividend-9", comment="dividend#KO#2026-07-15")
     findings = readable(monkeypatch, [carrier], comments=[(ACC, "dividend#KO#2026-07-15")])
-    absent, outside = findings[0], findings[1]
-    assert absent["category"] == "absent" and outside["category"] == "uncertain"
-    assert absent["readable"]["class"] == outside["readable"]["class"] == "information"
-    assert absent["readable"]["related"] == ["dividend-9"]
-    assert outside["readable"]["related"] == [absent["source"]]
+    assert len(findings) == 1
+    assert findings[0]["category"] == "coherent_single"
+    assert findings[0]["readable"]["class"] == "coherent"
 
 
-def test_dividend_readable_pairs_twin_with_other_amount_is_not_paired(monkeypatch):
+def test_coherent_dividend_legacy_identity_other_amount_is_one_to_check_block(monkeypatch):
     carrier = destination(id="dividend-9", comment="dividend#KO#2026-07-15", unitPrice=0.26)
     findings = readable(monkeypatch, [carrier], comments=[(ACC, "dividend#KO#2026-07-15")])
+    assert len(findings) == 1
+    assert findings[0]["category"] == "differences"
     assert findings[0]["readable"]["class"] == "to_check"
-    assert findings[1]["readable"]["class"] == "to_check"
 
 
 def test_dividend_readable_pairs_unpaired_absent_is_to_check(monkeypatch):

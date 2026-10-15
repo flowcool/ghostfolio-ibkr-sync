@@ -1855,19 +1855,22 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
     # Resolve all claims first. Neither input order nor repeated IDs may allow
     # one destination activity to certify several source groups.
     owners = defaultdict(set)
+    groups = []
     for group_index, dividend in enumerate(dividends):
-        if dividend.get("payments"):
-            reference = f"dividend#{dividend['isin'] or dividend['symbol']}#{dividend['date']}"
-            for item in evidence:
-                if item["activity"].get("comment") == reference:
-                    owners[item["activity"].get("id")].add(group_index)
-    claimed = set()
-    for dividend in dividends:
         if not dividend.get("payments"):
             continue
         reference = f"dividend#{dividend['isin'] or dividend['symbol']}#{dividend['date']}"
-        candidates = [item for item in evidence if item["activity"].get("comment") == reference]
         symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
+        claim_comments = {reference}
+        if symbol:
+            claim_comments.add(f"dividend#{symbol}#{dividend['date']}")
+        candidates = [item for item in evidence
+                      if item["activity"].get("comment") in claim_comments]
+        groups.append((dividend, reference, symbol, candidates))
+        for item in candidates:
+            owners[item["activity"].get("id")].add(group_index)
+    claimed = set()
+    for dividend, reference, symbol, candidates in groups:
         finding = {"source": reference, "activity_ids": [item["activity"].get("id") for item in candidates],
                    "category": "uncertain", "reason": "destination identity not proven",
                    "security": {"symbol": symbol, "isin": dividend["isin"] or None},
@@ -2393,6 +2396,8 @@ def log_historical_dividend_comparison(findings, account_id):
              sum(finding["source"] is not None for finding in findings),
              sum(finding["source"] is None for finding in findings), dict(sorted(counts.items())),
              dict(sorted(failed.items())), dict(sorted(unavailable.items())))
+    return {"to_check": classes["to_check"], "informational": classes["information"],
+            "noise": classes["noise"]}
 
 
 def process_account(config, ibkr_account_id, query_id, ghost_account_name, mapping,
@@ -2522,11 +2527,12 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
              len(activities), skipped_dup, skipped_other)
 
     # Establish identity and deduplicate before checking quantity or schema.
+    report_counts = None
     if config.get("dry_run"):
         findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
                                                  historical_dividend_report_window(xml_text),
                                                  existing_dividend_comments)
-        log_historical_dividend_comparison(findings, ghost_account_id)
+        report_counts = log_historical_dividend_comparison(findings, ghost_account_id)
     div_activities = []
     div_skipped_dup = 0
     candidates = []
@@ -2565,8 +2571,14 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
             if activity:
                 div_activities.append(activity)
 
-    log.info("New dividend activities: %d, duplicates skipped: %d",
-             len(div_activities), div_skipped_dup)
+    if report_counts is None:
+        log.info("New dividend activities: %d, duplicates skipped: %d",
+                 len(div_activities), div_skipped_dup)
+    else:
+        log.info("New dividend activities: %d, duplicates skipped: %d; dividend report: "
+                 "%d to check, %d informational, %d noise",
+                 len(div_activities), div_skipped_dup, report_counts["to_check"],
+                 report_counts["informational"], report_counts["noise"])
 
     activities.extend(div_activities)
 
