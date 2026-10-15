@@ -333,6 +333,8 @@ If the fallback ticker is wrong for Yahoo Finance, add the ISIN to your mapping 
 
 ### Log levels
 
+Lab acceptance needs `LOG_LEVEL=DEBUG` for native `LAB_EVIDENCE` window, preview and cash records.
+
 A clean, fully reconciled run normally emits only `INFO` lines. `WARNING` means *check this*, `ERROR` means *data is not in sync and needs action*:
 
 | Level | Meaning |
