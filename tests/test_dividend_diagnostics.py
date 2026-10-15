@@ -938,6 +938,35 @@ def test_coherent_dividend_action_is_single_and_outside_match_section(monkeypatc
     assert "Action: No action needed" not in block
 
 
+def test_coherent_dividend_action_targets_compared_row_with_legacy_splits(monkeypatch):
+    rows = [destination(quantity=1, unitPrice=1000, currency="JPY"),
+            destination(id="history-400", comment="legacy KO dividend", quantity=100,
+                        unitPrice=4, currency="JPY"),
+            destination(id="history-600", comment="legacy KO dividend 2", quantity=100,
+                        unitPrice=6, currency="JPY")]
+    for row in rows:
+        row["assetProfile"]["currency"] = "JPY"
+    xml = report(divs=div_xml(amount="1000").replace('currency="USD"', 'currency="JPY"'))
+    findings = readable(monkeypatch, rows, xml=xml)
+    before = summary_of(findings)
+    group = next(finding for finding in findings if finding["source"] is not None)
+    assert group["category"] == "differences"
+    assert group["readable"]["label"] == "quantity difference"
+    assert group["match"]["confidence"] == "strong"
+    block = m.format_historical_dividend_finding(group, ACC)
+    assert "Ghostfolio: activity dividend-1 (KO)" in block
+    assert "Keep, quantity differs: activity dividend-1 (KO)" in block
+    assert "Differs: activity history-400 (KO)" in block
+    assert "Differs: activity history-600 (KO)" in block
+    actions = [line.strip() for line in block.splitlines() if line.strip().startswith("Action:")]
+    assert len(actions) == 1
+    assert actions[0].startswith("Action: Compare activity dividend-1 with the IBKR statement")
+    assert "quantity" in actions[0]
+    assert "history-" not in actions[0] and "No action" not in actions[0]
+    assert summary_of(findings) == before
+    assert_plain(block)
+
+
 def test_dividend_readable_report_levels_and_summary_order(monkeypatch, caplog):
     info = [destination(id=f"dividend-{i}", unitPrice=0.125) for i in (1, 2)]
     text = report_text(readable(monkeypatch, info), caplog)
@@ -1112,7 +1141,10 @@ def test_dividend_match_unchanged_strong_block_on_both_sides(monkeypatch, caplog
         assert "IBKR " in block and "quantity 100, gross 25.00 USD, fee 0.00 USD" in block
         assert "Keep: activity dividend-1 (KO), local day 2026-07-15, UTC date 2026-07-15" in block
         assert "Duplicate: activity dividend-2 (KO)" in block
-        assert "Action: Check whether activity dividend-2 repeats" in block
+        if finding is group:
+            assert "Action: No action needed." in block
+        else:
+            assert "Action: Check whether activity dividend-2 repeats" in block
         assert block.count("\n  Action:") == 1 and "Proposed action:" not in block
         assert block.endswith("Nothing was written.")
         assert_plain(block)
@@ -1211,3 +1243,17 @@ def test_coherent_dividend_declared_rate_only_one_action_retained(monkeypatch):
 def test_coherent_dividend_declared_rate_two_units_stay_other(monkeypatch):
     finding = jpy_case(monkeypatch, amount="2542")
     assert finding["readable"]["label"] == "amount difference"
+
+
+@pytest.mark.parametrize("source_quantity,label", [
+    ("1", "Keep"), ("1.0000001", "Keep, quantity differs"),
+])
+def test_coherent_dividend_keep_quantity_has_no_tolerance(monkeypatch, source_quantity, label):
+    xml = report(divs=div_xml()).replace('quantity="100"', f'quantity="{source_quantity}"')
+    finding = readable(monkeypatch, [destination(quantity=1, unitPrice=25)], xml=xml)[0]
+    assert finding["match"]["confidence"] == "strong"
+    block = m.format_historical_dividend_finding(finding, ACC)
+    assert f"    {label}: activity dividend-1 (KO)" in block
+    if label != "Keep":
+        assert "Action: Compare activity dividend-1" in block
+        assert "compare the quantity by hand" in block

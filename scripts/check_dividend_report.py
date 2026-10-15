@@ -14,6 +14,7 @@ Rules:
   float-noise           a run of 6+ zeros or 6+ nines after a decimal point
   action-contradiction  "Action: No action needed." with a proposed action that
                         asks for manual work
+  action-target         an Action names an activity other than the compared rows
   duplicate-row         one Ghostfolio activity is the primary row of two blocks,
                         or is kept in one block and primary of an absent-source /
                         outside-coverage block
@@ -32,7 +33,7 @@ REPR = re.compile(r"\{['\"]|\[['\"{]|\[\]|\{\}|\bNone\b|Decimal\(|"
                   r"(?<![\w.#-])\d+(?:\.\d+)?[eE][+-]?\d+(?![\w.#-])")
 FLOAT_NOISE = re.compile(r"\d\.\d*(?:0{6,}|9{6,})")
 PRIMARY = re.compile(r"^Ghostfolio: activity (\S+)")
-KEEP = re.compile(r"^Keep: activity (\S+)")
+KEEP = re.compile(r"^Keep(?:, quantity differs)?: activity (\S+)")
 CURRENCY = re.compile(r"^Currency: IBKR ([A-Z]{3}), Ghostfolio ([A-Z]{3})\b")
 UNSUPPORTED = "missing or unsupported currency context"
 
@@ -78,11 +79,21 @@ def check_literals(lines):
 
 
 def check_action(block):
-    """Rule action-contradiction for one block."""
+    """Rules action-target and action-contradiction for one block."""
+    compared = {match.group(1) for _, message in block
+                if (match := PRIMARY.match(message.strip()))}
+    violations = []
+    for number, message in block:
+        text = message.strip()
+        if not text.startswith("Action:") or not compared:
+            continue
+        targets = re.findall(r"\bactivity (\S+)", text)
+        if any(target.rstrip(".,;:") not in compared for target in targets):
+            violations.append(("action-target", number,
+                               "action targets a different activity than the compared rows"))
     no_action = any(message.strip().startswith("Action: No action needed") for _, message in block)
     if not no_action:
-        return []
-    violations = []
+        return violations
     for number, message in block:
         text = message.strip()
         if text.startswith("Proposed action:") and \
