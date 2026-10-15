@@ -653,6 +653,31 @@ def dividend_structured_quantity(dividend, quiet=False):
     return common_quantity
 
 
+def dividend_declared_rate(dividend):
+    """Return the finite grossRate of the unique matched payment Re, or None.
+
+    Retained only for a source group with exactly one net-positive action; other
+    shapes carry no declared-rate evidence. Evidence only: cash stays authoritative.
+    """
+    actions = defaultdict(list)
+    keys = DIVIDEND_PAYMENT_KEYS
+    for row in dividend.get("payments", []):
+        actions[tuple(row.get(field, "") for field in keys)].append(row)
+    positive = [key for key, rows in actions.items() if (_dividend_cash_sum(rows) or 0) > 0]
+    if len(positive) != 1:
+        return None
+    key = positive[0]
+    reversals = [row for row in dividend.get("accruals", [])
+                 if all(not row.get(field) or row[field] == value for field, value in zip(keys, key))
+                 and row.get("code") == "Re"
+                 and _dividend_day(row.get("payDate")) == dividend["date"]
+                 and dividend["date"] in (_dividend_day(row.get("date")), _dividend_day(row.get("reportDate")))]
+    if len(reversals) != 1:
+        return None
+    rate = _dividend_decimal(reversals[0].get("grossRate"))
+    return rate if rate is not None and rate > 0 else None
+
+
 def _dividend_day(value):
     parsed = parse_ibkr_datetime(value or "")
     return parsed[:10] if parsed else None
@@ -2020,6 +2045,12 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             if len(comparisons[0]["values"]) == 1:
                 finding.update(comparisons[0]["values"][0])
                 finding["quantity_delta"] = comparisons[0]["quantity_deltas"][0]
+        rate = dividend_declared_rate(dividend)
+        if rate is not None:
+            try:
+                finding["declared_rate"] = rate * unit[1]
+            except DecimalException:
+                pass
         finding["source_quantity"] = quantity
         finding["source_gross"] = source_gross
         finding["source_fee"] = source_fee
@@ -2133,6 +2164,21 @@ def _propose_match(finding, twins):
             "manual_comparison": False}
 
 
+def _declared_rate_rounding(finding):
+    """Complete proven pattern: one row, equal quantity and fee, destination gross equals
+    quantity x declared rate, and the cash gross differs by exactly one minor unit."""
+    rate = finding.get("declared_rate")
+    representations = finding.get("representations", [])
+    if rate is None or len(representations) != 1 or "gross" not in finding:
+        return False
+    row = representations[0]
+    unit = _historical_minor_unit(finding["source_currency"])
+    return (row["kind"] == "single" and not row["component_deltas"] and unit is not None
+            and not any(row["quantity_deltas"]) and not row["fee_delta"]
+            and abs(row["gross_delta"]) == unit
+            and finding["gross"] == finding["source_quantity"] * rate)
+
+
 def classify_dividend_findings(findings):
     """Attach finding["readable"] (class, label, reason, related ids) to every finding.
 
@@ -2177,6 +2223,9 @@ def classify_dividend_findings(findings):
                 result = _readable_set("rounding noise", "noise")
             elif delta == "quantity":
                 result = _readable_set("quantity difference", "to_check")
+            elif delta == "minimal" and _declared_rate_rounding(finding):
+                result = _readable_set("legacy declared-rate rounding", "information",
+                                       "Legacy row uses the declared rate; IBKR paid a rounded cash amount.")
             elif delta == "minimal":
                 result = _readable_set("minimal difference, cause unknown", "to_check")
             else:
@@ -2341,6 +2390,8 @@ def _format_match(finding):
 
 
 def _finding_action(finding):
+    if finding["readable"]["label"] == "legacy declared-rate rounding":
+        return "No action: IBKR rounding accepted."
     match = finding.get("match")
     if match is not None and match["confidence"] != "none":
         if match["action_activity_id"] is None and finding["readable"]["class"] == "to_check":
