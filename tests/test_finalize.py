@@ -24,6 +24,7 @@ def env(monkeypatch):
         monkeypatch.setenv(k, v)
     for k in ("GHOST_ACCESS_TOKEN", "GHOST_ACCOUNT_NAMES", "DRY_RUN", "APPRISE_TIMEOUT"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DRY_RUN", "false")
     return monkeypatch
 
 

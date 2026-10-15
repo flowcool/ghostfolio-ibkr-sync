@@ -65,8 +65,14 @@ DIVIDEND_MATCH_DAYS = 3
 # ---------------------------------------------------------------------------
 
 def dry_run_requested():
-    """True when DRY_RUN is truthy; readable even when the rest of the config is invalid."""
-    return os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on")
+    """Default to simulation; safe to read even after configuration rejection."""
+    return os.environ.get("DRY_RUN", "").strip().lower() not in ("0", "false", "no", "off")
+
+
+def invalid_dry_run_value():
+    """Validate the mode without echoing potentially sensitive ENV contents."""
+    value = os.environ.get("DRY_RUN", "").strip().lower()
+    return value not in ("", "1", "true", "yes", "on", "0", "false", "no", "off")
 
 
 def timezone_preview_reason():
@@ -116,6 +122,8 @@ def load_config():
     legacy) or GHOST_ACCESS_TOKEN (the security token, exchanged for a bearer
     once per run by main).
     """
+    if invalid_dry_run_value():
+        raise RuntimeError("DRY_RUN must be blank or one of 1/true/yes/on/0/false/no/off")
     ghost_token = _env_secret("GHOST_TOKEN")
     access_token = _env_secret("GHOST_ACCESS_TOKEN")
     missing = [k for k in ("IBKR_TOKEN", "IBKR_ACCOUNT_IDS", "IBKR_QUERY_IDS") if not os.environ.get(k)]
@@ -2991,13 +2999,15 @@ def build_failure_summary(outcome, now=None):
 def finalize_run(outcome, code):
     """Send at most one notification for failures or a legacy-token reminder.
 
-    Ordinary warnings remain silent. Dry runs (DRY_RUN read raw, even when
-    configuration is invalid) never notify. Delivery never changes the exit
-    code. A reminder on a failed run is included in its failure notification.
+    Ordinary warnings and valid simulation modes remain silent. Invalid
+    DRY_RUN configuration can notify after rejection. Delivery never changes
+    the exit code. A reminder on a failed run joins its failure notification.
     """
     days = outcome.get("token_expiry_days")
     preview = outcome.get("forced_preview")
-    if (code == 0 and days is None and not preview) or dry_run_requested():
+    invalid_mode_failure = code and invalid_dry_run_value()
+    if ((code == 0 and days is None and not preview)
+            or (dry_run_requested() and not invalid_mode_failure)):
         return
     label = "Failure" if code else ("Forced preview" if preview else "Token expiry")
     try:
@@ -3143,6 +3153,8 @@ def main():
     not a completed run and sends no notification.
     """
     log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
+    if not os.environ.get("DRY_RUN", "").strip():
+        log.warning("DRY_RUN not set: simulation, nothing written")
     outcome = new_run_outcome()
     try:
         code = run_sync(outcome)
