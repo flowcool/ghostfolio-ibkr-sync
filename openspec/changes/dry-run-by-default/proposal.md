@@ -7,8 +7,9 @@ An omitted `DRY_RUN` currently permits financial writes. Make simulation the def
 ## What Changes
 
 - **BREAKING:** absent or blank `DRY_RUN` selects simulation and logs a WARNING on every run.
-- Require an explicit false value for live writes. Reject invalid values. Keep simulation notifications suppressed.
-- Update README, Compose examples, upgrade guidance and changelog before rc.2.
+- Require an explicit false value for live writes. Invalid values fail before any HTTP call; only the configured Apprise Failure notification can follow rejection. No financial writes occur.
+- Notify Failure for failed simulations when Apprise is configured. Successful simulations, token-expiry reminders and previews stay silent.
+- Update README, Compose examples, upgrade guidance and changelog before rc.2. The existing single project release owns publication; no separate release flow is added.
 
 ### Flex scope
 
@@ -30,7 +31,7 @@ None.
 
 ### Modified Capabilities
 
-- `connector-runtime`: Simulation and its user guidance.
+- `connector-runtime`: Simulation, failure notifications and user guidance.
 
 ## Impact
 
