@@ -108,11 +108,12 @@ def test_historical_diagnostic_coherent_legacy_profile_precedence(monkeypatch):
     assert comparison(monkeypatch, [row])[0]["category"] == "uncertain"
 
 
-@pytest.mark.parametrize("currency", ["", "AAA", False])
-def test_historical_diagnostic_coherent_invalid_currency_never_falls_back(monkeypatch, currency):
+@pytest.mark.parametrize("currency,reason", [
+    ("", "missing currency"), ("AAA", "unsupported currency"), (False, "missing currency")])
+def test_coherent_dividend_currency_invalid_never_falls_back(monkeypatch, currency, reason):
     finding = comparison(monkeypatch, [destination(currency=currency)])[0]
     assert finding["category"] == "uncertain"
-    assert finding["reason"] == "missing or unsupported currency context"
+    assert finding["reason"] == reason
 
 
 def test_historical_diagnostic_coherent_unavailable_wire_is_uncertain(monkeypatch):
@@ -333,7 +334,7 @@ def test_representations_currency_provenance_and_denomination(monkeypatch, curre
 def test_representations_unsupported_currency_context_stays_uncertain(monkeypatch):
     finding = representations(monkeypatch, [destination(currency="AAA")])[0]
     assert finding["category"] == "uncertain"
-    assert finding["reason"] == "missing or unsupported currency context"
+    assert finding["reason"] == "unsupported currency"
 
 
 @pytest.mark.parametrize("changes", [
@@ -494,8 +495,8 @@ def test_historical_diagnostic_actionable_anomaly_block_and_failed_check_counts(
     assert "Identity check symbol fail for activity dividend-1: expected KO, found PEP" in text
     assert "Identity check date fail" in text and "UTC date 2026-07-16" in text and "local date" in text
     assert "Ghostfolio: activity dividend-1 (PEP) on 2026-07-16" in text
-    assert "quantity 100, gross 25.00 USD, fee 0 USD" in text and "Nothing was written." in text
-    assert "failed_checks={'date': 1, 'symbol': 1}" in text
+    assert "quantity 100, gross 25.00 USD, fee 0.00 USD" in text and "Nothing was written." in text
+    assert "failed_checks=date:1,symbol:1" in text
 
 
 def test_historical_diagnostic_actionable_outside_window_shows_destination_values(monkeypatch, caplog):
@@ -541,7 +542,7 @@ def test_historical_diagnostic_actionable_levels_and_privacy(monkeypatch, caplog
     caplog.set_level(logging.INFO)
     m.log_historical_dividend_comparison(coherent, ACC)
     assert "Dividend coherent" not in caplog.text  # coherent detail is DEBUG only
-    assert "failed_checks={}" in caplog.text
+    assert "failed_checks=none" in caplog.text
     caplog.clear()
     caplog.set_level(logging.DEBUG)
     m.log_historical_dividend_comparison(coherent, ACC)
@@ -567,7 +568,7 @@ def test_historical_diagnostic_actionable_source_values_survive_failed_identity(
     assert (finding["source_quantity"], finding["source_gross"], finding["source_fee"],
             finding["source_currency"]) == (Decimal(100), Decimal("25.00"), Decimal(0), "USD")
     text = m.format_historical_dividend_finding(finding, ACC)
-    assert "IBKR: quantity 100, gross 25.00 USD, fee 0 USD" in text
+    assert "IBKR: quantity 100, gross 25.00 USD, fee 0.00 USD" in text
 
 
 def test_historical_diagnostic_actionable_destination_before_duplicate_identity_early_return(monkeypatch):
@@ -666,36 +667,56 @@ def currency_finding(monkeypatch, rows, xml=None):
     return comparison(monkeypatch, rows, xml)[0]
 
 
-def test_historical_diagnostic_skip_cause_unsupported_destination_currency(monkeypatch):
+def test_coherent_dividend_currency_conflicting_supported_codes(monkeypatch):
     finding = currency_finding(monkeypatch, [destination(currency="KRW")])
     assert finding["category"] == "uncertain"
-    assert finding["reason"] == "missing or unsupported currency context"
+    assert finding["reason"] == "conflicting currencies"
     assert finding["currency_context"] == {"source": "USD", "destination": ["KRW"], "provenance": ["activity"]}
     assert "Currency: IBKR USD, Ghostfolio KRW (from activity)" in \
         m.format_historical_dividend_finding(finding, ACC)
 
 
-def test_historical_diagnostic_skip_cause_missing_destination_currency(monkeypatch):
+def test_coherent_dividend_currency_missing_destination(monkeypatch):
     row = destination()
     del row["currency"]
     del row["assetProfile"]["currency"]
     finding = currency_finding(monkeypatch, [row])
-    assert finding["reason"] == "missing or unsupported currency context"
+    assert finding["reason"] == "missing currency"
     assert finding["currency_context"]["destination"] == [None]
+    block = m.format_historical_dividend_finding(finding, ACC)
+    assert "Currency: IBKR USD, Ghostfolio unavailable" in block
+    assert "None" not in block
 
 
-def test_historical_diagnostic_skip_cause_conflicting_currency(monkeypatch):
+def test_coherent_dividend_currency_conflicting_currency(monkeypatch):
     finding = currency_finding(monkeypatch, [destination(currency="EUR")])
-    assert finding["reason"] == "missing, conflicting or unsupported source money evidence"
+    assert finding["reason"] == "conflicting currencies"
     assert finding["currency_context"] == {"source": "USD", "destination": ["EUR"], "provenance": ["activity"]}
 
 
-def test_historical_diagnostic_skip_cause_unsupported_source_currency(monkeypatch):
+def test_coherent_dividend_currency_precedes_invalid_numeric_evidence(monkeypatch):
+    finding = currency_finding(monkeypatch, [destination(currency="EUR", unitPrice=None)])
+    assert finding["reason"] == "conflicting currencies"
+    assert finding["currency_context"] == {
+        "source": "USD", "destination": ["EUR"], "provenance": ["activity"]}
+
+
+def test_coherent_dividend_currency_equal_krw_is_supported(monkeypatch):
     finding = currency_finding(monkeypatch, [destination(currency="KRW")],
                                xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))
+    assert finding["category"] == "coherent_single"
+    assert finding["source_currency"] == "KRW"
+    assert finding["gross_delta"] == 0
+
+
+def test_coherent_dividend_currency_unknown_code_is_unsupported(monkeypatch):
+    xml = report(divs=div_xml().replace('currency="USD"', 'currency="AAA"'))
+    finding = currency_finding(monkeypatch, [destination(currency="AAA")], xml=xml)
     assert finding["category"] == "uncertain"
-    assert finding["currency_context"]["source"] == "KRW"
-    assert "Currency: IBKR KRW, Ghostfolio KRW" in m.format_historical_dividend_finding(finding, ACC)
+    assert finding["reason"] == "unsupported currency"
+    block = m.format_historical_dividend_finding(finding, ACC)
+    assert "Dividend information: unsupported currency" in block
+    assert "Currency: IBKR AAA, Ghostfolio AAA" in block
 
 
 def delta_wire(row, price):
@@ -818,7 +839,7 @@ def test_dividend_readable_pairs_other_classes_and_catch_all(monkeypatch):
     assert window["readable"]["class"] == "outside_window"
     krw = readable(monkeypatch, [destination(currency="KRW")],
                    xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))[0]
-    assert krw["readable"]["class"] == "information" and krw["readable"]["label"] == "unsupported currency"
+    assert krw["readable"]["class"] == "coherent"
     missing = readable(monkeypatch, [destination(currency=None, assetProfile={
         "symbol": "KO", "isin": ISIN_KO, "dataSource": "YAHOO"})])[0]
     assert missing["readable"]["class"] == "to_check" and missing["readable"]["reason"]
@@ -857,7 +878,7 @@ def test_dividend_readable_report_quantity_difference_with_two_legacy_twins(monk
     twin = [f for f in findings if f["source"] is None][0]
     block = m.format_historical_dividend_finding(group, ACC)
     assert "Dividend to check: quantity difference" in block
-    assert "IBKR: quantity 100, gross 25.00 USD, fee 0 USD" in block
+    assert "IBKR: quantity 100, gross 25.00 USD, fee 0.00 USD" in block
     assert "Ghostfolio: activity dividend-1 (KO) on 2026-07-15, quantity 101, gross 25.25 USD" in block
     assert "Difference (Ghostfolio minus IBKR): quantity +1" in block
     assert "Probable duplicates" in block and "dividend-2, dividend-3" in block
@@ -878,6 +899,43 @@ def test_dividend_readable_report_plain_decimals_without_exponent(monkeypatch, c
     assert_plain(block)
     assert m._plain(Decimal("1E-7")) == "0.0000001" and m._plain(Decimal("1E+3")) == "1000"
     assert m._plain(0.0000001) == "0.0000001"
+
+
+def test_coherent_dividend_format_quantizes_money_and_keeps_exact_quantity(monkeypatch, caplog):
+    row = destination(quantity=100, unitPrice=0.24995)
+    finding = readable(monkeypatch, [row])[0]
+    block = m.format_historical_dividend_finding(finding, ACC)
+    assert "Ghostfolio: activity dividend-1 (KO) on 2026-07-15, quantity 100, " \
+           "gross 25.00 USD, fee 0.00 USD" in block
+    assert "Difference (Ghostfolio minus IBKR): quantity +0, gross -0.01 USD, fee +0.00 USD" in block
+    assert m._plain_money(Decimal("2.5"), "JPY") == "3"
+    assert m._plain_money(Decimal("-2.5"), "KRW") == "-3"
+
+    failed = comparison(monkeypatch, [destination(isDraft=True)])
+    text = report_text(failed, caplog)
+    assert "categories=uncertain:1 failed_checks=active:1 unavailable_checks=none" in text
+    assert "{" not in text and "}" not in text
+
+
+def test_coherent_dividend_action_is_single_and_outside_match_section(monkeypatch):
+    cases = [
+        readable(monkeypatch, [destination(),
+                              destination(id="dividend-2", comment="legacy KO dividend")]),
+        readable(monkeypatch, [destination(unitPrice=0.2501)]),
+        readable(monkeypatch, []),
+    ]
+    for findings in cases:
+        for finding in findings:
+            block = m.format_historical_dividend_finding(finding, ACC)
+            assert block.count("\n  Action:") == 1
+            assert "Proposed action:" not in block
+            assert block.index("Proposed match") < block.index("\n  Action:")
+
+    quantity = readable(monkeypatch, [destination(quantity=50, unitPrice=0.5)])[0]
+    block = m.format_historical_dividend_finding(quantity, ACC)
+    assert "Dividend to check: quantity difference" in block
+    assert "Action: Compare activity dividend-1 with the IBKR statement" in block
+    assert "Action: No action needed" not in block
 
 
 def test_dividend_readable_report_levels_and_summary_order(monkeypatch, caplog):
@@ -1051,10 +1109,11 @@ def test_dividend_match_unchanged_strong_block_on_both_sides(monkeypatch, caplog
     for finding in (group, legacy):
         block = m.format_historical_dividend_finding(finding, ACC)
         assert "Proposed match (strong: same security, local day, gross and fee)" in block
-        assert "IBKR " in block and "quantity 100, gross 25.00 USD, fee 0 USD" in block
+        assert "IBKR " in block and "quantity 100, gross 25.00 USD, fee 0.00 USD" in block
         assert "Keep: activity dividend-1 (KO), local day 2026-07-15, UTC date 2026-07-15" in block
         assert "Duplicate: activity dividend-2 (KO)" in block
-        assert "Proposed action: Check whether activity dividend-2 repeats" in block
+        assert "Action: Check whether activity dividend-2 repeats" in block
+        assert block.count("\n  Action:") == 1 and "Proposed action:" not in block
         assert block.endswith("Nothing was written.")
         assert_plain(block)
 

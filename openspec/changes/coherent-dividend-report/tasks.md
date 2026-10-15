@@ -6,7 +6,7 @@
 
 ## 2. Coherent plain report
 
-- [ ] 2.1 In `ibkr_to_ghostfolio.py`, define explicit currency minor units including zero-decimal JPY and KRW, separate missing/conflicting/unsupported currency reasons, quantize every displayed monetary value with round-half-away-from-zero, render deterministic plain summaries and `unavailable`, and emit exactly one `Action:` line per block with no `Proposed action:` line. Update `tests/test_dividend_diagnostics.py` and `tests/test_check_dividend_report.py`. Verify with `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'coherent_dividend_currency or coherent_dividend_format or coherent_dividend_action or check_dividend_report'`.
+- [x] 2.1 In `ibkr_to_ghostfolio.py`, define explicit currency minor units including zero-decimal JPY and KRW, separate missing/conflicting/unsupported currency reasons, quantize every displayed monetary value with round-half-away-from-zero, render deterministic plain summaries and `unavailable`, and emit exactly one `Action:` line per block with no `Proposed action:` line. Update `tests/test_dividend_diagnostics.py` and `tests/test_check_dividend_report.py`. Verify with `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'coherent_dividend_currency or coherent_dividend_format or coherent_dividend_action or check_dividend_report'`.
 
 ## 3. Proven one-unit legacy rounding
 
