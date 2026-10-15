@@ -8,7 +8,7 @@ Expose existing financial decisions through native logs. Keep provider validatio
 
 ## Decisions
 
-Use `log.info` with message `RUN_EVIDENCE ` followed by compact JSON. The envelope is `v`, `runId`, `account`, `accountId`, `dry_run`, `kind`, `value`. See the delta for exact fields. JSON escapes embedded newlines and preserves payload numbers. Human-only text was rejected because it loses field identity and precision.
+Use `log.debug` only (Florent 2026-10-15: evidence never at INFO; existing INFO lines unchanged) with message `RUN_EVIDENCE ` followed by compact JSON. The envelope is `v`, `runId`, `account`, `accountId`, `dry_run`, `kind`, `value`. See the delta for exact fields. JSON escapes embedded newlines and preserves payload numbers. Human-only text was rejected because it loses field identity and precision.
 
 `main` creates the invocation ID; `run_sync` supplies account ordinals; `finalize_run` emits the normal terminal event. Missing terminal events invalidate acceptance. Existing notifications remain unchanged.
 

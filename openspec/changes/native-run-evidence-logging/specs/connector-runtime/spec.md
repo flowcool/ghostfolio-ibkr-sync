@@ -2,7 +2,7 @@
 
 ### Requirement: Native run evidence format
 
-The connector SHALL emit evidence through its normal Python and container entry points, without a mounted observer. At INFO and DEBUG, each evidence message SHALL contain the exact prefix `RUN_EVIDENCE ` followed by one compact JSON object on one physical line. The normal logging timestamp and level SHALL precede the message. A consumer SHALL remove only the logging or transport wrapper before parsing the prefix. JSON string escaping SHALL prevent field contents from creating extra log lines. JSON numbers SHALL be finite and retain the numeric value used in the request; display rounding SHALL NOT apply. Booleans SHALL NOT substitute for numbers.
+The connector SHALL emit evidence through its normal Python and container entry points, without a mounted observer. Evidence SHALL be emitted at DEBUG level only (`log.debug`); at INFO or any higher threshold no `RUN_EVIDENCE` line SHALL appear, and every existing INFO line, including the per-activity `[DRY RUN] would import` list, SHALL stay unchanged. Each evidence message SHALL contain the exact prefix `RUN_EVIDENCE ` followed by one compact JSON object on one physical line. The normal logging timestamp and level SHALL precede the message. A consumer SHALL remove only the logging or transport wrapper before parsing the prefix. JSON string escaping SHALL prevent field contents from creating extra log lines. JSON numbers SHALL be finite and retain the numeric value used in the request; display rounding SHALL NOT apply. Booleans SHALL NOT substitute for numbers.
 
 Every object SHALL have these envelope fields:
 
@@ -16,13 +16,13 @@ Every object SHALL have these envelope fields:
 | `kind` | `run`, `window`, `activity`, `import` or `cash` |
 | `value` | Object defined by the corresponding requirement |
 
-Run start SHALL have `kind=run` and `value={"stage":"start"}`. Normal completion SHALL have `value={"stage":"end","exitCode":0}` or the actual existing exit code. Configuration failures SHALL retain a paired start/end when normal finalization occurs. Before valid configuration, `dry_run` SHALL reflect the safe simulation decision. Subsequent events SHALL reflect effective mode after safety guards. An interruption or incomplete log SHALL NOT be represented as success. Acceptance SHALL require one start, one successful end, one known version and a consistent effective mode for the selected account. Evidence at higher log thresholds is not promised; README SHALL state that acceptance needs INFO or DEBUG.
+Run start SHALL have `kind=run` and `value={"stage":"start"}`. Normal completion SHALL have `value={"stage":"end","exitCode":0}` or the actual existing exit code. Configuration failures SHALL retain a paired start/end when normal finalization occurs. Before valid configuration, `dry_run` SHALL reflect the safe simulation decision. Subsequent events SHALL reflect effective mode after safety guards. An interruption or incomplete log SHALL NOT be represented as success. Acceptance SHALL require one start, one successful end, one known version and a consistent effective mode for the selected account. README SHALL state that acceptance needs `LOG_LEVEL=DEBUG` and that the production INFO log is unchanged.
 
 Evidence SHALL use explicit allowed fields. It SHALL NOT dump ENV, configuration, XML, HTTP headers, URLs, credentials, tokens or raw response bodies. Account IDs, comments, symbols and financial values needed by the checks SHALL remain present in private logs. Public examples SHALL use synthetic values. Existing financial guards, requests, selection, exits and notifications SHALL remain unchanged.
 
 #### Scenario: Native invocation and safe framing
 - **WHEN** `python3 -m pytest -q tests/test_run_evidence.py -k native_evidence_format` runs the native main path twice with mocked HTTP, multiple accounts, forced preview, configuration failure, an interrupted run, credential sentinels and newline/quote characters in an activity comment
-- **THEN** events parse as one JSON object per line at INFO and DEBUG; invocation/account identities remain distinct; original field values survive parsing; secrets are absent from evidence; missing end events cannot pass acceptance; request and exit behavior stays unchanged.
+- **THEN** at DEBUG, events parse as one JSON object per line; at INFO, zero `RUN_EVIDENCE` lines appear and the existing INFO lines are byte-identical to the current output; invocation/account identities remain distinct; original field values survive parsing; secrets are absent from evidence; missing end events cannot pass acceptance; request and exit behavior stays unchanged.
 
 ### Requirement: Explicit Flex period evidence
 

@@ -4,7 +4,7 @@ Native container logs omit evidence needed to check an import. A mounted observe
 
 ## What Changes
 
-- Add versioned, single-line JSON evidence at INFO for each run, Flex period, activity, account import result and cash target.
+- Add versioned, single-line JSON evidence at DEBUG only (production INFO log unchanged) for each run, Flex period, activity, account import result and cash target.
 - Include all ten activity payload fields. Distinguish preview, submission and confirmed acceptance.
 - Preserve cash precision and currency. Record real-run outcomes without claiming that an HTTP success proves stored state.
 - Expose provider lookup inputs per candidate. The acceptance consumer retains the provider GET and validates identity, currency and positive finite market price.
