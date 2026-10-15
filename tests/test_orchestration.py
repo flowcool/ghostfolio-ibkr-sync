@@ -1359,6 +1359,7 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
     else:
         assert m.load_config()["dry_run"] is True
     # A synthetic empty portfolio and Flex reports exercise the real pipeline.
+    reads = []
     def response(body):
         result = m.requests.Response()
         result.status_code = 200
@@ -1367,20 +1368,31 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
 
     def get(url, **kwargs):
         if "/api/v1/activities" in url:
-            return response('{"activities": []}')
-        if "/api/v1/account" in url:
-            return response('{"accounts": []}')
+            reads.append("activities")
+            return response('{"activities": [], "count": 0}')
+        if url.endswith("/api/v1/account"):
+            reads.append("accounts")
+            return response('{"accounts": [{"id": "gf-1", "name": "U1"}, '
+                            '{"id": "gf-2", "name": "U2"}]}')
+        if url.endswith(("/api/v1/account/gf-1", "/api/v1/account/gf-2")):
+            reads.append("cash")
+            return response('{"currency": "USD"}')
         if "SendRequest" in url:
+            reads.append("flex-request")
             return response(SEND_OK)
         if "GetStatement" in url:
-            return response(report())
+            reads.append("flex-report")
+            return response(report(trade_xml("DEFAULT-T")))
         pytest.fail("unexpected HTTP read")
     env.setattr(m.requests, "get", get)
     for verb in ("post", "put", "patch", "delete"):
         env.setattr(m.requests, verb, lambda *a, **k: pytest.fail("financial HTTP write"))
     for _ in range(2):
         caplog.clear()
-        # The empty portfolio has no matching account, so both paths fail safely.
-        assert m.main() == 1
+        reads.clear()
+        assert m.main() == (1 if invalid_config else 0)
+        assert reads == ([] if invalid_config else [
+            "activities", "flex-request", "flex-report", "accounts", "cash",
+            "flex-request", "flex-report", "accounts", "cash"])
         warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings.count("DRY_RUN not set: simulation, nothing written") == 1
