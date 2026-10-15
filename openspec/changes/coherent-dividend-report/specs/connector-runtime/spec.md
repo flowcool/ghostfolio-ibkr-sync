@@ -112,13 +112,17 @@ Baseline: `scripts/check_dividend_report.py` currently detects Python representa
 
 ### Requirement: Proposed dividend match
 
-Under DRY_RUN, every dividend item to check that has a candidate SHALL carry one `Proposed match` section. The section SHALL show the IBKR dividend and candidate Ghostfolio rows side by side, each row labelled Keep, Duplicate or Differs. Confidence SHALL be strong for the same security, local day, gross and fee, or weak for a candidate without equal gross and fee. With no candidate it SHALL read `no confident match`. Weak proposals SHALL label no row Keep.
+Under DRY_RUN, every dividend item to check that has a candidate SHALL carry one `Proposed match` section. The section SHALL show the IBKR dividend and candidate Ghostfolio rows side by side, each row labelled `Keep`, `Keep, quantity differs`, `Duplicate` or `Differs`. Confidence SHALL be strong for the same security, local day, gross and fee, or weak for a candidate without equal gross and fee. A strong row selected to keep whose quantity differs from IBKR SHALL read `Keep, quantity differs`, never plain `Keep`. Quantity SHALL have no tolerance. With no candidate the section SHALL read `no confident match`. Weak proposals SHALL label no row `Keep` or `Keep, quantity differs`.
 
-The proposed-match section SHALL NOT contain an action line. The enclosing block's single `Action:` line SHALL name the row and operation, or state that no action is needed. A legacy symbol-comment row that owns the source group SHALL appear once as the compared row; it SHALL NOT receive a second legacy-twin block. The proposal SHALL NOT write, repair or change import selection, classes, categories, summary counts, exits or notifications. Text SHALL follow the report's plain and quantized display rules.
+The proposed-match section SHALL NOT contain an action line. The enclosing block's single `Action:` line SHALL name the row and operation, or state that no action is needed. When the reason compares a Ghostfolio activity, the Action SHALL name that same activity, shown on the block's `Ghostfolio: activity ...` line, never another candidate. A quantity-difference reason SHALL request a manual quantity comparison for that activity and SHALL NOT state that no action is needed. `scripts/check_dividend_report.py` SHALL report a violation if the Action targets another candidate instead of the compared activity. Historical rows that split the same gross SHALL remain visible as `Differs`; their cleanup is out of scope and remains a separate reversible-maintenance idea. A legacy symbol-comment row that owns the source group SHALL appear once as the compared row; it SHALL NOT receive a second legacy-twin block. The proposal SHALL NOT write, repair or change import selection, classes, categories, summary counts, exits or notifications. Text SHALL follow the report's plain and quantized display rules.
 
 #### Scenario: Strong match with a legacy twin
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k 'dividend_match_strong or coherent_dividend_action'` formats a canonical row with a separate free-text legacy twin
 - **THEN** labels and confidence remain correct; the block has one `Action:` line and no `Proposed action:` line.
+
+#### Scenario: Strong quantity difference with historical splits
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py::test_coherent_dividend_action_targets_compared_row_with_legacy_splits tests/test_check_dividend_report.py::test_action_target_differs_from_compared_row tests/test_check_dividend_report.py::test_action_target_matches_compared_row` runs synthetic same-security, same-local-day rows: a compared connector activity with quantity 1, gross 1000 JPY and fee 0 against IBKR quantity 100 with the same gross and fee, plus two historical activities with gross 400 and 600 JPY
+- **THEN** confidence stays strong; the connector row reads `Keep, quantity differs`; both historical rows remain visible as `Differs`; the sole Action names the connector activity and requests manual quantity comparison; the checker accepts this target and rejects an Action that names either historical row instead.
 
 #### Scenario: Weak and absent
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k 'dividend_match_weak or coherent_dividend_action'` runs one-unit, quantity, proximity and no-candidate cases
@@ -130,6 +134,6 @@ The proposed-match section SHALL NOT contain an action line. The enclosing block
 
 #### Scenario: Real read-only acceptance
 - **WHEN** the operator-authorized real dry-run log is read after `python3 scripts/check_dividend_report.py <private-log>` exits 0
-- **THEN** each to-check block has a proposal or no confident match, exactly one action, and no duplicate legacy-identity block.
+- **THEN** each to-check block has a proposal or no confident match, exactly one action targeting the activity compared by its reason, an explicit `Keep, quantity differs` label when applicable, and no duplicate legacy-identity block.
 
-Baseline: current proposed-match tests preserve classification, while the saved 2026-10-15 report shows blocks where `Action: No action needed` conflicts with a manual `Proposed action`.
+Baseline: current proposed-match tests preserve classification. The saved 2026-10-15 report also shows a compared connector row with quantity 1 versus IBKR 100, equal gross/fee and two historical rows splitting that gross: the proposal labels the connector row `Keep`, while the Action targets a historical `Differs` row. This is the gap addressed by task 3.2.
