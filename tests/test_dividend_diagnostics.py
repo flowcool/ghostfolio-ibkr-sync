@@ -1138,3 +1138,76 @@ def test_dividend_match_unchanged_classes_categories_summary_and_exits(monkeypat
     text = report_text(findings, caplog)
     assert "Dividend report: 2 to check, 0 informational, 0 noise" in text
     assert "categories=" in text and "Proposed match" in text
+
+
+def jpy_case(monkeypatch, amount="2541", price="25.4", fee=0, quantity=100, rate="25.4",
+             second_action=False, accrual_quantity=None):
+    divs = div_xml(amount=amount).replace('currency="USD"', 'currency="JPY"')
+    if second_action:
+        divs += div_xml(amount=amount).replace('currency="USD"', 'currency="JPY"').replace(
+            'actionID="A1"', 'actionID="A2"')
+    xml = report(divs=divs)
+    if accrual_quantity is not None:
+        xml = xml.replace('quantity="100"', f'quantity="{accrual_quantity}"')
+    if rate is not None:
+        xml = xml.replace('code="Re"', f'code="Re" grossRate="{rate}"')
+    row = destination(currency="JPY", fee=fee, quantity=quantity, unitPrice=25.4)
+    row["assetProfile"]["currency"] = "JPY"
+    wire = json.dumps({"activities": [row], "count": 1}).replace('"unitPrice": 25.4', f'"unitPrice": {price}', 1)
+    _, _, positions = read(monkeypatch, [row], wire)
+    findings = m.historical_dividend_comparison(m.parse_cash_dividends(xml), ACC, {}, positions)
+    assert len(findings) == 1
+    return findings[0]
+
+
+@pytest.mark.parametrize("amount", ["2541", "2539"])
+def test_coherent_dividend_one_jpy_proven_pattern_both_directions(monkeypatch, amount, caplog):
+    finding = jpy_case(monkeypatch, amount=amount)
+    assert finding["declared_rate"] == Decimal("25.4")
+    assert finding["readable"]["class"] == "information"
+    assert finding["readable"]["label"] == "legacy declared-rate rounding"
+    block = m.format_historical_dividend_finding(finding, ACC)
+    assert "Dividend information: legacy declared-rate rounding" in block
+    assert "Reason: Legacy row uses the declared rate; IBKR paid a rounded cash amount." in block
+    assert block.count("Action:") == 1 and "  Action: No action: IBKR rounding accepted." in block
+    caplog.set_level("INFO")
+    counts = m.log_historical_dividend_comparison([finding], ACC)
+    assert counts == {"to_check": 0, "informational": 1, "noise": 0}
+    assert "legacy declared-rate rounding" in caplog.text
+
+
+@pytest.mark.parametrize("case", [
+    {"rate": None},
+    {"rate": "NaN"},
+    {"rate": "Infinity"},
+    {"rate": "25.5"},
+    {"price": "25.41", "amount": "2540"},
+    {"fee": 1, "amount": "2540"},
+    {"fee": 1},
+    {"quantity": 101},
+    {"accrual_quantity": "101"},
+    {"second_action": True, "amount": "1271", "price": "25.4"},
+], ids=lambda case: ",".join(f"{k}={v}" for k, v in case.items()))
+def test_coherent_dividend_declared_rate_negative_boundaries_stay_to_check(monkeypatch, case):
+    finding = jpy_case(monkeypatch, **case)
+    assert finding["readable"]["class"] == "to_check"
+    assert finding["readable"]["label"] != "legacy declared-rate rounding"
+    block = m.format_historical_dividend_finding(finding, ACC)
+    assert "No action: IBKR rounding accepted." not in block
+
+
+def test_coherent_dividend_declared_rate_unit_negatives_are_minimal_cause_unknown(monkeypatch):
+    for case in ({"rate": None}, {"fee": 1}, {"price": "25.41", "amount": "2540"}):
+        finding = jpy_case(monkeypatch, **case)
+        assert finding["readable"]["label"] == "minimal difference, cause unknown"
+
+
+def test_coherent_dividend_declared_rate_only_one_action_retained(monkeypatch):
+    assert jpy_case(monkeypatch)["declared_rate"] == Decimal("25.4")
+    assert "declared_rate" not in jpy_case(monkeypatch, second_action=True, amount="1270")
+    assert "declared_rate" not in jpy_case(monkeypatch, rate=None)
+
+
+def test_coherent_dividend_declared_rate_two_units_stay_other(monkeypatch):
+    finding = jpy_case(monkeypatch, amount="2542")
+    assert finding["readable"]["label"] == "amount difference"

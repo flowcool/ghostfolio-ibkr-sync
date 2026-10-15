@@ -10,7 +10,7 @@
 
 ## 3. Proven one-unit legacy rounding
 
-- [ ] 3.1 In `ibkr_to_ghostfolio.py`, retain the finite `grossRate` from the unique matched payment `Re` only for a source group with one net-positive action, and classify only the complete equal-quantity/equal-fee pattern whose Ghostfolio gross equals quantity × rate and whose IBKR paid gross differs by one minor unit. Render `legacy declared-rate rounding`, the known cause, and `No action: IBKR rounding accepted.` as visible audit information. Add positive JPY cases in both directions and one-unit fee, missing-rate, multi-action and other negative boundary cases to `tests/test_dividend_diagnostics.py`; require every negative case to remain `minimal difference, cause unknown`. Verify with `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py -k 'coherent_dividend_declared_rate or coherent_dividend_one_jpy'`.
+- [x] 3.1 In `ibkr_to_ghostfolio.py`, retain the finite `grossRate` from the unique matched payment `Re` only for a source group with one net-positive action, and classify only the complete equal-quantity/equal-fee pattern whose Ghostfolio gross equals quantity × rate and whose IBKR paid gross differs by one minor unit. Render `legacy declared-rate rounding`, the known cause, and `No action: IBKR rounding accepted.` as visible audit information. Add positive JPY cases in both directions and one-unit fee, missing-rate, multi-action and other negative boundary cases to `tests/test_dividend_diagnostics.py`; require every negative case to remain `minimal difference, cause unknown`. Verify with `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py -k 'coherent_dividend_declared_rate or coherent_dividend_one_jpy'`.
 
 ## 4. Real report acceptance
 
