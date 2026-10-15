@@ -143,8 +143,12 @@ def test_reminder_delivery_problem_does_not_fail_sync_or_leak(env, caplog, statu
     assert SECRET not in caplog.text
 
 
-def test_dry_run_warns_but_never_notifies(env, caplog):
-    env.setenv("DRY_RUN", "1")
+@pytest.mark.parametrize("mode", [None, "", "  ", "1", "true", "yes", "on"])
+def test_dry_run_modes_expiry_only_warns_without_notification(env, caplog, mode):
+    if mode is None:
+        env.delenv("DRY_RUN")
+    else:
+        env.setenv("DRY_RUN", mode)
     sent = notifications(env)
     assert m.main() == 0 and sent == []
     assert "expires in 3 day(s)" in caplog.text

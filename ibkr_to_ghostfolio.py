@@ -2999,15 +2999,13 @@ def build_failure_summary(outcome, now=None):
 def finalize_run(outcome, code):
     """Send at most one notification for failures or a legacy-token reminder.
 
-    Ordinary warnings and valid simulation modes remain silent. Invalid
-    DRY_RUN configuration can notify after rejection. Delivery never changes
+    Ordinary warnings and successful simulations remain silent. Failures
+    notify in every mode, including invalid configuration. Delivery never changes
     the exit code. A reminder on a failed run joins its failure notification.
     """
     days = outcome.get("token_expiry_days")
     preview = outcome.get("forced_preview")
-    invalid_mode_failure = code and invalid_dry_run_value()
-    if ((code == 0 and days is None and not preview)
-            or (dry_run_requested() and not invalid_mode_failure)):
+    if code == 0 and (dry_run_requested() or (days is None and not preview)):
         return
     label = "Failure" if code else ("Forced preview" if preview else "Token expiry")
     try:
