@@ -2,16 +2,17 @@
 
 ## Why
 
-The current dividend dry-run report contradicts its import summary and can describe one activity twice. It also exposes Python formatting and misclassifies known currency and one-yen cases, so counts alone cannot make the report safe to use.
+The dividend dry-run report contradicts its import summary and can describe one activity twice. It also exposes Python formatting and misclassifies known currency and one-yen cases, so counts alone cannot make the report safe to use.
 
 ## What Changes
 
 - Link the dividend import summary to the report outcome.
 - Treat a matching legacy `dividend#<symbol>#<date>` comment as the same report identity and emit one block.
-- Emit one coherent action per block. Remove raw Python representations and round monetary output to the currency minor unit.
+- Emit one coherent action per block. Its target is the activity compared by the reason, never another candidate. Label a strong match with a different quantity `Keep, quantity differs`. Keep historical split rows visible as `Differs`.
+- Remove raw Python representations and round monetary output to the currency minor unit.
 - Separate missing, conflicting and unsupported currency states. Support KRW as a zero-decimal currency.
 - Recognize a legacy row whose gross equals quantity times the IBKR declared rate while paid cash differs by one minor unit. Report the known rounding cause as visible audit information, with no action because the IBKR rounding is accepted.
-- Require the real dry-run log to pass `scripts/check_dividend_report.py` with zero violations, then require a human reading of every block.
+- Require `scripts/check_dividend_report.py` to reject an Action aimed at another candidate. Require the real dry-run log to pass the checker with zero violations, then require a human reading of every block.
 
 ## Flex Record Scope
 
@@ -46,3 +47,4 @@ Affected runtime areas are historical dividend identity, classification, formatt
 - No account-scoped identity v2.
 - No `dividend-proximity-amount-evidence` behavior.
 - No automatic update or deletion of Ghostfolio activities.
+- No historical duplicate cleanup. Reversible maintenance remains a separate idea.
