@@ -1104,6 +1104,30 @@ def test_historical_diagnostic_coherent_dry_run_before_dedup_zero_writes(monkeyp
         assert "Difference (Ghostfolio minus IBKR)" in caplog.text and "dividend-1" in caplog.text
 
 
+def test_coherent_dividend_import_summary_links_dry_run_report_counts(monkeypatch, caplog):
+    from test_dividend_diagnostics import destination, read
+
+    ids, comments, pos = read(monkeypatch, [destination(unitPrice=0.2501)])
+    monkeypatch.setattr(m, "fetch_flex_report", lambda *args: report(divs=div_xml()))
+    monkeypatch.setattr(m, "ghost_find_account_id", lambda *args: ACC)
+    monkeypatch.setattr(m, "ghost_update_cash_balance", lambda *args: True)
+    caplog.set_level(logging.INFO)
+    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {},
+                             ids, comments, pos) == ({}, True)
+    assert "Dividend report: 1 to check, 0 informational, 0 noise" in caplog.text
+    assert ("New dividend activities: 0, duplicates skipped: 1; dividend report: "
+            "1 to check, 0 informational, 0 noise") in caplog.text
+
+
+def test_coherent_dividend_import_summary_live_line_stays_unchanged(monkeypatch, caplog):
+    w = World(monkeypatch, report(divs=div_xml()))
+    caplog.set_level(logging.INFO)
+    assert w.run()[1] is True
+    lines = [record.getMessage() for record in caplog.records
+             if record.getMessage().startswith("New dividend activities:")]
+    assert lines == ["New dividend activities: 1, duplicates skipped: 0"]
+
+
 def test_historical_diagnostic_coherent_live_pipeline_unchanged(monkeypatch):
     monkeypatch.setattr(m, "historical_dividend_comparison", lambda *args: pytest.fail("live diagnostic"))
     w = World(monkeypatch, report(divs=div_xml()))
