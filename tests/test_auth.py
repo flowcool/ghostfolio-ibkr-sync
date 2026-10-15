@@ -257,9 +257,19 @@ def test_legacy_mode_never_logs_in_and_uses_the_token_as_bearer(env):
     assert events == [("existing", "legacy-jwt"), ("account", "U1", "legacy-jwt")]
 
 
-def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(env):
+@pytest.mark.parametrize("mode", [None, "", "  ", "1", "true", "yes", "on", "false"])
+@pytest.mark.parametrize("failed", [False, True])
+def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, failed):
     """Real helpers end to end, only the HTTP layer and the IBKR fetch faked."""
-    access_env(env, dry_run=True)
+    access_env(env)
+    if mode is None:
+        env.delenv("DRY_RUN")
+    else:
+        env.setenv("DRY_RUN", mode)
+    env.setenv("GHOST_PLATFORM_ID", "synthetic-platform")
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    sent = []
+    env.setattr(m, "send_notification", lambda settings, title, body: sent.append((title, body)) or "sent")
     reads, writes, logins = [], [], []
 
     class R:
@@ -268,26 +278,30 @@ def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(en
         def json(self):
             return self._body
         def raise_for_status(self):
-            pass
+            if self.status_code >= 400:
+                raise m.requests.HTTPError("synthetic read failure")
 
     def post(url, **kw):
         if url.endswith("/api/v1/auth/anonymous"):
             logins.append(kw["json"])
             return R({"authToken": "fresh-bearer"}, 201)
-        writes.append(("POST", url))
-        return R({}, 201)
+        assert url.endswith("/api/v1/import")
+        writes.append(("POST", url, kw["json"]))
+        return R({"activities": [{**a, "id": f"created-{i}",
+                                "assetProfile": {"symbol": a["symbol"], "dataSource": a["dataSource"]}}
+                               for i, a in enumerate(kw["json"]["activities"])]}, 201)
 
     def get(url, headers=None, **kw):
         reads.append((url, headers["Authorization"]))
         if url.endswith("/api/v1/activities"):
-            return R({"activities": [], "count": 0})
+            return R({"activities": [], "count": 0}, 503 if failed else 200)
         if url.endswith("/api/v1/account/gf-1"):
             return R({"id": "gf-1", "name": "U1", "currency": "USD"})
         return R([{"id": "gf-1", "name": "U1"}])
 
     env.setattr(m.requests, "post", post)
     env.setattr(m.requests, "get", get)
-    env.setattr(m.requests, "put", lambda url, **kw: writes.append(("PUT", url)))
+    env.setattr(m.requests, "put", lambda url, **kw: writes.append(("PUT", url, kw["json"])) or R({}))
     env.setattr(m.requests, "delete", lambda url, **kw: writes.append(("DELETE", url)))
     trade = ('<Trade tradeID="T1" symbol="KO" isin="US1912161007" assetCategory="STK" buySell="BUY" '
              'quantity="10" tradePrice="60" ibCommission="-1" currency="USD" dateTime="20260801;100000"/>')
@@ -301,7 +315,16 @@ def test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing(en
            "</FlexStatement></FlexStatements></FlexQueryResponse>")
     env.setattr(m, "fetch_flex_report", lambda *a, **k: xml)
 
-    assert m.main() == 0
+    assert m.main() == int(failed)
     assert logins == [{"accessToken": SECRET}]
-    assert writes == []
+    if mode == "false" and not failed:
+        assert [verb for verb, _, _ in writes] == ["POST", "PUT"]
+        assert writes[0][2]["activities"][0]["type"] == "BUY"
+        assert writes[1][2]["balance"] == 100
+        assert writes[1][2]["platformId"] == "synthetic-platform"
+    else:
+        assert writes == []
+    assert len(sent) == int(failed)
+    if failed:
+        assert sent[0][0] == m.NOTIFY_TITLE
     assert reads and all(auth == "Bearer fresh-bearer" for _, auth in reads)

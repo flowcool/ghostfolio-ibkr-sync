@@ -93,19 +93,20 @@ def test_invalid_settings_warn_send_nothing_and_keep_the_exit_code(env, caplog):
     assert URL_SECRET not in caplog.text
 
 
-def test_failed_dry_run_sends_nothing(env):
+def test_failed_dry_run_notifies_once(env):
     env.setenv("DRY_RUN", "1")
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U111": ({}, False)})
-    assert m.main() == 1 and sent == []
+    assert m.main() == 1 and len(sent) == 1
+    assert sent[0]["title"] == m.NOTIFY_TITLE
 
 
-def test_raw_dry_run_suppresses_before_configuration_validation(env):
+def test_dry_run_configuration_failure_notifies_once(env):
     env.setenv("DRY_RUN", " Yes ")
     env.delenv("IBKR_TOKEN")
     sent = spy_send(env)
-    env.setattr(m, "load_notification_config", lambda: pytest.fail("settings must not be read"))
-    assert m.main() == 1 and sent == []
+    assert m.main() == 1 and len(sent) == 1
+    assert "config: invalid_configuration" in sent[0]["body"]
 
 
 @pytest.mark.parametrize("exc", [KeyboardInterrupt, SystemExit])
@@ -297,7 +298,8 @@ def test_historical_diagnostic_read_failure_keeps_exit_and_notification_contract
         m.requests.ConnectionError("synthetic activity GET failure")))
     env.setattr(m, "process_account", lambda *a: pytest.fail("account after failed reader"))
     assert m.main() == 1
-    assert len(sent) == (0 if dry else 1)
+    assert len(sent) == 1
+    assert sent[0]["title"] == m.NOTIFY_TITLE
 
 
 # --- TZ prerequisite: whole-run forced preview ---------------------------------
@@ -363,3 +365,54 @@ def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, 
     caplog.set_level(logging.INFO)
     assert m.main() == 0 and sent == []
     assert "skipped by proximity" in caplog.text and "failed_checks=" in caplog.text
+
+
+@pytest.mark.parametrize("mode", [None, "", "  ", "1", "true", "yes", "on", " YES ", "false", "invalid"])
+@pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("tz", ["UTC", None, "Not/AZone"])
+def test_dry_run_modes_notification_compatibility(env, mode, failed, configured, tz):
+    if mode is None:
+        env.delenv("DRY_RUN")
+    else:
+        env.setenv("DRY_RUN", mode)
+    if tz is None:
+        env.delenv("TZ")
+    else:
+        env.setenv("TZ", tz)
+    if not configured:
+        env.delenv("APPRISE_URLS")
+    # Expiry and forced preview must share a failure dispatch or stay silent
+    # during successful simulation.
+    import base64
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": int(time.time()) + 86400}).encode()).decode()
+    env.setenv("GHOST_TOKEN", f"header.{payload}.signature")
+    calls = accounts(env, {**ALL_OK, "U111": ({}, not failed)})
+    sent = spy_send(env)
+    invalid = mode == "invalid"
+    assert m.main() == int(failed or invalid)
+    assert calls == ([] if invalid else ["U111", "U222", "U333"])
+    notify = configured and (failed or invalid or mode == "false")
+    assert len(sent) == int(notify)
+    if sent:
+        title = m.NOTIFY_TITLE if failed or invalid else (
+            m.TOKEN_EXPIRY_NOTIFY_TITLE if tz == "UTC" else m.FORCED_PREVIEW_NOTIFY_TITLE)
+        assert sent[0]["title"] == title
+        if not invalid:
+            assert "ghost_auth: token_expiring" in sent[0]["body"]
+        if tz != "UTC" and not invalid:
+            assert "forced DRY_RUN" in sent[0]["body"]
+
+
+@pytest.mark.parametrize("mode", [None, "", "true", "invalid"])
+@pytest.mark.parametrize("status", ["timeout", "failed", "unavailable", RuntimeError(URL_SECRET)])
+def test_dry_run_modes_delivery_failure_keeps_exit(env, caplog, mode, status):
+    if mode is None:
+        env.delenv("DRY_RUN")
+    else:
+        env.setenv("DRY_RUN", mode)
+    calls = accounts(env, {**ALL_OK, "U111": ({}, False)})
+    sent = spy_send(env, status)
+    assert m.main() == 1 and len(sent) == 1
+    assert calls == ([] if mode == "invalid" else ["U111", "U222", "U333"])
+    assert URL_SECRET not in caplog.text
