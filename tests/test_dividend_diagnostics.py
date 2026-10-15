@@ -694,6 +694,13 @@ def test_coherent_dividend_currency_conflicting_currency(monkeypatch):
     assert finding["currency_context"] == {"source": "USD", "destination": ["EUR"], "provenance": ["activity"]}
 
 
+def test_coherent_dividend_currency_precedes_invalid_numeric_evidence(monkeypatch):
+    finding = currency_finding(monkeypatch, [destination(currency="EUR", unitPrice=None)])
+    assert finding["reason"] == "conflicting currencies"
+    assert finding["currency_context"] == {
+        "source": "USD", "destination": ["EUR"], "provenance": ["activity"]}
+
+
 def test_coherent_dividend_currency_equal_krw_is_supported(monkeypatch):
     finding = currency_finding(monkeypatch, [destination(currency="KRW")],
                                xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))

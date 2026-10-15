@@ -1944,6 +1944,11 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
         if reason:
             finding["reason"] = reason
             continue
+        currency_reason = _historical_currency_reason(dividend, candidates)
+        if currency_reason:
+            finding["reason"] = currency_reason
+            finding["currency_context"] = _historical_currency_context(dividend, candidates)
+            continue
         decoded = {}
         for item in candidates:
             values, reason = _historical_values(item)
@@ -1955,16 +1960,11 @@ def historical_dividend_comparison(dividends, account_id, mapping, positions, re
             if reason in ("missing currency", "unsupported currency"):
                 finding["currency_context"] = _historical_currency_context(dividend, candidates)
             continue
-        currency_reason = _historical_currency_reason(dividend, candidates)
         unit = _historical_currency(dividend.get("currency"))
         gross = _dividend_cash_sum(dividend["payments"])
         tax_rows = [row for row in dividend.get("cash_rows", [])
                     if row.get("type") == WITHHOLDING_CASH_TYPE]
         tax = _dividend_cash_sum(tax_rows)
-        if currency_reason:
-            finding["reason"] = currency_reason
-            finding["currency_context"] = _historical_currency_context(dividend, candidates)
-            continue
         if gross is None or tax is None or gross <= 0:
             finding["reason"] = "missing or invalid source money evidence"
             continue
