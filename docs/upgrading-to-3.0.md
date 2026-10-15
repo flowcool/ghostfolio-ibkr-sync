@@ -3,7 +3,8 @@
 3.0 is a major release. An existing 2.x setup keeps running only after four things are in
 place: a valid `TZ`, a time-zone suffix and extra dividend fields in the Flex query, and
 distinct Ghostfolio targets whose currency equals the IBKR base currency. Without them the
-sync stops writing or fails accounts after you pull `:latest`. Do the steps below first.
+sync stops writing or fails accounts after you pull `:latest`. Starting with rc.2,
+writes also require an explicit false `DRY_RUN`. Do the steps below first.
 
 Before you start:
 
@@ -16,8 +17,32 @@ Before you start:
 - Run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` after each change below, using the
   [README preview command](../README.md#dry-run-first) (no `CRON`), or
   [one manual run in your scheduled container](../README.md#run-once-by-hand-in-a-scheduled-container).
-- Pause scheduled imports only if the container runs live (`DRY_RUN` unset or false). With `DRY_RUN`
-  already true, nothing is written, so keep the schedule running.
+- Pause scheduled imports if the container runs live. On rc.2 or later, live
+  mode requires explicit false `DRY_RUN`. Older images can also write when it
+  is unset. With `DRY_RUN=true`, nothing is written, so keep the schedule running.
+
+## Simulation default (breaking since v3.0.0-rc.2)
+
+Absent, empty or whitespace-only `DRY_RUN` now selects simulation. Each
+invocation logs WARNING `DRY_RUN not set: simulation, nothing written`, even
+if configuration fails. After trimming spaces and ignoring case, `1/true/yes/on`
+simulates. Only `0/false/no/off` requests live writes. Other values exit 1 before
+any HTTP call. After rejection, only configured Apprise Failure delivery may
+follow; no IBKR/Ghostfolio HTTP calls or financial writes occur.
+
+Simulation still logs in, reads data and runs the preview. It writes no activity,
+cash or platform data. Failed simulations send one configured Failure
+notification, including default/blank/truthy modes and invalid `DRY_RUN`.
+Successful simulations send nothing, including expiry-only reminders and
+previews. Failure with an expiry reminder or forced preview uses one summary.
+Without configured Apprise, nothing is sent. Delivery does not change exit status.
+
+Keep `DRY_RUN=true` while reviewing the preview. Then set `DRY_RUN=false` and
+recreate the container to permit writes. Keep valid `TZ`; all other safety guards
+still apply. Removing `DRY_RUN` no longer permits writes. For rollback, restore
+the recorded image digest with retained ENV and mounts as described below.
+Older images can interpret absent `DRY_RUN` as live mode. Set `DRY_RUN=true`
+explicitly before a rollback preview.
 
 ## Is my Flex query already compliant?
 
@@ -38,7 +63,8 @@ the container. The image sets no default.
 **Symptom if not done.** Nothing is imported, and the log shows
 `TZ is missing: whole run forced to DRY_RUN, no Ghostfolio writes` (or
 `TZ is not a valid IANA timezone: ...`). With `APPRISE_URLS` set, one notification names the reason,
-even when every account succeeds.
+even when every account succeeds, if `DRY_RUN` is explicitly false. Successful
+default/blank/truthy simulations stay silent; failed simulations send Failure.
 
 ## 2. Add the time zone to the Flex query times (breaking)
 
@@ -158,7 +184,8 @@ Trade <id> cannot be converted safely; excluded before holdings checks
 Use this on an existing scheduled Compose install to test `v3.0.0-rc.N` before the stable release.
 With `DRY_RUN` true, the candidate writes nothing.
 
-1. Note the current `image:` line of the service. It is your rollback.
+1. Record the installed image digest using the [Docker image guide](../README.md#docker-image).
+   Save that exact reference with the ENV and mounts for rollback.
 2. Set the image to the candidate tag and `DRY_RUN` to `true`, then redeploy:
 
    ```yaml
@@ -180,8 +207,9 @@ With `DRY_RUN` true, the candidate writes nothing.
 
 4. Read the log with the [Verify](#verify) list. The first start-up line names the candidate:
    `ghostfolio-ibkr-sync version v3.0.0-rc.N`.
-5. Roll back: restore the previous `image:` line and the previous `DRY_RUN` value, then run
-   `docker compose up -d`. If you changed the Flex query for 3.0, see the order warning in step 2.
+5. For rollback, select the saved image digest with the retained ENV and mounts, then run
+   `docker compose up -d`. Set `DRY_RUN=true` explicitly for a rollback preview;
+   older images can write when the variable is absent. If you changed the Flex query for 3.0, see the order warning in step 2.
 6. After the stable release, return to `:latest` (or pin `:3.0.0`). A pinned `-rc.N` tag gets no
    automatic update, so change it yourself.
 
@@ -194,11 +222,12 @@ Expect:
 - none of the `ERROR` and `WARNING` lines of steps 1 to 4 and 6;
 - a dividend report you can read.
 
-Then remove `DRY_RUN` (unless you only test a candidate) and resume the schedule if you paused it.
+After review, set `DRY_RUN=false` to permit writes and resume the schedule if you paused it.
+Keep `DRY_RUN=true` if you only test a candidate.
 
 ## Roll back
 
-Pin the previous image tag (or the digest you recorded) and recreate the container with the same ENV
+Pin the previous image digest you recorded and recreate the container with the same ENV
 and mounts. This restores the runtime only: activities, cash balances and platform updates already
 written stay. The extra Flex fields can remain. Images up to 2.5.0 do not parse the time-zone suffix, so
 also set the Flex query time format back to **HHmmss** (no TimeZone) before running them.

@@ -186,6 +186,25 @@ Runtime rollback does not restore financial data or undo written activities.
 Historical repairs require separate operator review; this upgrade does not
 certify previously imported dividend quantities.
 
+### Simulation default since v3.0.0-rc.2
+
+Absent or blank `DRY_RUN` selects simulation. Each invocation logs WARNING
+`DRY_RUN not set: simulation, nothing written`, even if configuration fails.
+After trimming spaces and ignoring case, `1/true/yes/on` simulates; only
+`0/false/no/off` requests writes. Any other value exits 1 before HTTP. Only
+configured Apprise Failure delivery may follow rejection, with no IBKR/Ghostfolio
+HTTP calls or financial writes. Simulation keeps login, reads and preview,
+without activity, cash or platform writes.
+
+Failed simulations send one configured Failure notification. Successful
+simulations, including expiry-only reminders and previews, send nothing.
+Failure combined with an expiry reminder or forced preview sends one summary.
+Without configured Apprise, nothing is sent. Delivery does not change exit status.
+Set `DRY_RUN=true` for the first run. After review, set `DRY_RUN=false` and keep
+valid `TZ` to permit writes. Other safety guards still apply.
+For rollback, restore the saved image digest with the retained ENV and mounts;
+this does not undo financial writes.
+
 ### Activate timezone-aware dividend diagnostics
 
 1. Back up Ghostfolio and record the current connector image digest. Keep ENV,
@@ -200,8 +219,9 @@ certify previously imported dividend quantities.
    Flex abbreviations such as `EST` and `EDT` are provenance, not the IANA `TZ`.
    Missing or invalid `TZ` forces the whole run into `DRY_RUN` before accounts
    run. One WARNING names the reason. The final notification also names it
-   when Apprise is configured, even if every account succeeds. A preview chosen
-   with `DRY_RUN=1` and valid `TZ` sends no notification.
+   when Apprise is configured and `DRY_RUN` is explicitly false, even if every
+   account succeeds. Successful default/blank/truthy simulations send nothing,
+   including expiry-only reminders and previews. Failed simulations send Failure.
 4. Upgrade the image and run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` and no `CRON`,
    using the [README preview command](../README.md#dry-run-first). Read the
    container logs. Verify no forced-preview WARNING or account suffix failure.
@@ -216,7 +236,7 @@ certify previously imported dividend quantities.
    quantities and financial amounts. Capture needed evidence before removing
    the one-off container. Do not publish raw logs or attach them to public issues.
    The diagnostic creates no persistent report and does not repair activities.
-6. After reviewing the preview, remove `DRY_RUN` or set it to `0`, keep valid `TZ`
+6. After reviewing the preview, set `DRY_RUN=false`, keep valid `TZ`
    and the qualified Flex format, then resume the schedule. A missing or invalid
    suffix still fails only its account and prevents its financial writes; the
    whole run exits 1 through normal failure handling.
