@@ -19,17 +19,25 @@ Evidence: README “Running”; `python -m pytest -q tests/test_auth.py tests/te
 
 ### Requirement: Simulation
 
-Truthy DRY_RUN (1/true/yes/on) SHALL preview without financial writes/notifications; access-token login and reads remain. Absent, empty or any other DRY_RUN value SHALL write for real; no Compose file sets a default. Siblings simulate when DRY_RUN is absent.
+Absent or blank `DRY_RUN` SHALL simulate and emit WARNING `DRY_RUN not set: simulation, nothing written` on every invocation, including configuration failure. After trimming and lowercasing, `1/true/yes/on` SHALL simulate; only `0/false/no/off` SHALL request live writes. Any other value SHALL fail configuration with exit 1 before any HTTP call. After rejection, only the configured Apprise Failure notification SHALL be permitted; no IBKR/Ghostfolio HTTP calls or financial writes SHALL occur. Other safety guards SHALL still apply.
 
-#### Scenario: Preview
-- **WHEN** DRY_RUN is enabled
-- **THEN** login/reads occur without financial writes/notifications.
+Simulation SHALL run login, reads and the existing preview pipeline without activity, cash or platform writes. Failed simulations SHALL send the configured Failure notification. Successful simulations, token-expiry reminders and previews SHALL send no notification. Existing TZ-forced notifications SHALL remain for explicit live mode.
+
+README configuration, Docker/Compose examples, setup, 3.0 upgrade note and changelog SHALL explain this breaking rc.2 change and explicit false opt-in. Examples SHALL select simulation explicitly; instructions SHALL explain changing to false after review.
+
+Baseline replaced: README configuration; `test_load_config_dry_run_truthy_values`. Commands below target tests to add during implementation; they are not current evidence.
 
 #### Scenario: Live default
-- **WHEN** DRY_RUN is empty or not a truthy value
-- **THEN** the configuration selects live writes.
+- **WHEN** `python3 -m pytest -q tests/test_orchestration.py -k dry_run_default` tests absent, empty and whitespace values across two invocations and invalid configuration
+- **THEN** the former live default becomes simulation; each invocation emits exactly one specified WARNING.
 
-Evidence: `python -m pytest -q tests/test_auth.py::test_access_mode_dry_run_logs_in_reads_with_the_bearer_and_writes_nothing tests/test_finalize.py::test_failed_dry_run_sends_nothing tests/test_orchestration.py::test_load_config_dry_run_truthy_values`; README “Configuration” (`DRY_RUN` row).
+#### Scenario: Accepted and invalid values
+- **WHEN** `python3 -m pytest -q tests/test_orchestration.py -k dry_run_values` tests all eight values, mixed case, surrounding spaces and invalid input with mocked HTTP and configured/disabled Apprise
+- **THEN** only false values request writes; invalid input exits 1 before any HTTP call, makes no IBKR/Ghostfolio calls or financial writes, and then dispatches one Failure notification only when Apprise is configured.
+
+#### Scenario: Preview
+- **WHEN** `python3 -m pytest -q tests/test_auth.py -k dry_run_modes` exercises default, true and explicit false with mocked HTTP
+- **THEN** simulation retains login/reads and preview but sends no financial POST/PUT; false permits activity, cash and platform writes with valid prerequisites.
 
 ### Requirement: Flex selection and conversion
 
@@ -101,17 +109,21 @@ Evidence: README “How it works”; `python -m pytest -q tests/test_orchestrati
 
 ### Requirement: Notifications
 
-Configured notifications SHALL send at most one failure/legacy-expiry/forced-preview summary per completed run, without affecting exit status. A run forced into `DRY_RUN` by missing or invalid IANA `TZ` SHALL send that summary even when every account succeeds, and the summary SHALL name the reason. Success/warnings without expiry, operator-chosen simulation and interruptions SHALL send nothing.
+Configured notifications SHALL send at most one Failure, legacy-expiry or forced-preview summary per completed run, without affecting exit status. Failure SHALL notify even for default or truthy simulation and invalid `DRY_RUN`. A failure with an expiry reminder or forced preview SHALL use one Failure summary, never a second dispatch. Without configured Apprise, no notification SHALL be sent.
+
+Successful simulation, including default/blank/truthy `DRY_RUN`, SHALL send no success, expiry-only or preview notification. With explicit false `DRY_RUN`, missing or invalid IANA `TZ` SHALL retain the forced-preview summary even when every account succeeds, and the summary SHALL name the reason. Success/warnings without expiry and interruptions SHALL send nothing.
 
 #### Scenario: Consolidated outcome
-- **WHEN** accounts finish with failure/expiry
-- **THEN** fixed-code summaries omit identifiers/amounts/secrets; reminders can repeat.
+- **WHEN** `python3 -m pytest -q tests/test_finalize.py tests/test_token_expiry.py -k 'test_several_failed_accounts_make_one_dispatch_after_every_account_ran or test_summary_carries_no_secret_identifier_host_or_amount or test_notification_problems_keep_exit_code_and_account_processing or test_success_notifies_once_after_both_accounts_and_preserves_exit or test_reminder_is_run_local_and_multiple_runs_can_repeat_it'` runs with explicit live mode
+- **THEN** fixed-code summaries omit identifiers, amounts and secrets; delivery does not affect exit status, and reminders can repeat on later runs.
 
 #### Scenario: Forced preview notifies
-- **WHEN** `.venv/bin/python -m pytest -q tests/test_finalize.py -k 'historical_diagnostic_preflight'` runs with absent/invalid `TZ`, valid `TZ`, and operator-set `DRY_RUN`
-- **THEN** the forced preview sends one summary naming the reason even on success; a live run without failure and an operator-chosen `DRY_RUN` send nothing.
+- **WHEN** `python3 -m pytest -q tests/test_finalize.py -k historical_diagnostic_preflight` runs with absent/invalid `TZ`, valid `TZ`, and default/truthy/explicit-false `DRY_RUN`
+- **THEN** explicit false with invalid TZ sends one summary naming the forced-preview reason even on success; successful default/truthy simulations stay silent; failures send Failure once.
 
-Evidence: `python -m pytest -q tests/test_finalize.py tests/test_token_expiry.py -k 'test_several_failed_accounts_make_one_dispatch_after_every_account_ran or test_summary_carries_no_secret_identifier_host_or_amount or test_notification_problems_keep_exit_code_and_account_processing or test_success_notifies_once_after_both_accounts_and_preserves_exit or test_reminder_is_run_local_and_multiple_runs_can_repeat_it or historical_diagnostic_preflight'`.
+#### Scenario: Notification compatibility
+- **WHEN** `python3 -m pytest -q tests/test_finalize.py -k dry_run_modes` exercises default, blank, all truthy values, explicit false and invalid input, with success, failure, expiry reminders, previews, TZ forcing, configured/disabled Apprise and delivery failure
+- **THEN** failed runs send one Failure notification when configured, including default/truthy simulation and invalid input; successful simulations, expiry-only reminders and previews send nothing; explicit false retains existing notification behavior; delivery never changes exit status.
 
 ### Requirement: Current operational limits
 
