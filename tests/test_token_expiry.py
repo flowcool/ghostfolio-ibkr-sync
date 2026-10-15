@@ -32,6 +32,7 @@ def env(monkeypatch):
     monkeypatch.setattr(m, "process_account", lambda *args: ({}, True))
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: pytest.fail("no real HTTP"))
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("no real HTTP"))
+    monkeypatch.setenv("DRY_RUN", "false")
     return monkeypatch
 
 

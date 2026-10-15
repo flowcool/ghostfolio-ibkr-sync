@@ -288,7 +288,7 @@ def test_script_read_from_stdin_cannot_spawn_a_worker(monkeypatch):
 
 def test_failed_run_piped_on_stdin_reports_spawn_failed(tmp_path):
     env = {"PATH": "/usr/bin:/bin", "IBKR_ACCOUNT_IDS": "U1", "IBKR_QUERY_IDS": "q",
-           "GHOST_TOKEN": "g", "GHOST_HOST": "http://g", "MAPPING_FILE": "",
+           "GHOST_TOKEN": "g", "GHOST_HOST": "http://g", "MAPPING_FILE": "", "DRY_RUN": "false",
            "APPRISE_URLS": json.dumps(URLS)}                  # IBKR_TOKEN missing -> exit 1
     with open(m.__file__, "rb") as script:
         proc = subprocess.run([sys.executable, "-"], stdin=script, capture_output=True,

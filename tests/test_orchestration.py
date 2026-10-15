@@ -341,6 +341,7 @@ def env(monkeypatch):
     for k in ("GHOST_ACCOUNT_NAMES", "DRY_RUN", "GHOST_PLATFORM_ID",
               "GHOST_ACCESS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DRY_RUN", "false")
     return monkeypatch
 
 
@@ -490,11 +491,48 @@ def test_cash_target_duplicate_check_accepts_distinct_targets(env):
     assert m.load_config()["account_names"] == []
 
 
-@pytest.mark.parametrize("value,expected", [("1", True), ("true", True), ("YES", True), ("on", True),
-                                            ("0", False), ("", False), ("nope", False)])
-def test_load_config_dry_run_truthy_values(env, value, expected):
-    env.setenv("DRY_RUN", value)
+@pytest.mark.parametrize("value,expected", [("1", True), ("true", True), ("yes", True), ("on", True),
+                                            ("0", False), ("false", False), ("no", False), ("off", False)])
+@pytest.mark.parametrize("padded", [False, True])
+def test_dry_run_values_accepted(env, caplog, value, expected, padded):
+    env.setenv("DRY_RUN", f" \t{value.upper()} \t" if padded else value)
     assert m.load_config()["dry_run"] is expected
+    assert m.dry_run_requested() is expected
+    assert "DRY_RUN not set" not in caplog.text
+
+
+@pytest.mark.parametrize("value", ["nope", "2", "tru", "false true", "CANARY-INVALID-DRY-RUN"])
+@pytest.mark.parametrize("configured", [False, True])
+def test_dry_run_values_invalid_rejected_before_http(env, caplog, value, configured):
+    env.setenv("DRY_RUN", value)
+    if configured:
+        env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    sent = []
+
+    def no_http(*args, **kwargs):
+        pytest.fail("invalid DRY_RUN must reject before IBKR/Ghostfolio HTTP")
+
+    env.setattr(m.requests.sessions.Session, "request", no_http)
+    with pytest.raises(RuntimeError, match="DRY_RUN"):
+        m.load_config()
+    assert m.dry_run_requested() is True
+
+    def send(settings, title, body):
+        assert any("Configuration error:" in r.getMessage() and "DRY_RUN" in r.getMessage()
+                   for r in caplog.records)
+        sent.append((settings, title, body))
+        return "sent"
+
+    env.setattr(m, "send_notification", send)
+    caplog.clear()
+    assert m.main() == 1
+    assert len(sent) == int(configured)
+    if configured:
+        settings, title, body = sent[0]
+        assert settings["urls"] == ["json://notify.invalid/hook"]
+        assert title == "ghostfolio-ibkr-sync: run failed"
+        assert "config: invalid_configuration" in body
+    assert "CANARY-INVALID-DRY-RUN" not in caplog.text
 
 
 # --- IBKR Flex fetch ----------------------------------------------------------
@@ -1307,3 +1345,54 @@ def test_dividend_field_prerequisites_isolated_bad_row_keeps_local_rejection(mon
     w = World(monkeypatch, xml)
     assert w.run()[1] is True
     assert "required dividend fields missing" not in caplog.text
+
+
+@pytest.mark.parametrize("value", [None, "", " \t "])
+@pytest.mark.parametrize("invalid_config", [False, True])
+def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_config):
+    if value is None:
+        env.delenv("DRY_RUN", raising=False)
+    else:
+        env.setenv("DRY_RUN", value)
+    if invalid_config:
+        env.delenv("IBKR_TOKEN")
+    else:
+        assert m.load_config()["dry_run"] is True
+    # A synthetic empty portfolio and Flex reports exercise the real pipeline.
+    reads = []
+    def response(body):
+        result = m.requests.Response()
+        result.status_code = 200
+        result._content = body.encode("utf-8")
+        return result
+
+    def get(url, **kwargs):
+        if "/api/v1/activities" in url:
+            reads.append("activities")
+            return response('{"activities": [], "count": 0}')
+        if url.endswith("/api/v1/account"):
+            reads.append("accounts")
+            return response('{"accounts": [{"id": "gf-1", "name": "U1"}, '
+                            '{"id": "gf-2", "name": "U2"}]}')
+        if url.endswith(("/api/v1/account/gf-1", "/api/v1/account/gf-2")):
+            reads.append("cash")
+            return response('{"currency": "USD"}')
+        if "SendRequest" in url:
+            reads.append("flex-request")
+            return response(SEND_OK)
+        if "GetStatement" in url:
+            reads.append("flex-report")
+            return response(report(trade_xml("DEFAULT-T")))
+        pytest.fail("unexpected HTTP read")
+    env.setattr(m.requests, "get", get)
+    for verb in ("post", "put", "patch", "delete"):
+        env.setattr(m.requests, verb, lambda *a, **k: pytest.fail("financial HTTP write"))
+    for _ in range(2):
+        caplog.clear()
+        reads.clear()
+        assert m.main() == (1 if invalid_config else 0)
+        assert reads == ([] if invalid_config else [
+            "activities", "flex-request", "flex-report", "accounts", "cash",
+            "flex-request", "flex-report", "accounts", "cash"])
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings.count("DRY_RUN not set: simulation, nothing written") == 1
