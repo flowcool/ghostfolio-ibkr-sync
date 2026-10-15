@@ -301,6 +301,18 @@ def _redact(text, secret):
     return text
 
 
+def log_lab_evidence(kind, value):
+    """Expose existing targets at DEBUG without changing financial behavior."""
+    if not log.isEnabledFor(logging.DEBUG):
+        return
+    try:
+        message = json.dumps({"kind": kind, "value": value}, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        # Missing evidence fails lab acceptance; it must not change the operation.
+        return
+    log.debug("LAB_EVIDENCE %s", message)
+
+
 def fetch_flex_report(token, query_id, max_retries=60, retry_delay=5):
     """Fetch a Flex Query report from IBKR (two-step process)."""
     log.debug("Requesting Flex Query %s from IBKR...", query_id)
@@ -348,6 +360,8 @@ def fetch_flex_report(token, query_id, max_retries=60, retry_delay=5):
         # Report is ready when Status is absent or FlexStatements are present
         if status is None or root.find("FlexStatements") is not None:
             log.debug("Flex Query statement received")
+            if log.isEnabledFor(logging.DEBUG):
+                log_lab_evidence("window", historical_dividend_report_window(resp.text))
             return resp.text
 
         error_msg = root.findtext("ErrorMessage", "unknown error")
@@ -1054,6 +1068,8 @@ def ghost_import_activities(config, activities):
     Ghostfolio reports its own duplicate detection per activity in a 2xx and
     silently skips those, so a short accepted count is not a failure.
     """
+    if config.get("dry_run"):
+        log_lab_evidence("preview", activities)
     if not activities:
         log.info("No new activities to import")
         return [], True
@@ -1170,6 +1186,7 @@ def ghost_update_cash_balance(config, account_id, balance, base_currency):
                   "from Ghostfolio account currency %s", account_id, base_currency,
                   account_data["currency"])
         return False
+    log_lab_evidence("cash", {"accountId": account_id, "balance": balance, "currency": base_currency})
     if config.get("dry_run"):
         log.info("[DRY RUN] would set cash balance for account %s to %.2f (no PUT sent)",
                  account_id, balance)
