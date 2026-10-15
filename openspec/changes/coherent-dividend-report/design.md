@@ -12,7 +12,7 @@ See `proposal.md`. The report is read-only. Import selection and current cash-ba
 
 ## Decisions for approval
 
-1. **Use the old symbol comment as alternate identity.** `historical_dividend_comparison` will claim either the ISIN comment or `dividend#<resolved-symbol>#<date>`. It will then reuse `_historical_identity_checks`. This gives one block and keeps failed checks visible. Amount matching stays rejected because it can invent identity.
+1. **Use the old symbol comment as alternate identity.** The canonical ISIN comment keeps its existing claim criteria. `historical_dividend_comparison` will claim a legacy `dividend#<symbol>#<date>` comment when the account agrees, the comment symbol resolves to the source-group security and the comment date equals the source date. These claim values come from the comment, not the destination row fields. It will then reuse `_historical_identity_checks` for the active/id/data-source/symbol/date/ISIN row fields. A failed row-field check stays uncertain or to check in that one claimed source block, with the check named; it does not create an absent or unmatched block. Amount matching stays rejected because it can invent identity.
 
 2. **Use explicit currency minor units.** `_historical_currency` and `_historical_minor_unit` will share one currency definition. JPY and KRW use zero decimals, as listed by [SIX ISO 4217](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml). Missing, conflicting and unknown codes stay distinct. Monetary display will reuse exact `Decimal` evidence and `quantize(..., ROUND_HALF_UP)`. Classification keeps unrounded values.
 
@@ -26,7 +26,7 @@ See `proposal.md`. The report is read-only. Import selection and current cash-ba
 
 ## Risks / Trade-offs
 
-- **A legacy comment has a wrong symbol or date.** → Identity checks keep one uncertain block.
+- **A claimed legacy row has a wrong symbol or date field.** → The destination-row identity checks keep one uncertain block and name the failed check.
 - **A currency definition is absent.** → Report `unsupported currency`; never guess decimals.
 - **Display rounding hides a sub-unit delta.** → The class still uses exact values and names noise.
 
