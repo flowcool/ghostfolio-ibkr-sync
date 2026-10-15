@@ -29,13 +29,13 @@ flowchart LR
 1. Configure [IBKR Flex Web Service and your query](#ibkr-setup), then [create your Ghostfolio account and token](#ghostfolio-setup). Use the same account currency as the IBKR base currency.
 2. Copy [`mapping.yaml.example`](mapping.yaml.example) to `mapping.yaml` and review your securities' Yahoo tickers. The mapping file must exist unless you explicitly disable it.
 3. Run the [Docker preview](#dry-run-first) with `DRY_RUN=1`. Review ticker mappings, skipped trades and the proposed cash balance before enabling writes.
-4. Run [once](#single-account-one-off-run), then configure [scheduled runs](#docker-compose--portainer). After the first import, gather historical market data in Ghostfolio.
+4. After review, set `DRY_RUN=false` to permit writes. Run [once](#single-account-one-off-run), then configure [scheduled runs](#docker-compose--portainer). After the first import, gather historical market data in Ghostfolio.
 
 **Before importing:** back up Ghostfolio using your deployment's backup procedure. The sync adds activities and updates cash; there is no automatic undo. The first Flex Query covers at most 365 days, so older positions must already be represented in Ghostfolio. Splits and other corporate actions need manual reconciliation. See [Limitations](#limitations).
 
 ## Overview
 
-This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades. With `GHOST_ACCESS_TOKEN` it logs in to Ghostfolio by itself at every run, so there is no session token to renew, and with `APPRISE_URLS` it sends one alert when a run fails or the legacy session token is about to expire (see [Failure notifications](#failure-notifications-apprise)).
+This tool fetches your IBKR activity statements via Flex Queries, parses trades and dividends, maps ISINs to Yahoo Finance tickers, and pushes everything into Ghostfolio. It handles multiple sub-accounts, deduplicates activities, updates cash balances, syncs dividend payments (including withholding tax), and skips FX conversions and options trades. With `GHOST_ACCESS_TOKEN` it logs in to Ghostfolio by itself at every run, so there is no session token to renew, and with `APPRISE_URLS` it sends one alert when a run fails or, in explicit live mode, the legacy session token is about to expire (see [Failure notifications](#failure-notifications-apprise)).
 
 ## Why this exists
 
@@ -103,7 +103,9 @@ stable release, change the image back to `:latest` (or pin `:X.Y.Z`). To test on
 Compose install, see [Try a release candidate](docs/upgrading-to-3.0.md#try-a-release-candidate).
 
 To roll back, select the saved digest and recreate the connector with the same
-ENV and mounts. This does not restore financial records or undo cash updates.
+ENV and mounts. Older images can write with absent `DRY_RUN`; set
+`DRY_RUN=true` explicitly for a rollback preview. This does not restore
+financial records or undo cash updates.
 Image publication does not deploy or recreate a container. A failed `latest`
 promotion requires explicit operator recovery using the verified manifest digest
 of the current stable release; never rebuild or overwrite its version tag. See
@@ -117,14 +119,15 @@ ghostfolio-ibkr-sync version v2.2.0
 2026-10-09 06:05:00 [INFO] Starting IBKR to Ghostfolio sync (version v2.2.0)
 ```
 
-A release candidate reports its tag, for example `ghostfolio-ibkr-sync version v3.0.0-rc.1`.
+A release candidate reports its tag, for example `ghostfolio-ibkr-sync version v3.0.0-rc.2`.
 New stable images, including `:latest`, report `vX.Y.Z`. Older main-built images
 may report `vX.Y.Z-N-g<sha>` (N commits after the last release, exact commit `<sha>`).
 
 ### Upgrading to 3.0
 
 3.0 contains breaking changes: the Flex query needs a time-zone suffix and more
-dividend fields, and `TZ` must be set. Read the
+dividend fields, and `TZ` must be set. Starting with rc.2, omitted or blank
+`DRY_RUN` simulates; writes require an explicit false value. Read the
 [3.0 upgrade and rollback guide](docs/upgrading-to-3.0.md) before pulling a new
 image. A `v3.0.0-rc.N` release candidate may be published first for testing; it
 never moves `:latest`. The guide also shows how to
@@ -266,11 +269,11 @@ All configuration is done via environment variables:
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count). Two accounts cannot share one name: the run stops at start-up (exit 1) before any network call. Without names, the IBKR account IDs are the targets and must also be distinct | `IBKR Individual` |
 | `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
 | `CRON` | No | Five numeric cron fields for recurring runs (Docker only); validated before startup | `0 6 * * *` |
-| `TZ` | For writes | Valid IANA timezone for historical dividend dates and cron scheduling. Missing or invalid values force the whole run into `DRY_RUN`, with a WARNING and a final notification when configured | `Europe/Warsaw` |
+| `TZ` | For writes | Valid IANA timezone for historical dividend dates and cron scheduling. Missing or invalid values force the whole run into `DRY_RUN`, with a WARNING. Explicit false `DRY_RUN` retains the configured forced-preview notification, even on success | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
 | `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs for failures, legacy token expiry reminders and TZ-forced previews (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
 | `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
-| `DRY_RUN` | No | If truthy (`1`/`true`/`yes`/`on`), runs the full pipeline (fetch, convert, dedup) and logs the activities and cash balance it *would* write, without financial writes to Ghostfolio; token exchange still occurs with `GHOST_ACCESS_TOKEN` | `1` |
+| `DRY_RUN` | No | Since rc.2, absent/blank or `1`/`true`/`yes`/`on` simulates; only `0`/`false`/`no`/`off` requests writes. Spaces and case are ignored. Other values exit 1 before HTTP; only configured Apprise Failure delivery may follow. Simulation keeps login, reads and preview, without activity, cash or platform writes | `1` |
 
 ## Mapping File
 
@@ -366,6 +369,7 @@ If you trade on `.JO` or `.TA` and amounts look 100 times off, check this table 
 
 ```bash
 docker run --rm --network your-ghostfolio-network \
+  -e DRY_RUN=true \
   -e TZ=Europe/Warsaw \
   -e IBKR_TOKEN=your_token \
   -e IBKR_ACCOUNT_IDS=U1234567 \
@@ -390,19 +394,32 @@ export GHOST_ACCESS_TOKEN=your_ghost_security_token
 export GHOST_HOST=http://localhost:3333
 export GHOST_ACCOUNT_NAMES="IBKR Main"
 export TZ=Europe/Warsaw
+export DRY_RUN=true
 .venv/bin/python ibkr_to_ghostfolio.py
 ```
 
 ### Dry run first
 
-Add `DRY_RUN=1` to try a configuration safely. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
+Starting with v3.0.0-rc.2, absent, empty or whitespace-only `DRY_RUN` selects
+simulation. Every such invocation logs WARNING
+`DRY_RUN not set: simulation, nothing written`, even if configuration fails.
+Explicit `1`, `true`, `yes` or `on` also selects simulation. Values are trimmed
+and case-insensitive. Only `0`, `false`, `no` or `off` requests live writes; all
+other values exit 1 before any HTTP call. After rejection, only configured
+Apprise Failure delivery may occur. No IBKR/Ghostfolio HTTP call or financial
+write occurs. Other safety guards still apply.
+
+Set `DRY_RUN=1` explicitly for the preview. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
 Set a valid IANA `TZ`, such as `Europe/Warsaw`, even for one-off Python runs.
 Missing or invalid `TZ` forces every account into `DRY_RUN` before processing,
 with one WARNING explaining the reason. No activities, cash or platform are
-written. The final notification includes the reason when Apprise is configured,
-even if all accounts succeed. An operator-chosen preview with valid `TZ` sends
-no notification.
+written. With explicit false `DRY_RUN`, the final notification includes the
+reason when Apprise is configured, even if all accounts succeed. Successful
+simulations selected by default, blank or truthy `DRY_RUN` send no notification,
+including expiry-only reminders and previews. Failed simulations send one
+configured Failure notification. After review, set `DRY_RUN=false` and retain
+valid `TZ` to permit writes.
 
 Every DETAIL dividend, payment-in-lieu and withholding cash row must have
 `dateTime` in `YYYYMMDD;HHmmss TimeZone` form, for example
@@ -527,7 +544,7 @@ not a guarantee that IBKR recovers.
 Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends one
 notification through [Apprise](https://github.com/caronc/apprise/wiki), which supports
 ntfy, Gotify, Telegram, Discord, Slack, email and many more. A completed successful run
-also sends a reminder when its legacy `GHOST_TOKEN` is about to expire (see
+in explicit live mode also sends a reminder when its legacy `GHOST_TOKEN` is about to expire (see
 [Token expiry](docs/troubleshooting.md#token-expiry)); the reminder keeps exit 0. Give it a JSON list (up to 10
 URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
 space- or comma-separated URLs counts each one toward the limit of 10):
@@ -551,14 +568,19 @@ of days remaining (`0` means expired). If the run also fails, the reminder is in
 in the same failure notification. At most one notification is sent per completed run;
 there is no daily state, so multiple runs in one day can repeat the reminder.
 
-Missing or invalid IANA `TZ` also sends a final notification naming the forced
-`DRY_RUN` reason, even on success. It shares the single summary with any
+With explicit false `DRY_RUN`, missing or invalid IANA `TZ` also sends a final
+notification naming the forced-preview reason, even on success. It shares the single summary with any
 failures or expiry reminder. Notification delivery does not change exit status.
 
-**When nothing is sent:** successful runs without an expiry reminder or forced
-preview, runs that only logged other warnings (for example unmapped ISINs),
-operator-chosen dry runs with valid `TZ` (`DRY_RUN` is honoured even when the rest of the configuration is
-invalid), runs stopped by a signal, and when `APPRISE_URLS` is blank or `[]`. If
+**Simulation since rc.2:** failed runs send one configured Failure notification,
+including default, blank or truthy `DRY_RUN` and invalid-value rejection. Failure
+with an expiry reminder or forced preview uses the same summary, never a second
+dispatch. Delivery does not change exit status.
+
+**When nothing is sent:** successful default/blank/truthy simulations, including
+expiry-only reminders and previews; successful live runs without an expiry
+reminder or forced preview; runs with only other warnings (for example unmapped
+ISINs); runs stopped by a signal; and when `APPRISE_URLS` is blank or `[]`. If
 `APPRISE_URLS` or `APPRISE_TIMEOUT` is invalid, the run logs
 `APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled` and syncs as usual.
 
@@ -620,6 +642,7 @@ services:
       - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     environment:
       TZ: Europe/Warsaw
+      DRY_RUN: "true"
       IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
       IBKR_ACCOUNT_IDS: U1234567
       IBKR_QUERY_IDS: 123456
@@ -628,7 +651,7 @@ services:
       GHOST_ACCOUNT_NAMES: "IBKR Individual"
       MAPPING_FILE: /app/mapping.yaml
       CRON: "0 6 * * *"
-      # Optional: one summary for failure, token expiry or TZ-forced preview.
+      # Optional: Failure in any mode; expiry/TZ summaries in explicit live mode.
       # APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic"]'
     volumes:
       - ./mapping.yaml:/app/mapping.yaml:ro
@@ -647,6 +670,7 @@ services:
       - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     environment:
       TZ: Europe/Warsaw
+      DRY_RUN: "true"
       IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
       IBKR_ACCOUNT_IDS: U7654321
       IBKR_QUERY_IDS: 654321
@@ -664,6 +688,10 @@ networks:
   ghostfolio:
     external: true
 ```
+
+Both services select simulation explicitly. Review each preview, then change
+`DRY_RUN` to `"false"` in each service and recreate the containers to permit
+writes. Keep valid `TZ`; other safety guards still apply.
 
 Use `http://ghostfolio:3333` (internal Docker network hostname) rather than an external IP or localhost. Stagger the cron times by a few minutes so the two containers do not run simultaneously.
 
