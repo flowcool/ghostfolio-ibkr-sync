@@ -389,7 +389,8 @@ Docker is the only supported way to run the sync. The image installs the
 `ghostfolio_ibkr_sync` package and starts it with `python -m ghostfolio_ibkr_sync`.
 Since v3.0.0 there is no `ibkr_to_ghostfolio.py` file or launcher: running the
 repository from a source checkout is not supported. To test local changes, build the
-image yourself and run it as shown above:
+image yourself. Run it with the command above, but replace
+`ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` with `ibkr-sync:local`:
 
 ```bash
 docker build -t ibkr-sync:local .
