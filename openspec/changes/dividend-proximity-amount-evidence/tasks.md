@@ -10,7 +10,7 @@ Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak 
 
 ## 3. Diagnostic mirror
 
-- [ ] 3.1 In `_historical_proximity` exclude connector-comment rows and show source and candidate gross in the `skipped by proximity` block. Mirror of 2.1, no new consumer work. Tests: only-canonical neighbour is not proximity-skipped; manual neighbour shows both values; import selection unchanged. Check: `.venv/bin/python -m pytest -q tests -k 'historical_diagnostic_skip_cause'`.
+- [x] 3.1 In `_historical_proximity` exclude connector-comment rows and show source and candidate gross in the `skipped by proximity` block. Mirror of 2.1, no new consumer work. Tests: only-canonical neighbour is not proximity-skipped; manual neighbour shows both values; import selection unchanged. Check: `.venv/bin/python -m pytest -q tests -k 'historical_diagnostic_skip_cause'`.
 
 ## 4. Docs
 

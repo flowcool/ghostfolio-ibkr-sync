@@ -656,6 +656,36 @@ def test_historical_diagnostic_skip_cause_proximity_only(monkeypatch):
     assert "skipped by proximity" in finding["reason"]
 
 
+def test_historical_diagnostic_skip_cause_only_canonical_neighbour_is_not_proximity_skipped(monkeypatch):
+    canonical = destination(id="canon", comment=f"dividend#{ISIN_KO}#2026-07-16", date="2026-07-16T00:00:00Z")
+    finding = skip_cause(monkeypatch, [canonical])
+    assert finding["category"] == "absent"
+    assert "proximity" not in finding and "skipped by proximity" not in finding["reason"]
+
+
+def test_historical_diagnostic_skip_cause_manual_neighbour_shows_both_gross(monkeypatch):
+    canonical = destination(id="canon", comment=f"dividend#{ISIN_KO}#2026-07-16", date="2026-07-16T00:00:00Z")
+    manual = destination(id="manual", comment="manual", date="2026-07-17T00:00:00Z", unitPrice=0.5)
+    finding = skip_cause(monkeypatch, [canonical, manual])
+    proximity = finding["proximity"]
+    assert [item["activity_id"] for item in proximity["candidates"]] == ["manual"]
+    assert proximity["source_gross"] == "25.00 USD" and proximity["candidate_gross"] == "50.0 USD"
+    text = m.format_historical_dividend_finding(finding, ACC)
+    assert "Gross: source 25.00 USD, candidate 50.0 USD" in text
+    assert "activity canon" not in text
+
+
+def test_historical_diagnostic_skip_cause_import_selection_unchanged(monkeypatch):
+    canonical = destination(id="canon", comment=f"dividend#{ISIN_KO}#2026-07-16", date="2026-07-16T00:00:00Z")
+    manual = destination(id="manual", comment="manual", date="2026-07-17T00:00:00Z")
+    for rows in ([canonical], [canonical, manual]):
+        _, comments, before = read(monkeypatch, rows)
+        snapshot = {key: list(value) for key, value in before["dividend_dates"].items()}
+        source = m.parse_cash_dividends(report(divs=div_xml()))
+        m.historical_dividend_comparison(source, ACC, {}, before, None, comments)
+        assert {key: list(value) for key, value in before["dividend_dates"].items()} == snapshot
+
+
 def test_historical_diagnostic_skip_cause_other_account_comment_ignored(monkeypatch):
     carrier = destination(comment="dividend#KO#2026-07-15", accountId="other-account",
                           date="2026-07-25T00:00:00Z")
