@@ -16,7 +16,7 @@ See `proposal.md`. The current Docker tag, seven workflow pins, two Renovate ran
 2. Change every `actions/setup-python` pin in `docker-publish.yml`, `release-image.yml`, `dependency-release-watch.yml`, and `upstream-release-watch.yml`. A dual-version matrix is excluded because only 3.14 is supported by CI after this migration.
 3. Reuse both `renovate.json` `allowedVersions` rules. Move their bounds to 3.14 and retain manual review, release age, and digest pinning.
 4. Keep `requirements.txt` and `requirements-dev.txt` unchanged. PyPI metadata and cross-platform binary resolution already cover 3.14, so dependency updates would hide the cause of a regression.
-5. Extend `test_python_base_keeps_tag_and_pins_digest` and add focused assertions for workflows, Renovate, and guidance. Reuse `scripts/check_container_runtime.sh` to assert `sys.version_info[:2] == (3, 14)` inside the built image.
+5. Extend `test_python_base_keeps_tag_and_pins_digest` and add focused `test_python_runtime_baseline_*` assertions for workflows, Renovate, and guidance. The local `.venv` is recreated with `uv venv --python 3.14` because the host Python is 3.13. Reuse `scripts/check_container_runtime.sh` to assert `sys.version_info[:2] == (3, 14)` inside the built image.
 6. Reuse the existing native amd64/arm64 workflow jobs, offline pytest suite, dependency audit, image scans, and isolated runtime checks. Update README, CONTRIBUTING, and `docs/upstreams.md` where they state the current version.
 
 ## Risks / Trade-offs
