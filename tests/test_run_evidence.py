@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import ibkr
 
 
 CFG = {"ghost_host": "http://ghost.invalid", "ghost_token": "SECRET_SENTINEL"}
@@ -68,8 +69,11 @@ def test_info_byte_identical(http, dry):
     formatter.formatTime = lambda *args: "2026-10-15 12:00:00"
     handler.setFormatter(formatter)
     old_level = m.log.level
+    old_ibkr_level = ibkr.log.level
     m.log.setLevel(logging.INFO)
+    ibkr.log.setLevel(logging.INFO)
     m.log.addHandler(handler)
+    ibkr.log.addHandler(handler)
     try:
         assert fetch(http) == XML
         cfg = dict(CFG, dry_run=dry)
@@ -82,7 +86,9 @@ def test_info_byte_identical(http, dry):
         assert not m.ghost_update_cash_balance(cfg, "lab-account", 1, None)
     finally:
         m.log.removeHandler(handler)
+        ibkr.log.removeHandler(handler)
         m.log.setLevel(old_level)
+        ibkr.log.setLevel(old_ibkr_level)
     messages = [("INFO", "Got reference code synthetic-ref, fetching statement...")]
     if dry:
         messages += [("INFO", "[DRY RUN] would import 1 activities (no POST sent):"),
@@ -108,7 +114,7 @@ def test_info_byte_identical(http, dry):
      '<FlexStatement fromDate="20251017" toDate="20261015"/>', None),
 ])
 def test_window(http, caplog, statements, expected):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     xml = f"<R><FlexStatements>{statements}</FlexStatements></R>"
     assert fetch(http, xml, retry=True) == xml
     assert evidence(caplog) == [dict(kind="window", value=expected)]
@@ -118,7 +124,7 @@ def test_window(http, caplog, statements, expected):
 @pytest.mark.parametrize("dry", [True, False])
 @pytest.mark.parametrize("empty", [True, False])
 def test_preview(http, caplog, dry, empty):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     rows = [] if empty else [candidate(kind, comment=f'{kind} quote" newline\nbackslash\\')
                             for kind in ("BUY", "SELL", "DIVIDEND")]
     http[1].return_value = response({"activities": [dict(row, id=f"created-{i}", assetProfile={"symbol": row["symbol"], "dataSource": row["dataSource"]}) for i, row in enumerate(rows)]})
@@ -132,7 +138,7 @@ def test_preview(http, caplog, dry, empty):
 @pytest.mark.parametrize("dry", [True, False])
 @pytest.mark.parametrize("balance", [0, -12.34567, 25.900000000000002, 0.000001])
 def test_cash(http, caplog, dry, balance):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     cash_response(http)
     assert m.ghost_update_cash_balance(dict(CFG, dry_run=dry), "lab-account", balance, "EUR")
     assert evidence(caplog) == [dict(kind="cash", value=dict(accountId="lab-account", balance=balance, currency="EUR"))]
@@ -144,7 +150,7 @@ def test_cash(http, caplog, dry, balance):
 
 @pytest.mark.parametrize("currency", [None, "USD"])
 def test_cash_guards(http, caplog, currency):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     cash_response(http)
     assert not m.ghost_update_cash_balance(CFG, "lab-account", 1, currency)
     assert evidence(caplog) == []
@@ -152,7 +158,7 @@ def test_cash_guards(http, caplog, currency):
 
 
 def test_cash_failed_put_still_describes_target(http, caplog):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     cash_response(http, status=400)
     assert not m.ghost_update_cash_balance(CFG, "lab-account", 1.001, "EUR")
     assert evidence(caplog) == [dict(kind="cash", value=dict(accountId="lab-account", balance=1.001, currency="EUR"))]
@@ -160,7 +166,7 @@ def test_cash_failed_put_still_describes_target(http, caplog):
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_nonfinite_keeps_existing_results_without_invalid_json(http, caplog, value):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     rows = [candidate(unitPrice=value)]
     assert m.ghost_import_activities(dict(CFG, dry_run=True), rows) == (rows, True)
     cash_response(http)
@@ -171,7 +177,7 @@ def test_nonfinite_keeps_existing_results_without_invalid_json(http, caplog, val
 
 
 def test_format_single_physical_line_and_no_secrets(http, caplog):
-    caplog.set_level(logging.DEBUG, logger=m.__name__)
+    caplog.set_level(logging.DEBUG)
     row = candidate(comment='quote"\nslash\\')
     m.ghost_import_activities(dict(CFG, dry_run=True, xml="PRIVATE_XML", env="PRIVATE_ENV"), [row])
     records = [r for r in caplog.records if r.getMessage().startswith("LAB_EVIDENCE ")]

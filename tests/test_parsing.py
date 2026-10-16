@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import ibkr
 
 
 def flex(cash_rows="", trades=""):
@@ -177,7 +178,7 @@ def test_load_mapping_non_utf8_is_fatal(tmp_path):
 
 def test_redact_masks_raw_and_url_encoded_forms():
     secret = "a b/c+d"
-    text = f"GET https://x/?t={m.quote_plus(secret)} also {secret} and {m.quote(secret, safe='')}"
+    text = f"GET https://x/?t={ibkr.quote_plus(secret)} also {secret} and {ibkr.quote(secret, safe='')}"
     out = m._redact(text, secret)
     assert "a+b" not in out and "a%20b" not in out and secret not in out
     assert out.count("***") == 3
@@ -194,7 +195,7 @@ def test_fetch_flex_report_rejects_foreign_statement_url(monkeypatch):
         text = ("<FlexStatementResponse><Status>Success</Status><ReferenceCode>1</ReferenceCode>"
                 "<Url>https://ndcdyn.interactivebrokers.com.evil.example/x</Url></FlexStatementResponse>")
         content = text.encode("utf-8")
-    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: Resp())
+    monkeypatch.setattr(ibkr, "_ibkr_get", lambda *a, **k: Resp())
     with pytest.raises(RuntimeError, match="Unexpected IBKR statement URL"):
         m.fetch_flex_report("tok", "q")
 
@@ -217,15 +218,15 @@ def test_flex_response_byte_limit_before_parsing(monkeypatch, stage, delta):
         response.encoding = "utf-8"
         responses.append(response)
     replies = iter(responses)
-    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: next(replies))
-    original = m.ET.fromstring
+    monkeypatch.setattr(ibkr, "_ibkr_get", lambda *a, **k: next(replies))
+    original = ibkr.ET.fromstring
     parsed = []
 
     def parse(text):
         parsed.append(text)
         return original(text)
 
-    monkeypatch.setattr(m.ET, "fromstring", parse)
+    monkeypatch.setattr(ibkr.ET, "fromstring", parse)
     if delta > 0:
         with pytest.raises(RuntimeError) as error:
             m.fetch_flex_report("synthetic", "synthetic")
@@ -243,8 +244,8 @@ def test_flex_limit_counts_response_bytes_not_characters(monkeypatch):
     response = m.requests.Response()
     response._content = body.encode("utf-8")
     response.encoding = "utf-8"
-    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: response)
-    monkeypatch.setattr(m.ET, "fromstring", lambda text: pytest.fail("must not parse"))
+    monkeypatch.setattr(ibkr, "_ibkr_get", lambda *a, **k: response)
+    monkeypatch.setattr(ibkr.ET, "fromstring", lambda text: pytest.fail("must not parse"))
     with pytest.raises(RuntimeError, match="^IBKR Flex response exceeds XML size limit$"):
         m.fetch_flex_report("synthetic", "synthetic")
 
