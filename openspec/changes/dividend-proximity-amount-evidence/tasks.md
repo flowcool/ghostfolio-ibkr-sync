@@ -6,7 +6,7 @@ Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak 
 
 ## 2. Visible proximity skip
 
-- [ ] 2.1 Store `(date, gross, currency, fee)` entries. Update every consumer of the matcher return, including the readable report. Compare the exact source gross (`div["gross"]`) after minor-unit normalization; log INFO "amounts agree" with fee values for equal, one WARNING naming the operator action for different or not comparable (unsupported denomination); exit status unchanged. Tests: equal gross, different gross, GBp row vs GBP source, unsupported currency, equal numbers in different currencies (not comparable: one WARNING, still skipped), manual ordinary 25 + PIL 100 next day -> skipped with WARNING, readable report shows no raw tuple. Check: `.venv/bin/python -m pytest -q tests -k dividend_proximity_amount`.
+- [x] 2.1 Store `(date, gross, currency, fee)` entries. Update every consumer of the matcher return, including the readable report. Compare the exact source gross (`div["gross"]`) after minor-unit normalization; log INFO "amounts agree" with fee values for equal, one WARNING naming the operator action for different or not comparable (unsupported denomination); exit status unchanged. Tests: equal gross, different gross, GBp row vs GBP source, unsupported currency, equal numbers in different currencies (not comparable: one WARNING, still skipped), manual ordinary 25 + PIL 100 next day -> skipped with WARNING, readable report shows no raw tuple. Check: `.venv/bin/python -m pytest -q tests -k dividend_proximity_amount`.
 
 ## 3. Diagnostic mirror
 

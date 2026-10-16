@@ -224,10 +224,12 @@ def act(date="2026-07-15", symbol="KO"):
     ("2026-07-11", None), ("2026-07-19", None), ("not-a-date", None),
 ])
 def test_dividend_date_matches_within_three_days(existing, expected):
-    pos = positions(dividend_dates={(ACC, "KO"): [existing]})
-    assert m._dividend_date_matches(pos, act()) == expected
+    pos = positions(dividend_dates={(ACC, "KO"): [(existing, None, None, None)]})
+    match = m._dividend_date_matches(pos, act())
+    assert (match[0] if match else None) == expected
 
 
 def test_dividend_date_match_is_per_account_and_symbol():
-    pos = positions(dividend_dates={("other", "KO"): ["2026-07-15"], (ACC, "PEP"): ["2026-07-15"]})
+    pos = positions(dividend_dates={("other", "KO"): [("2026-07-15", None, None, None)],
+                                      (ACC, "PEP"): [("2026-07-15", None, None, None)]})
     assert m._dividend_date_matches(pos, act()) is None
