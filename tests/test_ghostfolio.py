@@ -56,7 +56,7 @@ def test_existing_activities_are_indexed(monkeypatch, profile_key):
     assert pos["manual_buys"][("acc", "KO")] == [["2026-07-01", 6.0]]       # IBKR#T1 buy is not manual
     assert pos["manual_sells"][("acc", "KO")] == [["2026-08-01", 3.0]]
     assert pos["isin_symbols"][("acc", "US1912161007")] == {"KO"}
-    assert pos["dividend_dates"][("acc", "KO")] == ["2026-08-01"]
+    assert pos["dividend_dates"][("acc", "KO")] == []                    # connector rows are not proximity candidates
 
 
 def test_count_mismatch_refuses_to_sync(monkeypatch):

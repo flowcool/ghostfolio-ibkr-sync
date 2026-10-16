@@ -2,7 +2,7 @@ Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak 
 
 ## 1. Exclude connector rows from proximity
 
-- [ ] 1.1 In `ghost_get_existing_orders` skip `dividend#` comments when building `dividend_dates`; in `process_account` drop only the post-import `dividend_dates` append and keep the `existing_dividend_comments.add`, so exact identity still dedups within the run. Offline test: the mocked Ghostfolio GET returns a canonical row (25, 07-15); a distinct payment (100, 07-16) is imported; a rerun with the same GET plus that new row imports nothing. Check: `.venv/bin/python -m pytest -q tests -k dividend_proximity_canonical`.
+- [x] 1.1 In `ghost_get_existing_orders` skip `dividend#` comments when building `dividend_dates`; in `process_account` drop only the post-import `dividend_dates` append and keep the `existing_dividend_comments.add`, so exact identity still dedups within the run. Offline test: the mocked Ghostfolio GET returns a canonical row (25, 07-15); a distinct payment (100, 07-16) is imported; a rerun with the same GET plus that new row imports nothing. Check: `.venv/bin/python -m pytest -q tests -k dividend_proximity_canonical`.
 
 ## 2. Visible proximity skip
 
