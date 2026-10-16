@@ -20,6 +20,11 @@ trap cleanup EXIT
 docker run --rm --read-only --network none --cap-drop ALL \
     --security-opt no-new-privileges:true --entrypoint python "$image" -c '
 import os
+import platform
+import sys
+assert platform.python_implementation() == "CPython"
+assert sys.version_info[:2] == (3, 14), sys.version
+print("CPython", platform.python_version(), flush=True)
 for name in ("/app/ibkr_to_ghostfolio.py", "/app/entrypoint.sh"):
     assert os.stat(name).st_uid == 0
     assert not os.stat(name).st_mode & 0o222

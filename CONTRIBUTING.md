@@ -18,7 +18,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-CI and the container use Python 3.12. Tests use synthetic inputs and mocked HTTP; they require neither credentials nor running IBKR/Ghostfolio services. Do not point automated tests or cleanup tools at a live portfolio. Add regression coverage for a logic change, including account isolation and repeated runs when relevant.
+CI and the container use Python 3.14. Tests use synthetic inputs and mocked HTTP; they require neither credentials nor running IBKR/Ghostfolio services. Do not point automated tests or cleanup tools at a live portfolio. Add regression coverage for a logic change, including account isolation and repeated runs when relevant.
 
 Open one pull request per concern and describe the problem, resulting behavior and verification. Required CI checks apply to documentation changes too. See [build and release guarantees](.github/BUILD.md) for image publishing and rollback. A compatibility notice from the upstream release watcher is a request for review, not a compatibility guarantee.
 
