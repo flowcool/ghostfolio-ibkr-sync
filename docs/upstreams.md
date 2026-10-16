@@ -6,7 +6,7 @@
 | [Ghostfolio](https://github.com/ghostfolio/ghostfolio) | Release-watch baseline `3.80.2`, included, in [upstream-watch.yml](../.github/upstream-watch.yml); the operator chooses the running version | Daily [Ghostfolio release watch](../.github/workflows/upstream-release-watch.yml) at 07:17 UTC; review API compatibility before adoption |
 | Python runtime and notification dependencies | Exact versions in [requirements.txt](../requirements.txt) | Ordinary update PRs from Renovate; security update PRs from Dependabot; no release notices |
 | Python developer and CI dependencies | Exact versions in [requirements-dev.txt](../requirements-dev.txt) | Ordinary update PRs from Renovate; security update PRs from Dependabot; no release notices |
-| Python/Debian base image | Python 3.12 slim with an immutable digest in [Dockerfile](../Dockerfile) | Renovate proposals within Python 3.12; CI image scans |
+| Python/Debian base image | Python 3.14 slim with an immutable digest in [Dockerfile](../Dockerfile) | Renovate proposals within Python 3.14; CI image scans |
 | GitHub Actions | Commit SHA pins in [.github/workflows](../.github/workflows) | Renovate proposals; CI review |
 
 [renovate.json](../renovate.json) and [dependabot.yml](../.github/dependabot.yml)

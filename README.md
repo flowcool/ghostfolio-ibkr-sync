@@ -142,7 +142,7 @@ See the [2.2 upgrade and rollback guide](docs/upgrading-to-2.2.md).
 
 - A running self-hosted Ghostfolio instance, version **2.248.0 or newer**
 - An Interactive Brokers account with Flex Web Service enabled
-- Docker (for containerised runs) or Python 3.12+ with the pinned packages from `requirements.txt` (CI and the container use Python 3.12)
+- Docker (for containerised runs) or Python 3.14+ with the pinned packages from `requirements.txt` (CI and the container use Python 3.14)
 
 The tool reads existing activities via `GET /api/v1/activities`, which landed in Ghostfolio 2.248.0. The `/api/v1/order` endpoints it replaced were deprecated in that same release and removed in 3.5.0, so on Ghostfolio 3.x this is the only endpoint that works.
 
