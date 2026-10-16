@@ -178,7 +178,7 @@ def test_successful_run_imports_and_records_trades_and_dividends(monkeypatch):
     assert w.comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}   # keyed by accountId
     assert w.pos["qty"][(ACC, "KO")] == pytest.approx(10.0)
     assert w.pos["qty"][(ACC, "PEP")] == pytest.approx(6.0)         # 10 - 4
-    assert w.pos["dividend_dates"][(ACC, "KO")] == ["2026-07-15"]
+    assert w.pos["dividend_dates"][(ACC, "KO")] == []          # imported connector row stays out of the index
     assert set(unmapped) == {ISIN_KO, ISIN_PEP}                     # no mapping given
     assert w.cash_calls == [(ACC, 100.5)]
 

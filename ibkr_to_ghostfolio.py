@@ -936,7 +936,7 @@ def ghost_get_existing_orders(config):
 
         if order.get("type") == "DIVIDEND":
             symbol = profile["symbol"]
-            if symbol:
+            if symbol and not comment.startswith("dividend#"):
                 positions["dividend_dates"][(order.get("accountId") or "", symbol)].append(
                     (order.get("date") or "")[:10])
 
@@ -2777,8 +2777,6 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
                 positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
             elif comment.startswith("dividend#"):
                 existing_dividend_comments.add((activity["accountId"], comment))
-                positions["dividend_dates"][(activity["accountId"], activity["symbol"])].append(
-                    activity["date"][:10])
         if not import_ok:
             ok = False
 
