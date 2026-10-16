@@ -1083,7 +1083,7 @@ def test_dividend_structured_input_dedup_before_evidence(monkeypatch, caplog, mo
     else:
         key = ISIN_KO if dedup == "comment" else "KO"
         comments.add((ACC, f"dividend#{key}#2026-07-15"))
-    monkeypatch.setattr(m, "dividend_structured_quantity", lambda div: pytest.fail("dedup must run first"))
+    monkeypatch.setattr("ghostfolio_ibkr_sync.sync.dividend_structured_quantity", lambda div: pytest.fail("dedup must run first"))
     assert w.run(comments=comments, pos=pos)[1] is True
     assert [a["type"] for a in w.activities] == ["BUY"]
     assert "Incompatible dividend input" not in caplog.text
