@@ -23,21 +23,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
     apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# pip is build-time only; removing it keeps its vendored packages out of the
-# runtime image and its scans.
+# The package is built from /build and installed into site-packages, so the
+# runtime has no source tree to mount over; /build never reaches the final
+# filesystem. pip is build-time only; removing it keeps its vendored packages
+# out of the runtime image and its scans.
+COPY pyproject.toml /build/pyproject.toml
+COPY ghostfolio_ibkr_sync/*.py /build/ghostfolio_ibkr_sync/
 RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --no-deps /build \
+    && rm -rf /build \
     && pip uninstall -y pip
 
 # Set by CI from `git describe --tags --always`; logged at start
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
-COPY ibkr_to_ghostfolio.py .
-COPY ghostfolio_ibkr_sync/*.py ghostfolio_ibkr_sync/
-
 COPY entrypoint.sh .
-RUN chmod 0555 /app /app/entrypoint.sh /app/ghostfolio_ibkr_sync \
-    && chmod 0444 /app/ibkr_to_ghostfolio.py /app/requirements.txt /app/ghostfolio_ibkr_sync/*.py
+RUN chmod 0555 /app /app/entrypoint.sh \
+    && chmod 0444 /app/requirements.txt
 
 # Keep application files owned by root; runtime crontabs live under /tmp.
 # Stable IDs let operators grant access to read-only bind mounts without relying

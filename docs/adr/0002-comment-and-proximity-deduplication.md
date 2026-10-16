@@ -30,5 +30,5 @@ and later corrections manually; this is not exact financial reconciliation or
 protection against simultaneous runs using stale snapshots.
 
 Sources: `ghost_get_existing_orders`, `_dividend_date_matches` and
-`process_account` in the [runtime](../../ibkr_to_ghostfolio.py), and
+`process_account` in the [runtime](../../ghostfolio_ibkr_sync/app.py), and
 [conversion rules](../../README.md#how-activities-are-converted).

@@ -6,10 +6,10 @@ import time
 
 import pytest
 
-import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import app, ghostfolio, ibkr, notify
+import requests
+from ghostfolio_ibkr_sync import app, config, ghostfolio, ibkr, notify, sync
 
-original_import = m.ghost_import_activities
+original_import = ghostfolio.ghost_import_activities
 
 ISIN_KO = "US1912161007"
 ISIN_PEP = "US7134481081"
@@ -104,7 +104,7 @@ class World:
         self.ids = set() if ids is None else ids
         self.comments = set() if comments is None else comments
         self.pos = pos or positions()
-        self.result = m.process_account(CFG, "U1", "q1", "IBKR", mapping or {}, self.ids, self.comments, self.pos)
+        self.result = app.process_account(CFG, "U1", "q1", "IBKR", mapping or {}, self.ids, self.comments, self.pos)
         return self.result
 
     @property
@@ -121,17 +121,17 @@ def test_flex_fetch_failure_returns_failed_and_does_nothing_else(monkeypatch):
 
 
 def test_oversized_flex_reply_prevents_import_and_cash_update(monkeypatch):
-    fetch = m.fetch_flex_report
+    fetch = ibkr.fetch_flex_report
     w = World(monkeypatch, report(trade_xml("T1")))
     monkeypatch.setattr(app, "fetch_flex_report", fetch)
-    response = m.requests.Response()
-    response._content = b"x" * (m.IBKR_MAX_XML_BYTES + 1)
+    response = requests.Response()
+    response._content = b"x" * (ibkr.IBKR_MAX_XML_BYTES + 1)
     monkeypatch.setattr(ibkr, "_ibkr_get", lambda *a, **k: response)
     assert w.run() == ({}, False)
     assert w.imported == [] and w.cash_calls == []
 
 
-@pytest.mark.parametrize("find", [m.requests.ConnectionError("net"), None])
+@pytest.mark.parametrize("find", [requests.ConnectionError("net"), None])
 def test_ghostfolio_account_lookup_failure_or_missing_account_fails_the_account(monkeypatch, find):
     w = World(monkeypatch, report(trade_xml("T1")), find=find)
     assert w.run() == ({}, False)
@@ -190,7 +190,7 @@ def test_second_account_sharing_the_sets_does_not_reimport(monkeypatch):
     w.run()
     first = len(w.activities)
     w.imported.clear()
-    m.process_account(CFG, "U2", "q2", "IBKR", {}, w.ids, w.comments, w.pos)
+    app.process_account(CFG, "U2", "q2", "IBKR", {}, w.ids, w.comments, w.pos)
     assert first == 2 and w.activities == []
 
 
@@ -361,21 +361,21 @@ def stub_main(monkeypatch, results, existing=None):
 
 def test_main_all_accounts_clean_exits_zero_and_uses_ids_as_names_without_account_names(env, caplog):
     calls = stub_main(env, {"U1": ({}, True), "U2": ({}, True)})
-    assert m.main() == 0
+    assert app.main() == 0
     assert calls == [("U1", "q1", "U1"), ("U2", "q2", "U2")]
     assert any("No GHOST_ACCOUNT_NAMES" in r.message for r in caplog.records)
 
 
 def test_main_failed_account_exits_one_but_still_processes_the_others(env, caplog):
     calls = stub_main(env, {"U1": ({}, False), "U2": ({}, True)})
-    assert m.main() == 1
+    assert app.main() == 1
     assert [c[0] for c in calls] == ["U1", "U2"]
     assert any("1 of 2 account(s): U1" in r.message for r in caplog.records)
 
 
 def test_main_unmapped_isin_is_reported_but_is_not_a_failure(env, caplog):
     stub_main(env, {"U1": ({"JP1": {"symbol": "1234.T", "description": "ACME"}}, True), "U2": ({}, True)})
-    assert m.main() == 0
+    assert app.main() == 0
     assert any("Unmapped ISIN JP1 (ACME)" in r.message for r in caplog.records)
 
 
@@ -388,7 +388,7 @@ def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, 
     env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
     env.setattr(app, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(app, "ghost_update_cash_balance", lambda cfg, acc, bal, cur: cash.append(acc) or True)
-    real = m.convert_trade_to_activity
+    real = sync.convert_trade_to_activity
     calls = []
     def flaky(*a, **k):
         calls.append(1)
@@ -396,7 +396,7 @@ def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, 
             raise KeyError("unforeseen field")
         return real(*a, **k)
     env.setattr(app, "convert_trade_to_activity", flaky)
-    assert m.main() == 1                                            # the run is still flagged
+    assert app.main() == 1                                            # the run is still flagged
     assert fetched == ["q1", "q2"]                                  # second account reached
     assert len(imported) == 1 and cash == ["gf-B"]                  # and fully synced
     rec = [r for r in caplog.records if "Unexpected error while processing IBKR account U1" in r.message]
@@ -411,36 +411,36 @@ def test_main_does_not_swallow_keyboard_interrupt_or_system_exit(env, exc):
     stub_main(env, {})
     env.setattr(app, "process_account", interrupted)
     with pytest.raises(exc):
-        m.main()
+        app.main()
 
 
-@pytest.mark.parametrize("exc", [RuntimeError("count mismatch"), m.requests.ConnectionError("down")])
+@pytest.mark.parametrize("exc", [RuntimeError("count mismatch"), requests.ConnectionError("down")])
 def test_main_untrusted_or_unreadable_existing_activities_stops_before_any_account(env, exc):
     calls = stub_main(env, {})
     def boom(cfg):
         raise exc
     env.setattr(app, "ghost_get_existing_orders", boom)
-    assert m.main() == 1
+    assert app.main() == 1
     assert calls == []
 
 
 def test_main_invalid_mapping_stops_the_run(env, tmp_path):
     env.setenv("MAPPING_FILE", str(tmp_path / "missing.yaml"))
     calls = stub_main(env, {})
-    assert m.main() == 1
+    assert app.main() == 1
     assert calls == []
 
 
 def test_main_configuration_error_returns_one_without_system_exit(env):
     env.delenv("IBKR_TOKEN")
-    assert m.main() == 1
+    assert app.main() == 1
 
 
 # --- load_config --------------------------------------------------------------
 
 def test_load_config_defaults_and_normalisation(env):
     env.setenv("IBKR_ACCOUNT_IDS", " U1 , U2 ")
-    cfg = m.load_config()
+    cfg = config.load_config()
     assert cfg["account_ids"] == ["U1", "U2"] and cfg["query_ids"] == ["q1", "q2"]
     assert cfg["ghost_host"] == "http://ghost:3333"                  # trailing slash stripped
     assert (cfg["account_names"], cfg["dry_run"]) == ([], False)
@@ -449,21 +449,21 @@ def test_load_config_defaults_and_normalisation(env):
 def test_load_config_missing_variables_are_all_named(env):
     env.delenv("IBKR_TOKEN"); env.delenv("GHOST_HOST")
     with pytest.raises(RuntimeError, match="IBKR_TOKEN.*GHOST_HOST"):
-        m.load_config()
+        config.load_config()
 
 
 @pytest.mark.parametrize("var,value", [("IBKR_QUERY_IDS", "q1"), ("GHOST_ACCOUNT_NAMES", "only-one")])
 def test_load_config_count_mismatch_is_rejected(env, var, value):
     env.setenv(var, value)
     with pytest.raises(RuntimeError, match="same number|must match"):
-        m.load_config()
+        config.load_config()
 
 
 def test_cash_target_duplicate_names_are_refused(env):
     env.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
     env.setenv("GHOST_ACCOUNT_NAMES", "Shared, Shared ")
     with pytest.raises(RuntimeError, match="Duplicate.*'Shared'"):
-        m.load_config()
+        config.load_config()
 
 
 def test_cash_target_duplicate_ids_without_names_are_refused(env):
@@ -471,26 +471,26 @@ def test_cash_target_duplicate_ids_without_names_are_refused(env):
     env.setenv("IBKR_QUERY_IDS", "q1,q2")
     env.delenv("GHOST_ACCOUNT_NAMES", raising=False)
     with pytest.raises(RuntimeError, match="Duplicate.*'U1'"):
-        m.load_config()
+        config.load_config()
 
 
 def test_cash_target_duplicate_check_makes_no_http_call(env):
     def boom(*a, **k):
         raise AssertionError("no request expected")
-    env.setattr(m.requests, "get", boom)
-    env.setattr(m.requests, "post", boom)
+    env.setattr(requests, "get", boom)
+    env.setattr(requests, "post", boom)
     env.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
     env.setenv("GHOST_ACCOUNT_NAMES", "A,A")
     with pytest.raises(RuntimeError):
-        m.load_config()
+        config.load_config()
 
 
 def test_cash_target_duplicate_check_accepts_distinct_targets(env):
     env.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
-    assert m.load_config()["account_names"] == ["A", "B"]
+    assert config.load_config()["account_names"] == ["A", "B"]
     env.delenv("GHOST_ACCOUNT_NAMES")
-    assert m.load_config()["account_names"] == []
+    assert config.load_config()["account_names"] == []
 
 
 @pytest.mark.parametrize("value,expected", [("1", True), ("true", True), ("yes", True), ("on", True),
@@ -498,8 +498,8 @@ def test_cash_target_duplicate_check_accepts_distinct_targets(env):
 @pytest.mark.parametrize("padded", [False, True])
 def test_dry_run_values_accepted(env, caplog, value, expected, padded):
     env.setenv("DRY_RUN", f" \t{value.upper()} \t" if padded else value)
-    assert m.load_config()["dry_run"] is expected
-    assert m.dry_run_requested() is expected
+    assert config.load_config()["dry_run"] is expected
+    assert config.dry_run_requested() is expected
     assert "DRY_RUN not set" not in caplog.text
 
 
@@ -514,10 +514,10 @@ def test_dry_run_values_invalid_rejected_before_http(env, caplog, value, configu
     def no_http(*args, **kwargs):
         pytest.fail("invalid DRY_RUN must reject before IBKR/Ghostfolio HTTP")
 
-    env.setattr(m.requests.sessions.Session, "request", no_http)
+    env.setattr(requests.sessions.Session, "request", no_http)
     with pytest.raises(RuntimeError, match="DRY_RUN"):
-        m.load_config()
-    assert m.dry_run_requested() is True
+        config.load_config()
+    assert config.dry_run_requested() is True
 
     def send(settings, title, body):
         assert any("Configuration error:" in r.getMessage() and "DRY_RUN" in r.getMessage()
@@ -527,7 +527,7 @@ def test_dry_run_values_invalid_rejected_before_http(env, caplog, value, configu
 
     env.setattr(app, "send_notification", send)
     caplog.clear()
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == int(configured)
     if configured:
         settings, title, body = sent[0]
@@ -564,7 +564,7 @@ def script_flex(monkeypatch, *bodies):
 
 def test_flex_fetch_happy_path_sends_token_and_reference_code(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, READY)
-    assert m.fetch_flex_report("TOK", "123") == READY
+    assert ibkr.fetch_flex_report("TOK", "123") == READY
     assert urls[0][1] == {"t": "TOK", "q": "123", "v": "3"}
     assert urls[1][1] == {"q": "REF1", "t": "TOK", "v": "3"}
     assert sleeps == []
@@ -572,53 +572,53 @@ def test_flex_fetch_happy_path_sends_token_and_reference_code(monkeypatch):
 
 def test_flex_fetch_polls_while_statement_is_not_ready(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, WARN, WARN, READY)
-    assert m.fetch_flex_report("TOK", "1", retry_delay=7) == READY
+    assert ibkr.fetch_flex_report("TOK", "1", retry_delay=7) == READY
     assert len(urls) == 4 and sleeps == [7, 7]
 
 
 def test_flex_fetch_status_warn_without_error_code_also_means_not_ready(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, "<R><Status>Warn</Status></R>", READY)
-    assert m.fetch_flex_report("TOK", "1") == READY and len(sleeps) == 1
+    assert ibkr.fetch_flex_report("TOK", "1") == READY and len(sleeps) == 1
 
 
 def test_flex_fetch_other_error_code_such_as_too_many_requests_fails_immediately(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, "<R><Status>Fail</Status><ErrorCode>1018</ErrorCode>"
                                                      "<ErrorMessage>Too many requests</ErrorMessage></R>")
     with pytest.raises(RuntimeError, match="GetStatement failed: Too many requests"):
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
     assert sleeps == []
 
 
 def test_flex_fetch_error_code_1019_alone_also_means_not_ready(monkeypatch):
     pending = "<R><Status>Fail</Status><ErrorCode>1019</ErrorCode></R>"
     urls, sleeps = script_flex(monkeypatch, SEND_OK, pending, READY)
-    assert m.fetch_flex_report("TOK", "1") == READY and len(sleeps) == 1
+    assert ibkr.fetch_flex_report("TOK", "1") == READY and len(sleeps) == 1
 
 
 def test_flex_fetch_gives_up_after_max_retries(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, WARN, WARN, WARN)
     with pytest.raises(RuntimeError, match="Timed out"):
-        m.fetch_flex_report("TOK", "1", max_retries=3)
+        ibkr.fetch_flex_report("TOK", "1", max_retries=3)
     assert len(urls) == 4 and len(sleeps) == 3
 
 
 def test_flex_fetch_default_polling_recovers_after_more_than_ten_pending_responses(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, *[WARN] * 11, READY)
-    assert m.fetch_flex_report("TOK", "1") == READY
+    assert ibkr.fetch_flex_report("TOK", "1") == READY
     assert len(urls) == 13 and sleeps == [5] * 11
 
 
 def test_flex_transient_polling_default_exhausts_after_sixty_pending_responses(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, SEND_OK, *[WARN] * 60)
     with pytest.raises(RuntimeError, match="Timed out"):
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
     assert len(urls) == 61 and sleeps == [5] * 60 and sum(sleeps) == 300
 
 
 def test_flex_fetch_send_request_failure_is_reported(monkeypatch):
     script_flex(monkeypatch, "<R><Status>Fail</Status><ErrorMessage>Invalid token</ErrorMessage></R>")
     with pytest.raises(RuntimeError, match="SendRequest failed: Invalid token"):
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
 
 
 def send_error(code, msg="boom"):
@@ -633,9 +633,9 @@ IMMEDIATE_CODES = ["1003", "1010", "1011", "1012", "1013", "1014", "1015", "1016
 
 def test_flex_transient_send_recovery(monkeypatch):
     urls, sleeps = script_flex(monkeypatch, send_error("1004"), SEND_OK, READY)
-    assert m.fetch_flex_report("TOK", "1") == READY
+    assert ibkr.fetch_flex_report("TOK", "1") == READY
     assert sleeps == [60]
-    assert [u[0] for u in urls] == [m.IBKR_SEND_URL, m.IBKR_SEND_URL,
+    assert [u[0] for u in urls] == [ibkr.IBKR_SEND_URL, ibkr.IBKR_SEND_URL,
                                     "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService/GetStatement"]
     assert urls[2][1] == {"q": "REF1", "t": "TOK", "v": "3"}
 
@@ -644,16 +644,16 @@ def test_flex_transient_send_exhaustion(monkeypatch):
     msg = "Server busy TOK"
     urls, sleeps = script_flex(monkeypatch, *[send_error("1018", msg)] * 5)
     with pytest.raises(RuntimeError) as exc:
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
     assert "SendRequest failed: Server busy ***" in str(exc.value) and "TOK" not in str(exc.value)
-    assert len(urls) == 5 and all(u[0] == m.IBKR_SEND_URL for u in urls)
+    assert len(urls) == 5 and all(u[0] == ibkr.IBKR_SEND_URL for u in urls)
     assert sleeps == [60, 120, 300, 600]
 
 
 @pytest.mark.parametrize("code", RETRY_CODES)
 def test_flex_transient_send_classification_retries(monkeypatch, code):
     urls, sleeps = script_flex(monkeypatch, send_error(code, "Please try again later"), SEND_OK, READY)
-    assert m.fetch_flex_report("TOK", "1") == READY
+    assert ibkr.fetch_flex_report("TOK", "1") == READY
     assert sleeps == [60] and len(urls) == 3
 
 
@@ -662,7 +662,7 @@ def test_flex_transient_send_classification_immediate(monkeypatch, code):
     # the message advises retrying, but only the ErrorCode may decide
     urls, sleeps = script_flex(monkeypatch, send_error(code, "Please try again shortly"))
     with pytest.raises(RuntimeError, match="SendRequest failed: Please try again shortly"):
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
     assert len(urls) == 1 and sleeps == []
 
 
@@ -670,14 +670,14 @@ def test_flex_fetch_statement_error_status_is_reported(monkeypatch):
     script_flex(monkeypatch, SEND_OK, "<R><Status>Fail</Status><ErrorCode>1003</ErrorCode>"
                                       "<ErrorMessage>Statement unavailable</ErrorMessage></R>")
     with pytest.raises(RuntimeError, match="GetStatement failed: Statement unavailable"):
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
 
 
 def test_flex_fetch_foreign_statement_host_is_rejected_before_the_token_is_sent(monkeypatch):
     evil = SEND_OK.replace("ndcdyn.interactivebrokers.com", "evil.example")
     urls, _ = script_flex(monkeypatch, evil)
     with pytest.raises(RuntimeError, match="Unexpected IBKR statement URL"):
-        m.fetch_flex_report("TOK", "1")
+        ibkr.fetch_flex_report("TOK", "1")
     assert len(urls) == 1                                           # step 2 (with the token) never sent
 
 
@@ -689,7 +689,7 @@ class HttpResp:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise m.requests.HTTPError(f"{self.status_code} for url: https://x/?t=SECRET-TOK")
+            raise requests.HTTPError(f"{self.status_code} for url: https://x/?t=SECRET-TOK")
 
 
 def test_ibkr_get_retries_network_errors_then_succeeds(monkeypatch):
@@ -697,20 +697,20 @@ def test_ibkr_get_retries_network_errors_then_succeeds(monkeypatch):
     def get(url, params, timeout, **kwargs):
         attempts.append(1)
         if len(attempts) < 3:
-            raise m.requests.ConnectionError("reset")
+            raise requests.ConnectionError("reset")
         return HttpResp()
-    monkeypatch.setattr(m.requests, "get", get)
+    monkeypatch.setattr(requests, "get", get)
     monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
-    assert isinstance(m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5), HttpResp)
+    assert isinstance(ibkr._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5), HttpResp)
     assert len(attempts) == 3 and sleeps == [10, 30]
 
 
 def test_ibkr_get_gives_up_after_the_last_retry_and_never_leaks_the_token(monkeypatch):
-    monkeypatch.setattr(m.requests, "get", lambda *a, **k: (_ for _ in ()).throw(
-        m.requests.ConnectionError("GET https://x/?t=SECRET-TOK failed")))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: (_ for _ in ()).throw(
+        requests.ConnectionError("GET https://x/?t=SECRET-TOK failed")))
     monkeypatch.setattr(time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError) as e:
-        m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
+        ibkr._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
     assert "SECRET-TOK" not in str(e.value) and "***" in str(e.value)
     assert e.value.__cause__ is None and e.value.__suppress_context__   # no chained traceback with the URL
 
@@ -718,10 +718,10 @@ def test_ibkr_get_gives_up_after_the_last_retry_and_never_leaks_the_token(monkey
 def test_ibkr_get_redacts_url_encoded_forms_of_the_token(monkeypatch):
     token = "a+b/c="
     leaked = f"GET https://x/?t={ibkr.quote_plus(token)} raw {token} and {ibkr.quote(token, safe='')}"
-    monkeypatch.setattr(m.requests, "get", lambda *a, **k: (_ for _ in ()).throw(m.requests.ConnectionError(leaked)))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: (_ for _ in ()).throw(requests.ConnectionError(leaked)))
     monkeypatch.setattr(time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError) as e:
-        m._ibkr_get("https://x", {"t": token}, 5)
+        ibkr._ibkr_get("https://x", {"t": token}, 5)
     msg = str(e.value)
     assert token not in msg and ibkr.quote_plus(token) not in msg and ibkr.quote(token, safe="") not in msg
 
@@ -731,10 +731,10 @@ def test_ibkr_get_http_error_is_not_retried_and_is_redacted(monkeypatch):
     def get(url, params, timeout, **kwargs):
         attempts.append(1)
         return HttpResp(503)
-    monkeypatch.setattr(m.requests, "get", get)
+    monkeypatch.setattr(requests, "get", get)
     monkeypatch.setattr(time, "sleep", lambda s: pytest.fail("HTTP errors are not retried"))
     with pytest.raises(RuntimeError) as e:
-        m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
+        ibkr._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
     assert len(attempts) == 1 and "SECRET-TOK" not in str(e.value)
 
 
@@ -745,9 +745,9 @@ def test_ibkr_get_rejects_redirects_without_following_them(monkeypatch):
         calls.append(kwargs)
         return HttpResp(302)
 
-    monkeypatch.setattr(m.requests, "get", get)
+    monkeypatch.setattr(requests, "get", get)
     with pytest.raises(RuntimeError, match="IBKR request redirected") as error:
-        m._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
+        ibkr._ibkr_get("https://x", {"t": "SECRET-TOK"}, 5)
     assert str(error.value) == "IBKR request redirected"
     assert calls == [{"params": {"t": "SECRET-TOK"}, "timeout": 5, "allow_redirects": False}]
 
@@ -773,7 +773,7 @@ def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *a: ACC)
     monkeypatch.setattr(ghostfolio, "requests", ReadOnlyHttp())
     ids, comments, pos = set(), set(), positions()
-    _, ok = m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
+    _, ok = app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
     assert ok is True and ids == {"T1"} and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
 
 
@@ -785,14 +785,14 @@ def test_main_shares_the_existing_sets_between_accounts_through_the_real_process
     env.setattr(app, "ghost_find_account_id", lambda cfg, name: "same-gf-account")       # both map to one account
     env.setattr(app, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(app, "ghost_update_cash_balance", lambda *a: True)
-    assert m.main() == 0
+    assert app.main() == 0
     assert len(imported) == 1 and imported[0][0]["comment"] == "IBKR#T1"               # B sees A's import
 
 
 def test_malformed_flex_report_fails_only_that_account(monkeypatch):
     script_flex(monkeypatch, SEND_OK, "<not-xml")
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *a: pytest.fail("must not be reached"))
-    assert m.process_account(CFG, "U1", "q1", "IBKR", {}, set(), set(), positions()) == ({}, False)
+    assert app.process_account(CFG, "U1", "q1", "IBKR", {}, set(), set(), positions()) == ({}, False)
 
 
 @pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
@@ -810,10 +810,10 @@ def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(mo
             row("SELL", 3, "2026-08-02", symbol="KO.A"),
             row("DIVIDEND", 100, "2026-07-16"),
             row("BUY", 99, "2026-01-01", account="other-account")]
-    monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(
         status_code=200, raise_for_status=lambda: None,
         json=lambda: {"activities": rows, "count": len(rows)}))
-    ids, comments, pos = m.ghost_get_existing_orders(CFG)
+    ids, comments, pos = ghostfolio.ghost_get_existing_orders(CFG)
     assert pos["qty"][(ACC, "KO")] == 30
     assert pos["qty"][("other-account", "KO")] == 99
     xml = report(trade_xml("OLD", date="20260101;100000")
@@ -833,13 +833,13 @@ def test_main_invalid_api_profile_stops_before_fetch_or_write(monkeypatch):
         **CFG, "mapping_file": "unused", "account_ids": ["U1"],
         "query_ids": ["q1"], "account_names": ["IBKR"]})
     monkeypatch.setattr(app, "load_mapping", lambda path: {})
-    monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(
         raise_for_status=lambda: None,
         json=lambda: {"activities": [{"type": "BUY", "quantity": 1}], "count": 1}))
     monkeypatch.setattr(app, "process_account", lambda *a, **k: pytest.fail("no account processing"))
-    monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("no POST"))
-    monkeypatch.setattr(m.requests, "put", lambda *a, **k: pytest.fail("no PUT"))
-    assert m.main() == 1
+    monkeypatch.setattr(requests, "post", lambda *a, **k: pytest.fail("no POST"))
+    monkeypatch.setattr(requests, "put", lambda *a, **k: pytest.fail("no PUT"))
+    assert app.main() == 1
 
 
 def test_identical_report_id_is_only_one_candidate_and_cannot_back_double_sell(monkeypatch):
@@ -878,7 +878,7 @@ def test_server_skipped_buy_cannot_authorize_sell_in_same_batch(monkeypatch):
     w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL", 15)))
     monkeypatch.setattr(app, "ghost_import_activities", original_import)
     sent = []
-    monkeypatch.setattr(m.requests, "post", lambda *a, **kw:
+    monkeypatch.setattr(requests, "post", lambda *a, **kw:
                         sent.append(kw["json"]["activities"]) or
                         SimpleNamespace(status_code=201, json=lambda: {"activities": []}))
     assert w.run(pos=positions({(ACC, "KO"): 10}))[1] is False
@@ -894,7 +894,7 @@ def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
     monkeypatch.setattr(app, "fetch_flex_report", lambda *a: next(reports))
     monkeypatch.setattr(app, "ghost_import_activities", original_import)
     sent = []
-    monkeypatch.setattr(m.requests, "post", lambda *a, **kw:
+    monkeypatch.setattr(requests, "post", lambda *a, **kw:
                         sent.append(kw["json"]["activities"]) or
                         SimpleNamespace(status_code=201, json=lambda: {"activities": []}))
     w.run(pos=positions({(ACC, "KO"): 10}))
@@ -908,13 +908,13 @@ def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch)
     w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL")))
     monkeypatch.setattr(app, "ghost_import_activities", original_import)
     calls = []
-    monkeypatch.setattr(m.requests, "post", lambda *a, **kw:
+    monkeypatch.setattr(requests, "post", lambda *a, **kw:
                         calls.append(kw["json"]["activities"]) or
                         SimpleNamespace(status_code=201, json=lambda: {}))
     cfg = {**CFG}
-    assert m.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
+    assert app.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
     cash_count = len(w.cash_calls)
-    assert m.process_account(cfg, "U2", "q2", "IBKR", {}, set(), set(), positions())[1] is False
+    assert app.process_account(cfg, "U2", "q2", "IBKR", {}, set(), set(), positions())[1] is False
     assert len(calls) == 1 and len(w.cash_calls) == cash_count
 
 
@@ -935,9 +935,9 @@ def test_wrong_accepted_identity_cannot_back_sale(monkeypatch, change):
         else:
             del row["id"]
         return SimpleNamespace(status_code=201, json=lambda: {"activities": [row]})
-    monkeypatch.setattr(m.requests, "post", post)
+    monkeypatch.setattr(requests, "post", post)
     cfg = {**CFG}
-    assert m.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
+    assert app.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
     assert len(calls) == 1 and all(a["type"] == "BUY" for a in calls[0])
 
 
@@ -951,10 +951,10 @@ def test_inactive_existing_buy_cannot_authorize_active_sell(monkeypatch, inactiv
     else:
         row["tags"] = [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a" if inactive == "draft"
                         else "f2e868af-8333-459f-b161-cbc6544c24bd"}]
-    monkeypatch.setattr(m.requests, "get", lambda *a, **k: SimpleNamespace(
+    monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(
         status_code=200, raise_for_status=lambda: None,
         json=lambda: {"activities": [row], "count": 1}))
-    ids, comments, pos = m.ghost_get_existing_orders(CFG)
+    ids, comments, pos = ghostfolio.ghost_get_existing_orders(CFG)
     w = World(monkeypatch, report(trade_xml("S", "SELL")))
     w.run(ids=ids, comments=comments, pos=pos)
     assert w.activities == [] and w.ids == {"OLD"}
@@ -970,7 +970,7 @@ def test_canonical_accepted_buy_cannot_back_sale_under_original_ticker(monkeypat
         calls.append(rows)
         row = {**rows[0], "id": "created", "assetProfile": {"symbol": "KO.CANONICAL", "dataSource": "YAHOO"}}
         return SimpleNamespace(status_code=201, json=lambda: {"activities": [row]})
-    monkeypatch.setattr(m.requests, "post", post)
+    monkeypatch.setattr(requests, "post", post)
     assert w.run()[1] is False
     assert len(calls) == 1
     assert w.pos["qty"][(ACC, "KO")] == 0
@@ -1131,10 +1131,10 @@ def test_historical_diagnostic_coherent_dry_run_before_dedup_zero_writes(monkeyp
     monkeypatch.setattr(app, "fetch_flex_report", lambda *args: report(divs=div_xml()))
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *args: ACC)
     for verb in ("post", "put", "patch", "delete"):
-        monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+        monkeypatch.setattr(requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(app, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
-    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
+    assert app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
     assert category in caplog.text
     assert "Historical dividends" in caplog.text
     assert "duplicates skipped: 1" in caplog.text
@@ -1152,7 +1152,7 @@ def test_coherent_dividend_import_summary_links_dry_run_report_counts(monkeypatc
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *args: ACC)
     monkeypatch.setattr(app, "ghost_update_cash_balance", lambda *args: True)
     caplog.set_level(logging.INFO)
-    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {},
+    assert app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {},
                              ids, comments, pos) == ({}, True)
     assert "Dividend report: 1 to check, 0 informational, 0 noise" in caplog.text
     assert ("New dividend activities: 0, duplicates skipped: 1; dividend report: "
@@ -1188,10 +1188,10 @@ def test_historical_diagnostic_report_window_and_unmatched_coverage(monkeypatch,
     monkeypatch.setattr(app, "fetch_flex_report", lambda *args: xml)
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *args: ACC)
     for verb in ("post", "put", "patch", "delete"):
-        monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+        monkeypatch.setattr(requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.DEBUG)
     monkeypatch.setattr(app, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
-    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
+    assert app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos) == ({}, True)
     assert "outside report window" in caplog.text and "older" in caplog.text
     assert "source_groups=1 unmatched_destination=1" in caplog.text
 
@@ -1215,10 +1215,10 @@ def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monk
     monkeypatch.setattr(app, "fetch_flex_report", lambda *args: ET.tostring(root, encoding="unicode"))
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *args: ACC)
     for verb in ("post", "put", "patch", "delete"):
-        monkeypatch.setattr(m.requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+        monkeypatch.setattr(requests, verb, lambda *args, **kwargs: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(app, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
-    assert m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, ids, comments, pos) == ({}, True)
+    assert app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, ids, comments, pos) == ({}, True)
     warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
     assert len(warnings) == (0 if existing else 1)
     assert "Historical dividends" in caplog.text
@@ -1253,20 +1253,20 @@ def test_historical_diagnostic_preflight_bad_suffix_fails_account_before_any_wri
 @pytest.mark.parametrize("type_", ["Dividends", "Payment In Lieu Of Dividends", "Withholding Tax"])
 def test_historical_diagnostic_preflight_valid_suffix_is_accepted(type_):
     xml = report(divs=_cash_row(type_, "20260715;120000 EDT"))
-    assert m.flex_provenance_failures(xml) == {}
+    assert ibkr.flex_provenance_failures(xml) == {}
 
 
 def test_historical_diagnostic_preflight_other_cash_types_and_summary_rows_are_exempt():
     xml = report(divs=_cash_row("Deposits/Withdrawals", "20260715")
                  + _cash_row("Dividends", "20260715", levelOfDetail="SUMMARY"))
-    assert m.flex_provenance_failures(xml) == {}
+    assert ibkr.flex_provenance_failures(xml) == {}
 
 
 def test_historical_diagnostic_preflight_failure_counts_per_type():
     xml = report(divs=_cash_row("Dividends", "20260715") + _cash_row("Dividends", None)
                  + _cash_row("Withholding Tax", "20260715;120000 EST")
                  + _cash_row("Payment In Lieu Of Dividends", "x"))
-    assert m.flex_provenance_failures(xml) == {"Dividends": 2, "Payment In Lieu Of Dividends": 1}
+    assert ibkr.flex_provenance_failures(xml) == {"Dividends": 2, "Payment In Lieu Of Dividends": 1}
 
 
 def test_historical_diagnostic_preflight_bad_suffix_does_not_enable_dry_run_and_other_accounts_run(monkeypatch):
@@ -1296,7 +1296,7 @@ def _drop(tag, field):
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_dividend_field_prerequisites_missing_cash_field_fails_account(monkeypatch, caplog, dry_run):
     w = World(monkeypatch, _prerequisite_xml(_drop("CashTransaction", "conid")))
-    assert m.process_account({**CFG, "dry_run": dry_run}, "U1", "q1", "IBKR", {ISIN_KO: "KO"},
+    assert app.process_account({**CFG, "dry_run": dry_run}, "U1", "q1", "IBKR", {ISIN_KO: "KO"},
                              set(), set(), positions()) == ({}, False)
     assert w.imported == [] and w.cash_calls == []
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
@@ -1325,17 +1325,17 @@ def test_dividend_field_prerequisites_missing_accrual_section_fails_account(monk
 
 
 def test_dividend_field_prerequisites_complete_empty_and_no_cash_rows_pass(monkeypatch, caplog):
-    assert m.dividend_field_prerequisites(_prerequisite_xml()) == []
+    assert ibkr.dividend_field_prerequisites(_prerequisite_xml()) == []
     # No relevant cash rows: nothing required, even without the accrual section.
-    assert m.dividend_field_prerequisites(report(trade_xml("T"))) == []
+    assert ibkr.dividend_field_prerequisites(report(trade_xml("T"))) == []
     only_other = report(divs=_cash_row("Deposits/Withdrawals", "20260715"))
-    assert m.dividend_field_prerequisites(only_other) == []
+    assert ibkr.dividend_field_prerequisites(only_other) == []
     # Present but empty accrual section, cash keys all present.
     def mutate(root):
         section = root.find(".//ChangeInDividendAccruals")
         for child in list(section):
             section.remove(child)
-    assert m.dividend_field_prerequisites(_prerequisite_xml(mutate)) == []
+    assert ibkr.dividend_field_prerequisites(_prerequisite_xml(mutate)) == []
     assert "required dividend fields missing" not in caplog.text
 
 
@@ -1343,7 +1343,7 @@ def test_dividend_field_prerequisites_isolated_bad_row_keeps_local_rejection(mon
     def mutate(root):
         root.findall(".//CashTransaction")[0].set("conid", "")
     xml = _prerequisite_xml(mutate, divs=div_xml() + div_xml(isin=ISIN_PEP, symbol="PEP"))
-    assert m.dividend_field_prerequisites(xml) == []
+    assert ibkr.dividend_field_prerequisites(xml) == []
     w = World(monkeypatch, xml)
     assert w.run()[1] is True
     assert "required dividend fields missing" not in caplog.text
@@ -1359,11 +1359,11 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
     if invalid_config:
         env.delenv("IBKR_TOKEN")
     else:
-        assert m.load_config()["dry_run"] is True
+        assert config.load_config()["dry_run"] is True
     # A synthetic empty portfolio and Flex reports exercise the real pipeline.
     reads = []
     def response(body):
-        result = m.requests.Response()
+        result = requests.Response()
         result.status_code = 200
         result._content = body.encode("utf-8")
         return result
@@ -1386,13 +1386,13 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
             reads.append("flex-report")
             return response(report(trade_xml("DEFAULT-T")))
         pytest.fail("unexpected HTTP read")
-    env.setattr(m.requests, "get", get)
+    env.setattr(requests, "get", get)
     for verb in ("post", "put", "patch", "delete"):
-        env.setattr(m.requests, verb, lambda *a, **k: pytest.fail("financial HTTP write"))
+        env.setattr(requests, verb, lambda *a, **k: pytest.fail("financial HTTP write"))
     for _ in range(2):
         caplog.clear()
         reads.clear()
-        assert m.main() == (1 if invalid_config else 0)
+        assert app.main() == (1 if invalid_config else 0)
         assert reads == ([] if invalid_config else [
             "activities", "flex-request", "flex-report", "accounts", "cash",
             "flex-request", "flex-report", "accounts", "cash"])

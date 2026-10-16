@@ -18,4 +18,4 @@ a later sell from passing the holdings gate.
 Sources: [Flex setup](../ibkr-setup.md#2-create-a-flex-query),
 [Limitations](../../README.md#limitations), and `parse_trades`,
 `parse_cash_dividends`, `parse_cash_report` and `filter_trades_by_holdings` in the
-[runtime](../../ibkr_to_ghostfolio.py).
+[runtime](../../ghostfolio_ibkr_sync/ibkr.py).

@@ -1,7 +1,7 @@
 """Offline tests: IBKR trade/dividend -> Ghostfolio activity conversion."""
 import pytest
 
-import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import sync
 
 ISIN = "US1912161007"
 
@@ -34,7 +34,7 @@ def div(**kw):
 
 def test_buy_trade_converts():
     unmapped = {}
-    a = m.convert_trade_to_activity(trade(), "acc", {ISIN: "KO"}, unmapped)
+    a = sync.convert_trade_to_activity(trade(), "acc", {ISIN: "KO"}, unmapped)
     assert a == {"accountId": "acc", "comment": "IBKR#T1", "currency": "USD", "dataSource": "YAHOO",
                  "date": "2026-08-01T10:00:00+00:00", "fee": pytest.approx(1.2), "quantity": 10.0,
                  "symbol": "KO", "type": "BUY", "unitPrice": 60.5}
@@ -42,25 +42,25 @@ def test_buy_trade_converts():
 
 
 def test_sell_has_positive_quantity_and_sell_type():
-    a = m.convert_trade_to_activity(trade(buySell="SELL", quantity="-4"), "acc", {}, {})
+    a = sync.convert_trade_to_activity(trade(buySell="SELL", quantity="-4"), "acc", {}, {})
     assert (a["type"], a["quantity"]) == ("SELL", 4.0)
 
 
 def test_unmapped_isin_falls_back_to_ibkr_symbol_and_is_reported():
     unmapped = {}
-    a = m.convert_trade_to_activity(trade(), "acc", {}, unmapped)
+    a = sync.convert_trade_to_activity(trade(), "acc", {}, unmapped)
     assert a["symbol"] == "KO"
     assert unmapped == {ISIN: {"symbol": "KO", "description": ""}}
 
 
 def test_commission_rebate_is_clamped_to_zero_fee():
-    a = m.convert_trade_to_activity(trade(ibCommission="0.7"), "acc", {}, {})
+    a = sync.convert_trade_to_activity(trade(ibCommission="0.7"), "acc", {}, {})
     assert a["fee"] == 0.0
 
 
 def test_pence_market_scales_price_and_fee_together():
     t = trade(currency="GBP", tradePrice="12.5", ibCommission="-1.5")
-    a = m.convert_trade_to_activity(t, "acc", {ISIN: "XYZ.L"}, {})
+    a = sync.convert_trade_to_activity(t, "acc", {ISIN: "XYZ.L"}, {})
     assert a["currency"] == "GBp"
     assert a["unitPrice"] == pytest.approx(1250.0)
     assert a["fee"] == pytest.approx(150.0)
@@ -68,31 +68,31 @@ def test_pence_market_scales_price_and_fee_together():
 
 def test_pence_factor_only_applies_to_matching_currency():
     t = trade(currency="USD")
-    a = m.convert_trade_to_activity(t, "acc", {ISIN: "XYZ.L"}, {})
+    a = sync.convert_trade_to_activity(t, "acc", {ISIN: "XYZ.L"}, {})
     assert (a["currency"], a["unitPrice"]) == ("USD", 60.5)
 
 
 @pytest.mark.parametrize("cat", ["CASH", "OPT"])
 def test_cash_and_options_are_skipped(cat):
-    assert m.convert_trade_to_activity(trade(assetCategory=cat), "acc", {}, {}) is None
+    assert sync.convert_trade_to_activity(trade(assetCategory=cat), "acc", {}, {}) is None
 
 
 @pytest.mark.parametrize("override", [
     {"quantity": "abc"}, {"tradePrice": "x"}, {"dateTime": "garbage"}, {"isin": "", "symbol": ""},
 ])
 def test_invalid_trade_is_skipped(override):
-    assert m.convert_trade_to_activity(trade(**override), "acc", {}, {}) is None
+    assert sync.convert_trade_to_activity(trade(**override), "acc", {}, {}) is None
 
 
 @pytest.mark.parametrize("commission", ["n/a", "nan", "inf", "-inf", None])
 def test_invalid_commission_excludes_trade(commission):
-    assert m.convert_trade_to_activity(trade(ibCommission=commission), "acc", {}, {}) is None
+    assert sync.convert_trade_to_activity(trade(ibCommission=commission), "acc", {}, {}) is None
 
 
 # --- dividends ------------------------------------------------------------
 
 def test_dividend_structured_quantity_and_cash_price():
-    a = m.convert_dividend_to_activity(div(), "acc", {ISIN: "KO"}, {})
+    a = sync.convert_dividend_to_activity(div(), "acc", {ISIN: "KO"}, {})
     assert a["type"] == "DIVIDEND"
     assert a["quantity"] == pytest.approx(100.0)
     assert a["unitPrice"] == pytest.approx(0.25)
@@ -102,24 +102,24 @@ def test_dividend_structured_quantity_and_cash_price():
 
 
 def test_dividend_structured_quantity_preserves_broker_shares_despite_rounded_cash():
-    a = m.convert_dividend_to_activity(div(amount=24.99), "acc", {}, {})
+    a = sync.convert_dividend_to_activity(div(amount=24.99), "acc", {}, {})
     assert a["quantity"] == 100.0
     assert a["quantity"] * a["unitPrice"] == pytest.approx(24.99)
 
 
 def test_dividend_structured_quantity_without_description_rate():
-    a = m.convert_dividend_to_activity(div(description="SPECIAL"), "acc", {}, {})
+    a = sync.convert_dividend_to_activity(div(description="SPECIAL"), "acc", {}, {})
     assert (a["quantity"], a["unitPrice"]) == (100.0, 0.25)
 
 
 def test_withholding_tax_becomes_fee_and_refund_becomes_zero():
-    assert m.convert_dividend_to_activity(div(tax=-3.75), "acc", {}, {})["fee"] == pytest.approx(3.75)
-    assert m.convert_dividend_to_activity(div(tax=2.0), "acc", {}, {})["fee"] == 0.0
+    assert sync.convert_dividend_to_activity(div(tax=-3.75), "acc", {}, {})["fee"] == pytest.approx(3.75)
+    assert sync.convert_dividend_to_activity(div(tax=2.0), "acc", {}, {})["fee"] == 0.0
 
 
 def test_dividend_pence_market_scales_price_and_tax():
     d = div(currency="GBP", amount=10.0, tax=-2.0, description="X CASH DIVIDEND GBP 0.10 PER SHARE")
-    a = m.convert_dividend_to_activity(d, "acc", {ISIN: "PAF.L"}, {})
+    a = sync.convert_dividend_to_activity(d, "acc", {ISIN: "PAF.L"}, {})
     assert a["currency"] == "GBp"
     assert a["unitPrice"] == pytest.approx(10.0)      # 0.10 GBP x 100
     assert a["fee"] == pytest.approx(200.0)
@@ -127,24 +127,24 @@ def test_dividend_pence_market_scales_price_and_tax():
 
 @pytest.mark.parametrize("amount,tax", [(0.0, 0.0), (-25.0, 0.0), (0.0, -3.0)])
 def test_non_positive_dividend_is_not_imported(amount, tax):
-    assert m.convert_dividend_to_activity(div(amount=amount, tax=tax), "acc", {}, {}) is None
+    assert sync.convert_dividend_to_activity(div(amount=amount, tax=tax), "acc", {}, {}) is None
 
 
 def test_dividend_dedup_key_uses_isin_then_symbol():
-    assert m.convert_dividend_to_activity(div(), "a", {}, {})["comment"].startswith(f"dividend#{ISIN}#")
-    no_isin = m.convert_dividend_to_activity(div(isin=""), "a", {}, {})
+    assert sync.convert_dividend_to_activity(div(), "a", {}, {})["comment"].startswith(f"dividend#{ISIN}#")
+    no_isin = sync.convert_dividend_to_activity(div(isin=""), "a", {}, {})
     assert no_isin["comment"] == "dividend#KO#2026-07-15"
 
 
 def test_dividend_unmapped_isin_is_reported_without_overwriting_trade_description():
     unmapped = {ISIN: {"symbol": "KO", "description": "COCA COLA"}}
-    m.convert_dividend_to_activity(div(), "acc", {}, unmapped)
+    sync.convert_dividend_to_activity(div(), "acc", {}, unmapped)
     assert unmapped[ISIN]["description"] == "COCA COLA"
 
 
 @pytest.mark.parametrize("quantity,amount", [("3", 1.5), ("450", 45.1), ("0.00000001", 1), ("1", 5)])
 def test_dividend_structured_quantity_has_no_inference_rounding_or_fallback(quantity, amount):
-    activity = m.convert_dividend_to_activity(div(quantity=quantity, amount=amount,
+    activity = sync.convert_dividend_to_activity(div(quantity=quantity, amount=amount,
                                                  description="USD 0.1 PER SHARE"), "acc", {}, {})
     assert activity["quantity"] == float(quantity)
     assert activity["quantity"] * activity["unitPrice"] == pytest.approx(amount)
@@ -153,7 +153,7 @@ def test_dividend_structured_quantity_has_no_inference_rounding_or_fallback(quan
 def test_dividend_structured_quantity_does_not_use_description_when_evidence_is_missing():
     dividend = div()
     dividend["accruals"] = []
-    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+    assert sync.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
 
 
 @pytest.mark.parametrize("quantity,amount,tax,currency,symbol", [
@@ -165,7 +165,7 @@ def test_dividend_structured_quantity_does_not_use_description_when_evidence_is_
 ])
 def test_dividend_structured_numeric_rejects_unsafe_final_values(quantity, amount, tax, currency, symbol, caplog):
     dividend = div(quantity=quantity, amount=amount, tax=tax, currency=currency)
-    assert m.convert_dividend_to_activity(dividend, "acc", {ISIN: symbol}, {}) is None
+    assert sync.convert_dividend_to_activity(dividend, "acc", {ISIN: symbol}, {}) is None
     assert any("numeric" in record.message for record in caplog.records)
 
 
@@ -176,13 +176,13 @@ def test_dividend_structured_numeric_rejects_positive_underflow_in_cash(field):
         dividend["payments"][0]["amount"] = "1e-400"
     else:
         dividend["cash_rows"][1]["amount"] = "-1e-400"
-    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+    assert sync.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
 
 
 def test_dividend_structured_numeric_normal_pence_scaling_preserves_cash_and_quantity():
     dividend = div(quantity="450", amount=45.1, tax=-2, currency="GBP")
     dividend["accruals"][0].update(grossAmount="999", tax="-999", rate="0.1")
-    activity = m.convert_dividend_to_activity(dividend, "acc", {ISIN: "PAF.L"}, {})
+    activity = sync.convert_dividend_to_activity(dividend, "acc", {ISIN: "PAF.L"}, {})
     assert activity["quantity"] == 450
     assert activity["currency"] == "GBp"
     assert activity["quantity"] * activity["unitPrice"] / 100 == pytest.approx(45.1)
@@ -190,7 +190,7 @@ def test_dividend_structured_numeric_normal_pence_scaling_preserves_cash_and_qua
 
 
 def test_dividend_structured_numeric_valid_subnormal_price_is_not_rounded_to_zero():
-    activity = m.convert_dividend_to_activity(div(quantity="1", amount=1e-310), "acc", {}, {})
+    activity = sync.convert_dividend_to_activity(div(quantity="1", amount=1e-310), "acc", {}, {})
     assert activity["unitPrice"] == 1e-310
     assert activity["quantity"] == 1
 
@@ -198,7 +198,7 @@ def test_dividend_structured_numeric_valid_subnormal_price_is_not_rounded_to_zer
 def test_dividend_structured_numeric_large_cash_can_produce_representable_price():
     dividend = div(quantity="1e308")
     dividend["payments"][0]["amount"] = "1e400"
-    activity = m.convert_dividend_to_activity(dividend, "acc", {}, {})
+    activity = sync.convert_dividend_to_activity(dividend, "acc", {}, {})
     assert activity["quantity"] == 1e308
     assert activity["unitPrice"] == 1e92
 
@@ -207,7 +207,7 @@ def test_dividend_structured_numeric_large_cash_can_produce_representable_price(
 def test_dividend_structured_numeric_extreme_cash_exponents_reject_without_unbounded_arithmetic(amount):
     dividend = div()
     dividend["payments"][0]["amount"] = amount
-    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+    assert sync.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
 
 
 @pytest.mark.parametrize("quantity,amount,copies", [("1e-308", "1e999999", 1),
@@ -215,15 +215,15 @@ def test_dividend_structured_numeric_extreme_cash_exponents_reject_without_unbou
 def test_dividend_structured_numeric_decimal_arithmetic_overflow_stays_local(quantity, amount, copies):
     dividend = div(quantity=quantity)
     dividend["payments"] = [dict(dividend["payments"][0], amount=amount) for _ in range(copies)]
-    assert m.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
+    assert sync.convert_dividend_to_activity(dividend, "acc", {}, {}) is None
 
 
 @pytest.mark.parametrize("side", ["SELL (Ca.)", "", "sell", "Buy", " BUY", None])
 def test_unknown_trade_side_conversion_rejected(side):
-    assert m.convert_trade_to_activity(trade(buySell=side), "acc", {}, {}) is None
+    assert sync.convert_trade_to_activity(trade(buySell=side), "acc", {}, {}) is None
 
 
 def test_unknown_trade_side_conversion_keeps_buy_and_sell():
-    buy = m.convert_trade_to_activity(trade(buySell="BUY"), "acc", {}, {})
-    sell = m.convert_trade_to_activity(trade(buySell="SELL", quantity="-4"), "acc", {}, {})
+    buy = sync.convert_trade_to_activity(trade(buySell="BUY"), "acc", {}, {})
+    sell = sync.convert_trade_to_activity(trade(buySell="SELL", quantity="-4"), "acc", {}, {})
     assert (buy["type"], sell["type"], sell["quantity"]) == ("BUY", "SELL", 4.0)

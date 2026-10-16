@@ -6,9 +6,9 @@ from unittest.mock import Mock
 import time
 
 import pytest
+import requests
 
-import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import ghostfolio, ibkr
+from ghostfolio_ibkr_sync import app, ghostfolio, ibkr
 
 
 CFG = {"ghost_host": "http://ghost.invalid", "ghost_token": "SECRET_SENTINEL"}
@@ -28,9 +28,9 @@ def candidate(kind="BUY", **changes):
 @pytest.fixture
 def http(monkeypatch):
     get, post, put = Mock(), Mock(), Mock()
-    monkeypatch.setattr(m.requests, "get", get)
-    monkeypatch.setattr(m.requests, "post", post)
-    monkeypatch.setattr(m.requests, "put", put)
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(requests, "put", put)
     monkeypatch.setattr(time, "sleep", Mock())
     return get, post, put
 
@@ -46,7 +46,7 @@ def fetch(http, xml=XML, retry=False):
         responses.append(response(text='<R><Status>Warn</Status><ErrorCode>1019</ErrorCode></R>'))
     responses.append(response(text=xml))
     get.side_effect = responses
-    return m.fetch_flex_report("SECRET_SENTINEL", "synthetic-query")
+    return ibkr.fetch_flex_report("SECRET_SENTINEL", "synthetic-query")
 
 
 def cash_response(http, currency="EUR", status=200):
@@ -69,13 +69,13 @@ def test_info_byte_identical(http, dry):
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     formatter.formatTime = lambda *args: "2026-10-15 12:00:00"
     handler.setFormatter(formatter)
-    old_level = m.log.level
+    old_level = app.log.level
     old_ibkr_level = ibkr.log.level
     old_ghostfolio_level = ghostfolio.log.level
-    m.log.setLevel(logging.INFO)
+    app.log.setLevel(logging.INFO)
     ibkr.log.setLevel(logging.INFO)
     ghostfolio.log.setLevel(logging.INFO)
-    m.log.addHandler(handler)
+    app.log.addHandler(handler)
     ibkr.log.addHandler(handler)
     ghostfolio.log.addHandler(handler)
     try:
@@ -83,16 +83,16 @@ def test_info_byte_identical(http, dry):
         cfg = dict(CFG, dry_run=dry)
         rows = [candidate()]
         http[1].return_value = response({"activities": [dict(row, id=f"created-{i}", assetProfile={"symbol": row["symbol"], "dataSource": row["dataSource"]}) for i, row in enumerate(rows)]})
-        assert m.ghost_import_activities(cfg, rows) == (rows, True)
-        assert m.ghost_import_activities(cfg, []) == ([], True)
+        assert ghostfolio.ghost_import_activities(cfg, rows) == (rows, True)
+        assert ghostfolio.ghost_import_activities(cfg, []) == ([], True)
         cash_response(http)
-        assert m.ghost_update_cash_balance(cfg, "lab-account", 25.900000000000002, "EUR")
-        assert not m.ghost_update_cash_balance(cfg, "lab-account", 1, None)
+        assert ghostfolio.ghost_update_cash_balance(cfg, "lab-account", 25.900000000000002, "EUR")
+        assert not ghostfolio.ghost_update_cash_balance(cfg, "lab-account", 1, None)
     finally:
-        m.log.removeHandler(handler)
+        app.log.removeHandler(handler)
         ibkr.log.removeHandler(handler)
         ghostfolio.log.removeHandler(handler)
-        m.log.setLevel(old_level)
+        app.log.setLevel(old_level)
         ibkr.log.setLevel(old_ibkr_level)
         ghostfolio.log.setLevel(old_ghostfolio_level)
     messages = [("INFO", "Got reference code synthetic-ref, fetching statement...")]
@@ -134,7 +134,7 @@ def test_preview(http, caplog, dry, empty):
     rows = [] if empty else [candidate(kind, comment=f'{kind} quote" newline\nbackslash\\')
                             for kind in ("BUY", "SELL", "DIVIDEND")]
     http[1].return_value = response({"activities": [dict(row, id=f"created-{i}", assetProfile={"symbol": row["symbol"], "dataSource": row["dataSource"]}) for i, row in enumerate(rows)]})
-    assert m.ghost_import_activities(dict(CFG, dry_run=dry), rows) == (rows, True)
+    assert ghostfolio.ghost_import_activities(dict(CFG, dry_run=dry), rows) == (rows, True)
     assert evidence(caplog) == ([dict(kind="preview", value=rows)] if dry else [])
     assert http[1].call_count == int(not dry and not empty)
     if not dry and not empty:
@@ -146,7 +146,7 @@ def test_preview(http, caplog, dry, empty):
 def test_cash(http, caplog, dry, balance):
     caplog.set_level(logging.DEBUG)
     cash_response(http)
-    assert m.ghost_update_cash_balance(dict(CFG, dry_run=dry), "lab-account", balance, "EUR")
+    assert ghostfolio.ghost_update_cash_balance(dict(CFG, dry_run=dry), "lab-account", balance, "EUR")
     assert evidence(caplog) == [dict(kind="cash", value=dict(accountId="lab-account", balance=balance, currency="EUR"))]
     assert http[0].call_count == 1
     assert http[2].call_count == int(not dry)
@@ -158,7 +158,7 @@ def test_cash(http, caplog, dry, balance):
 def test_cash_guards(http, caplog, currency):
     caplog.set_level(logging.DEBUG)
     cash_response(http)
-    assert not m.ghost_update_cash_balance(CFG, "lab-account", 1, currency)
+    assert not ghostfolio.ghost_update_cash_balance(CFG, "lab-account", 1, currency)
     assert evidence(caplog) == []
     http[2].assert_not_called()
 
@@ -166,7 +166,7 @@ def test_cash_guards(http, caplog, currency):
 def test_cash_failed_put_still_describes_target(http, caplog):
     caplog.set_level(logging.DEBUG)
     cash_response(http, status=400)
-    assert not m.ghost_update_cash_balance(CFG, "lab-account", 1.001, "EUR")
+    assert not ghostfolio.ghost_update_cash_balance(CFG, "lab-account", 1.001, "EUR")
     assert evidence(caplog) == [dict(kind="cash", value=dict(accountId="lab-account", balance=1.001, currency="EUR"))]
 
 
@@ -174,9 +174,9 @@ def test_cash_failed_put_still_describes_target(http, caplog):
 def test_nonfinite_keeps_existing_results_without_invalid_json(http, caplog, value):
     caplog.set_level(logging.DEBUG)
     rows = [candidate(unitPrice=value)]
-    assert m.ghost_import_activities(dict(CFG, dry_run=True), rows) == (rows, True)
+    assert ghostfolio.ghost_import_activities(dict(CFG, dry_run=True), rows) == (rows, True)
     cash_response(http)
-    assert m.ghost_update_cash_balance(dict(CFG, dry_run=True), "lab-account", value, "EUR")
+    assert ghostfolio.ghost_update_cash_balance(dict(CFG, dry_run=True), "lab-account", value, "EUR")
     assert evidence(caplog) == []
     http[1].assert_not_called()
     http[2].assert_not_called()
@@ -185,7 +185,7 @@ def test_nonfinite_keeps_existing_results_without_invalid_json(http, caplog, val
 def test_format_single_physical_line_and_no_secrets(http, caplog):
     caplog.set_level(logging.DEBUG)
     row = candidate(comment='quote"\nslash\\')
-    m.ghost_import_activities(dict(CFG, dry_run=True, xml="PRIVATE_XML", env="PRIVATE_ENV"), [row])
+    ghostfolio.ghost_import_activities(dict(CFG, dry_run=True, xml="PRIVATE_XML", env="PRIVATE_ENV"), [row])
     records = [r for r in caplog.records if r.getMessage().startswith("LAB_EVIDENCE ")]
     assert len(records) == 1
     record = records[0]

@@ -26,10 +26,6 @@ NOTIFY_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR
 NOTIFY_EXIT_STATUS = {0: "sent", 10: "invalid_payload", 11: "unavailable", 12: "failed",
                       13: "invalid_destination"}
 
-# Script the worker re-runs; the legacy launcher sets it to its own __file__
-# until task 4.2 switches the worker to the installed package.
-WORKER_SCRIPT = ""
-
 
 def notify_worker() -> int:
     """Worker process entry: deliver one notification read from stdin.
@@ -67,8 +63,9 @@ def notify_worker() -> int:
 
 
 def _notify_worker_argv() -> list[str]:
-    # -I: ignore PYTHON* variables, user site-packages and the current directory
-    return [sys.executable, "-I", os.path.abspath(WORKER_SCRIPT), NOTIFY_WORKER_FLAG]
+    # -I: ignore PYTHON* variables, user site-packages and the current directory;
+    # the installed package is found through site-packages.
+    return [sys.executable, "-I", "-m", "ghostfolio_ibkr_sync", NOTIFY_WORKER_FLAG]
 
 
 def _stop_worker(proc: subprocess.Popen[bytes]) -> None:
@@ -94,9 +91,6 @@ def send_notification(settings: NotificationConfigDict, title: str, body: str) -
     payload = json.dumps({"urls": settings["urls"], "title": title, "body": body}).encode()
     if len(payload) > NOTIFY_PAYLOAD_MAX:
         return "payload_too_large"
-    # The worker re-runs this file: impossible when the script came from stdin
-    if not os.path.isfile(os.path.abspath(WORKER_SCRIPT)):
-        return "spawn_failed"
     env = {k: os.environ[k] for k in NOTIFY_ENV_ALLOWLIST if k in os.environ}
     try:
         proc = subprocess.Popen(_notify_worker_argv(), stdin=subprocess.PIPE,

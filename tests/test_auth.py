@@ -3,8 +3,8 @@ import dataclasses
 
 import pytest
 
-import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import app, config, notify
+import requests
+from ghostfolio_ibkr_sync import app, config, ghostfolio, notify
 from ghostfolio_ibkr_sync.models import Settings
 
 SECRET = "CANARY-ACCESS-7f3a"        # synthetic security token
@@ -26,13 +26,13 @@ def env(monkeypatch):
 
 def test_legacy_token_is_used_verbatim(env):
     env.setenv("GHOST_TOKEN", " legacy-jwt ")
-    cfg = m.load_config()
+    cfg = config.load_config()
     assert cfg["ghost_token"] == " legacy-jwt " and cfg["ghost_access_token"] is None
 
 
 def test_access_token_is_kept_verbatim_and_no_bearer_yet(env):
     env.setenv("GHOST_ACCESS_TOKEN", f" {SECRET}é ")
-    cfg = m.load_config()
+    cfg = config.load_config()
     assert cfg["ghost_access_token"] == f" {SECRET}é " and cfg["ghost_token"] is None
 
 
@@ -42,14 +42,14 @@ def test_absent_empty_or_blank_credentials_are_missing(env, token, access):
         if v is not None:
             env.setenv(k, v)
     with pytest.raises(RuntimeError, match="GHOST_TOKEN or GHOST_ACCESS_TOKEN"):
-        m.load_config()
+        config.load_config()
 
 
 @pytest.mark.parametrize("token,access,mode", [("   ", SECRET, "access"), ("jwt", " ", "legacy")])
 def test_blank_variable_counts_as_unset_beside_the_other(env, token, access, mode):
     env.setenv("GHOST_TOKEN", token)
     env.setenv("GHOST_ACCESS_TOKEN", access)
-    cfg = m.load_config()
+    cfg = config.load_config()
     assert (cfg["ghost_access_token"] is not None) == (mode == "access")
 
 
@@ -57,14 +57,14 @@ def test_both_credentials_conflict_without_echoing_them(env):
     env.setenv("GHOST_TOKEN", BEARER_SECRET)
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
     with pytest.raises(RuntimeError, match="only one of") as e:
-        m.load_config()
+        config.load_config()
     assert SECRET not in str(e.value) and BEARER_SECRET not in str(e.value)
 
 
 def test_missing_credential_is_named_among_the_other_missing_variables(env):
     env.delenv("IBKR_TOKEN")
     with pytest.raises(RuntimeError, match="IBKR_TOKEN, GHOST_TOKEN or GHOST_ACCESS_TOKEN"):
-        m.load_config()
+        config.load_config()
 
 
 @pytest.mark.parametrize("host", [
@@ -77,7 +77,7 @@ def test_access_mode_rejects_unsafe_hosts_with_a_fixed_message(env, host):
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
     env.setenv("GHOST_HOST", host)
     with pytest.raises(RuntimeError, match="GHOST_HOST must be") as e:
-        m.load_config()
+        config.load_config()
     assert SECRET not in str(e.value)
 
 
@@ -85,22 +85,22 @@ def test_access_mode_rejects_unsafe_hosts_with_a_fixed_message(env, host):
 def test_access_mode_accepts_plain_http_and_https_hosts(env, host):
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
     env.setenv("GHOST_HOST", host)
-    assert m.load_config()["ghost_host"] == host.rstrip("/")
+    assert config.load_config()["ghost_host"] == host.rstrip("/")
 
 
 def test_legacy_mode_keeps_its_previous_host_handling(env):
     env.setenv("GHOST_TOKEN", "jwt")
     env.setenv("GHOST_HOST", "http://ghost:3333?legacy")
-    assert m.load_config()["ghost_host"] == "http://ghost:3333?legacy"
+    assert config.load_config()["ghost_host"] == "http://ghost:3333?legacy"
 
 
 def test_load_config_never_calls_the_network(env):
     def boom(*a, **k):
         raise AssertionError("no request expected")
-    env.setattr(m.requests, "post", boom)
-    env.setattr(m.requests, "get", boom)
+    env.setattr(requests, "post", boom)
+    env.setattr(requests, "get", boom)
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
-    m.load_config()
+    config.load_config()
 
 
 
@@ -112,7 +112,7 @@ def test_typed_settings_match_the_config_dictionary(env):
         ibkr_token="tok", account_ids=("U1",), query_ids=("q1",), account_names=("IBKR",),
         ghost_token=None, ghost_access_token=SECRET, ghost_host="http://ghost:3333",
         ghost_platform_id="", mapping_file="", dry_run=False)
-    assert m.load_config() == {
+    assert config.load_config() == {
         "ibkr_token": "tok", "account_ids": ["U1"], "query_ids": ["q1"],
         "account_names": ["IBKR"], "ghost_token": None, "ghost_access_token": SECRET,
         "ghost_host": "http://ghost:3333", "ghost_platform_id": "", "mapping_file": "",
@@ -150,13 +150,13 @@ def script_post(monkeypatch, outcome):
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
-    monkeypatch.setattr(m.requests, "post", post)
+    monkeypatch.setattr(requests, "post", post)
     return calls
 
 
 def test_exchange_posts_once_without_redirects_with_both_timeouts(monkeypatch):
     calls = script_post(monkeypatch, Resp(201, {"authToken": "eyJ.abc-_.def"}))
-    assert m.ghost_exchange_access_token("http://ghost:3333", SECRET) == "eyJ.abc-_.def"
+    assert ghostfolio.ghost_exchange_access_token("http://ghost:3333", SECRET) == "eyJ.abc-_.def"
     assert len(calls) == 1
     url, kwargs = calls[0]
     assert url == "http://ghost:3333/api/v1/auth/anonymous"
@@ -169,19 +169,19 @@ def test_exchange_posts_once_without_redirects_with_both_timeouts(monkeypatch):
 def test_exchange_keeps_its_existing_redirect_failure(monkeypatch):
     script_post(monkeypatch, Resp(302, {}))
     with pytest.raises(RuntimeError, match="Ghostfolio login failed: HTTP 302"):
-        m.ghost_exchange_access_token("http://ghost:3333", SECRET)
+        ghostfolio.ghost_exchange_access_token("http://ghost:3333", SECRET)
 
 
 def test_exchange_refuses_an_unsafe_host_before_sending_anything(monkeypatch):
     calls = script_post(monkeypatch, Resp(201, {"authToken": "x"}))
     with pytest.raises(RuntimeError, match="GHOST_HOST must be"):
-        m.ghost_exchange_access_token("http://u:p@ghost", SECRET)
+        ghostfolio.ghost_exchange_access_token("http://u:p@ghost", SECRET)
     assert calls == []
 
 
 @pytest.mark.parametrize("outcome,reason", [
-    (m.requests.ConnectionError(f"refused {SECRET}"), "network error"),
-    (m.requests.Timeout(f"read timed out {SECRET}"), "network error"),
+    (requests.ConnectionError(f"refused {SECRET}"), "network error"),
+    (requests.Timeout(f"read timed out {SECRET}"), "network error"),
     (Resp(403, {"message": f"Forbidden {SECRET}"}), "HTTP 403"),
     (Resp(302, None, text=f"see http://evil/?t={SECRET}"), "HTTP 302"),
     (Resp(500, ValueError("x"), text=f"<html>{SECRET}</html>"), "HTTP 500"),
@@ -198,7 +198,7 @@ def test_exchange_refuses_an_unsafe_host_before_sending_anything(monkeypatch):
 def test_exchange_failures_raise_fixed_messages_without_secrets(monkeypatch, caplog, outcome, reason):
     script_post(monkeypatch, outcome)
     with pytest.raises(RuntimeError) as e:
-        m.ghost_exchange_access_token("http://ghost:3333", SECRET)
+        ghostfolio.ghost_exchange_access_token("http://ghost:3333", SECRET)
     message = str(e.value)
     assert message.startswith("Ghostfolio login failed:") and reason in message
     assert SECRET not in message and BEARER_SECRET not in message
@@ -241,14 +241,14 @@ def record_startup(monkeypatch, tokens=("bearer-1", "bearer-2", "bearer-3"), fai
 
 def test_access_mode_authenticates_once_before_any_ghostfolio_or_ibkr_call(env):
     events = record_startup(access_env(env))
-    assert m.main() == 0
+    assert app.main() == 0
     assert events == [("exchange", "http://ghost:3333", SECRET),
                       ("existing", "bearer-1"), ("account", "U1", "bearer-1")]
 
 
 def test_each_invocation_issues_a_fresh_bearer(env):
     events = record_startup(access_env(env))
-    assert m.main() == 0 and m.main() == 0
+    assert app.main() == 0 and app.main() == 0
     assert [e for e in events if e[0] == "exchange"] == [("exchange", "http://ghost:3333", SECRET)] * 2
     assert [e[2] for e in events if e[0] == "account"] == ["bearer-1", "bearer-2"]
 
@@ -256,13 +256,13 @@ def test_each_invocation_issues_a_fresh_bearer(env):
 def test_invalid_mapping_prevents_the_exchange(env, tmp_path):
     access_env(env).setenv("MAPPING_FILE", str(tmp_path / "missing.yaml"))
     events = record_startup(env)
-    assert m.main() == 1
+    assert app.main() == 1
     assert events == []
 
 
 def test_authentication_failure_stops_before_reads_accounts_and_writes(env, caplog):
     events = record_startup(access_env(env), fail=RuntimeError("Ghostfolio login failed: HTTP 403"))
-    assert m.main() == 1
+    assert app.main() == 1
     assert [e[0] for e in events] == ["exchange"]
     assert any("Ghostfolio login failed: HTTP 403" in r.message for r in caplog.records)
     assert SECRET not in caplog.text
@@ -273,16 +273,16 @@ def test_unauthorised_read_after_login_is_not_retried_with_a_new_login(env):
     logins = []
     env.setattr(app, "ghost_exchange_access_token", lambda h, t: logins.append(1) or "bearer")
     def unauthorised(cfg):
-        raise m.requests.HTTPError("401 Client Error")
+        raise requests.HTTPError("401 Client Error")
     env.setattr(app, "ghost_get_existing_orders", unauthorised)
-    assert m.main() == 1
+    assert app.main() == 1
     assert logins == [1]
 
 
 def test_legacy_mode_never_logs_in_and_uses_the_token_as_bearer(env):
     env.setenv("GHOST_TOKEN", "legacy-jwt")
     events = record_startup(env)
-    assert m.main() == 0
+    assert app.main() == 0
     assert events == [("existing", "legacy-jwt"), ("account", "U1", "legacy-jwt")]
 
 
@@ -308,7 +308,7 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
             return self._body
         def raise_for_status(self):
             if self.status_code >= 400:
-                raise m.requests.HTTPError("synthetic read failure")
+                raise requests.HTTPError("synthetic read failure")
 
     def post(url, **kw):
         if url.endswith("/api/v1/auth/anonymous"):
@@ -328,10 +328,10 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
             return R({"id": "gf-1", "name": "U1", "currency": "USD"})
         return R([{"id": "gf-1", "name": "U1"}])
 
-    env.setattr(m.requests, "post", post)
-    env.setattr(m.requests, "get", get)
-    env.setattr(m.requests, "put", lambda url, **kw: writes.append(("PUT", url, kw["json"])) or R({}))
-    env.setattr(m.requests, "delete", lambda url, **kw: writes.append(("DELETE", url)))
+    env.setattr(requests, "post", post)
+    env.setattr(requests, "get", get)
+    env.setattr(requests, "put", lambda url, **kw: writes.append(("PUT", url, kw["json"])) or R({}))
+    env.setattr(requests, "delete", lambda url, **kw: writes.append(("DELETE", url)))
     trade = ('<Trade tradeID="T1" symbol="KO" isin="US1912161007" assetCategory="STK" buySell="BUY" '
              'quantity="10" tradePrice="60" ibCommission="-1" currency="USD" dateTime="20260801;100000"/>')
     div = ('<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="25" dateTime="20260715;120000 EST" '
@@ -344,7 +344,7 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
            "</FlexStatement></FlexStatements></FlexQueryResponse>")
     env.setattr(app, "fetch_flex_report", lambda *a, **k: xml)
 
-    assert m.main() == int(failed)
+    assert app.main() == int(failed)
     assert logins == [{"accessToken": SECRET}]
     if mode == "false" and not failed:
         assert [verb for verb, _, _ in writes] == ["POST", "PUT"]
@@ -355,5 +355,5 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
         assert writes == []
     assert len(sent) == int(failed)
     if failed:
-        assert sent[0][0] == m.NOTIFY_TITLE
+        assert sent[0][0] == notify.NOTIFY_TITLE
     assert reads and all(auth == "Bearer fresh-bearer" for _, auth in reads)

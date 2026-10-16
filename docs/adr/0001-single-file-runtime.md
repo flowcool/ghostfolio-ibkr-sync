@@ -3,7 +3,7 @@
 Date: 2026-10-12. Status: accepted (existing behavior).
 
 The synchronization pipeline and its Ghostfolio helpers live in
-[`ibkr_to_ghostfolio.py`](../../ibkr_to_ghostfolio.py). Keep the functional,
+[`ibkr_to_ghostfolio.py`](../../ghostfolio_ibkr_sync/__main__.py). Keep the functional,
 single-file structure rather than introducing a package as part of maintenance;
 this preserves the small runtime and the identifiable source boundary consumed
 by [DEGIRO's core projection](0007-pinned-degiro-core.md).
