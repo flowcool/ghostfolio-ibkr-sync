@@ -1,0 +1,21 @@
+[tool.ruff]
+target-version = "py314"
+extend-exclude = ["tmp", "audit"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pre-package code keeps its style until its extraction task moves it.
+"ibkr_to_ghostfolio.py" = ["I001", "UP", "B"]
+"cleanup_*.py" = ["I001", "UP", "B"]
+"scripts/*.py" = ["I001", "UP", "B"]
+"tests/*.py" = ["I001", "UP", "B", "E702", "F401", "F841"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ghostfolio_ibkr_sync"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["ghostfolio_ibkr_sync"]

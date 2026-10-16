@@ -1,7 +1,11 @@
 """Offline tests: Ghostfolio credential selection and the security-token exchange."""
+import dataclasses
+
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import config
+from ghostfolio_ibkr_sync.models import Settings
 
 SECRET = "CANARY-ACCESS-7f3a"        # synthetic security token
 BEARER_SECRET = "CANARY-BEARER-91c2"  # synthetic value a server might echo
@@ -97,6 +101,31 @@ def test_load_config_never_calls_the_network(env):
     env.setattr(m.requests, "get", boom)
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
     m.load_config()
+
+
+
+def test_typed_settings_match_the_config_dictionary(env):
+    env.setenv("GHOST_ACCESS_TOKEN", SECRET)
+    env.setenv("GHOST_ACCOUNT_NAMES", " IBKR ")
+    settings = config.load()
+    assert settings == Settings(
+        ibkr_token="tok", account_ids=("U1",), query_ids=("q1",), account_names=("IBKR",),
+        ghost_token=None, ghost_access_token=SECRET, ghost_host="http://ghost:3333",
+        ghost_platform_id="", mapping_file="", dry_run=False)
+    assert m.load_config() == {
+        "ibkr_token": "tok", "account_ids": ["U1"], "query_ids": ["q1"],
+        "account_names": ["IBKR"], "ghost_token": None, "ghost_access_token": SECRET,
+        "ghost_host": "http://ghost:3333", "ghost_platform_id": "", "mapping_file": "",
+        "dry_run": False}
+
+
+def test_typed_settings_are_immutable_and_hide_credentials(env):
+    env.setenv("IBKR_TOKEN", "CANARY-IBKR-5e0d")
+    env.setenv("GHOST_TOKEN", BEARER_SECRET)
+    settings = config.load()
+    assert "CANARY-IBKR-5e0d" not in repr(settings) and BEARER_SECRET not in repr(settings)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        settings.dry_run = True
 
 
 # --- token exchange -----------------------------------------------------------

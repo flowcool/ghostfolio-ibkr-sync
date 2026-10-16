@@ -16,10 +16,26 @@ from datetime import datetime, timezone
 from decimal import Decimal, DecimalException, ROUND_HALF_UP, localcontext
 from math import ceil, isfinite
 from zoneinfo import ZoneInfo
-from urllib.parse import quote, quote_plus, urlsplit
+from urllib.parse import quote, quote_plus
 
 import requests
 import yaml
+
+# Transitional until the image installs the package: the notification worker
+# runs this file with -I, which leaves the script directory off sys.path.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.append(_HERE)
+
+from ghostfolio_ibkr_sync.config import (  # noqa: E402
+    APPRISE_URLS_MAX,
+    NOTIFY_PAYLOAD_MAX,
+    dry_run_requested,
+    load_config,
+    load_notification_config,
+    timezone_preview_reason,
+    validate_ghost_host,
+)
 
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
@@ -63,110 +79,6 @@ DIVIDEND_MATCH_DAYS = 3
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-def dry_run_requested():
-    """Default to simulation; safe to read even after configuration rejection."""
-    return os.environ.get("DRY_RUN", "").strip().lower() not in ("0", "false", "no", "off")
-
-
-def invalid_dry_run_value():
-    """Validate the mode without echoing potentially sensitive ENV contents."""
-    value = os.environ.get("DRY_RUN", "").strip().lower()
-    return value not in ("", "1", "true", "yes", "on", "0", "false", "no", "off")
-
-
-def timezone_preview_reason():
-    """Return why TZ forces a whole-run preview, or None when TZ is a valid IANA zone."""
-    name = os.environ.get("TZ", "").strip()
-    if not name:
-        return "TZ is missing"
-    try:
-        ZoneInfo(name)
-    except Exception:
-        return "TZ is not a valid IANA timezone"
-    return None
-
-
-def _env_secret(name):
-    """Return a credential verbatim, or None when absent, empty or whitespace only."""
-    value = os.environ.get(name)
-    if value is None or not value.strip():
-        return None
-    return value
-
-
-def validate_ghost_host(host):
-    """Refuse a GHOST_HOST that could send the access token somewhere unintended.
-
-    The message is fixed: the host may carry userinfo credentials.
-    """
-    try:
-        parts = urlsplit(host)
-        port_ok = parts.port is None or parts.port > 0
-    except ValueError:
-        port_ok = False
-    if (not port_ok
-            or parts.scheme not in ("http", "https")
-            or not parts.hostname
-            or "@" in parts.netloc
-            or parts.query or parts.fragment or "?" in host or "#" in host
-            or any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f or c == "\\" for c in host)):
-        raise RuntimeError("GHOST_HOST must be an http(s) URL without credentials, "
-                           "query, fragment, whitespace or control characters")
-
-
-def load_config():
-    """Load and validate configuration from environment variables.
-
-    Ghostfolio credentials: exactly one of GHOST_TOKEN (a bearer used as is,
-    legacy) or GHOST_ACCESS_TOKEN (the security token, exchanged for a bearer
-    once per run by main).
-    """
-    if invalid_dry_run_value():
-        raise RuntimeError("DRY_RUN must be blank or one of 1/true/yes/on/0/false/no/off")
-    ghost_token = _env_secret("GHOST_TOKEN")
-    access_token = _env_secret("GHOST_ACCESS_TOKEN")
-    missing = [k for k in ("IBKR_TOKEN", "IBKR_ACCOUNT_IDS", "IBKR_QUERY_IDS") if not os.environ.get(k)]
-    if ghost_token is None and access_token is None:
-        missing.append("GHOST_TOKEN or GHOST_ACCESS_TOKEN")
-    if not os.environ.get("GHOST_HOST"):
-        missing.append("GHOST_HOST")
-    if missing:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-    if ghost_token is not None and access_token is not None:
-        raise RuntimeError("Set only one of GHOST_TOKEN or GHOST_ACCESS_TOKEN, not both")
-    ghost_host = os.environ["GHOST_HOST"].rstrip("/")
-    if access_token is not None:
-        validate_ghost_host(ghost_host)
-
-    account_ids = os.environ["IBKR_ACCOUNT_IDS"].split(",")
-    query_ids = os.environ["IBKR_QUERY_IDS"].split(",")
-    account_names = os.environ.get("GHOST_ACCOUNT_NAMES", "").split(",")
-
-    if len(account_ids) != len(query_ids):
-        raise RuntimeError("IBKR_ACCOUNT_IDS and IBKR_QUERY_IDS must have the same number of entries")
-    if account_names != [""] and len(account_names) != len(account_ids):
-        raise RuntimeError("GHOST_ACCOUNT_NAMES must match the number of IBKR_ACCOUNT_IDS")
-
-    # Effective targets: the names, or the IBKR ids when no names are set (run_sync)
-    targets = [n.strip() for n in account_names] if account_names != [""] else [a.strip() for a in account_ids]
-    for target in targets:
-        if targets.count(target) > 1:
-            raise RuntimeError(f"Duplicate Ghostfolio target '{target}': each IBKR account needs its own target")
-
-    return {
-        "ibkr_token": os.environ["IBKR_TOKEN"],
-        "account_ids": [a.strip() for a in account_ids],
-        "query_ids": [q.strip() for q in query_ids],
-        "account_names": [n.strip() for n in account_names] if account_names != [""] else [],
-        "ghost_token": ghost_token,
-        "ghost_access_token": access_token,
-        "ghost_host": ghost_host,
-        "ghost_platform_id": os.environ.get("GHOST_PLATFORM_ID", ""),
-        "mapping_file": os.environ.get("MAPPING_FILE", "mapping.yaml"),
-        "dry_run": dry_run_requested(),
-    }
-
 
 def legacy_token_expiry_days(config, now=None):
     """Read an unverified JWT expiry for reminders only, never authentication."""
@@ -2916,11 +2828,6 @@ def record_failure(outcome, stage, reason, ordinal=None):
 # ---------------------------------------------------------------------------
 
 NOTIFY_WORKER_FLAG = "--notify-worker"
-NOTIFY_PAYLOAD_MAX = 32 * 1024
-APPRISE_URLS_MAX = 10
-APPRISE_URL_MAX_LEN = 2048
-APPRISE_TIMEOUT_DEFAULT = 10
-APPRISE_TIMEOUT_MAX = 30
 # The worker inherits only what Apprise needs to reach a destination: never the
 # IBKR or Ghostfolio credentials.
 NOTIFY_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -2930,36 +2837,6 @@ NOTIFY_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR
 # of the interpreter's own codes (1 uncaught error, 2 cannot open the script).
 NOTIFY_EXIT_STATUS = {0: "sent", 10: "invalid_payload", 11: "unavailable", 12: "failed",
                       13: "invalid_destination"}
-
-
-def load_notification_config():
-    """Parse APPRISE_URLS and APPRISE_TIMEOUT; None means notifications are off.
-
-    APPRISE_URLS is a JSON list of Apprise URL strings (blank or [] = off);
-    APPRISE_TIMEOUT an integer number of seconds, 1..30 (default 10).  Never
-    raises: invalid settings only disable delivery, with a fixed warning since
-    the values carry destination credentials.
-    """
-    raw = os.environ.get("APPRISE_URLS", "")
-    if not raw.strip():
-        return None
-    try:
-        urls = json.loads(raw) if len(raw) <= NOTIFY_PAYLOAD_MAX else None
-    except ValueError:
-        urls = None
-    raw_timeout = os.environ.get("APPRISE_TIMEOUT", "").strip()
-    timeout = APPRISE_TIMEOUT_DEFAULT
-    if raw_timeout:
-        timeout = int(raw_timeout) if re.fullmatch(r"[0-9]{1,2}", raw_timeout) else 0
-    if (not isinstance(urls, list) or len(urls) > APPRISE_URLS_MAX
-            or not all(isinstance(u, str) and u.strip() and len(u) <= APPRISE_URL_MAX_LEN
-                       for u in urls)
-            or not 1 <= timeout <= APPRISE_TIMEOUT_MAX):
-        log.warning("APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled")
-        return None
-    if not urls:
-        return None
-    return {"urls": urls, "timeout": timeout}
 
 
 def notify_worker():

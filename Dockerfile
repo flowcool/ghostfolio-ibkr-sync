@@ -33,10 +33,11 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
 COPY ibkr_to_ghostfolio.py .
+COPY ghostfolio_ibkr_sync/*.py ghostfolio_ibkr_sync/
 
 COPY entrypoint.sh .
-RUN chmod 0555 /app /app/entrypoint.sh \
-    && chmod 0444 /app/ibkr_to_ghostfolio.py /app/requirements.txt
+RUN chmod 0555 /app /app/entrypoint.sh /app/ghostfolio_ibkr_sync \
+    && chmod 0444 /app/ibkr_to_ghostfolio.py /app/requirements.txt /app/ghostfolio_ibkr_sync/*.py
 
 # Keep application files owned by root; runtime crontabs live under /tmp.
 # Stable IDs let operators grant access to read-only bind mounts without relying

@@ -6,7 +6,7 @@ Every task requires the full `scripts/check.sh` plus its targeted check below. M
 
 ## 1. Foundation and configuration
 
-- [ ] 1.1 Create the package, immutable models, typed settings, Ruff/mypy configuration, and common check script. Pin Ruff, mypy, types-requests, and types-PyYAML in `requirements-dev.txt` for strict application mypy. Extract `load_config` and notification settings without changing ENV validation. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_auth.py tests/test_notify.py -k 'config or settings or timeout or disables'`.
+- [x] 1.1 Create the package, immutable models, typed settings, Ruff/mypy configuration, and common check script. Pin Ruff, mypy, types-requests, and types-PyYAML in `requirements-dev.txt` for strict application mypy. Extract `load_config` and notification settings without changing ENV validation. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_auth.py tests/test_notify.py -k 'config or settings or timeout or disables'`.
 
 ## 2. External adapters
 

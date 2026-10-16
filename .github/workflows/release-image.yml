@@ -35,7 +35,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest -q
+      - run: scripts/check.sh
+        env:
+          PYTHON: python
       - run: pip-audit
 
   native-image:
