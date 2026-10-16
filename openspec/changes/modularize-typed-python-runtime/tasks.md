@@ -11,7 +11,7 @@ Every task requires the full `scripts/check.sh` plus its targeted check below. M
 ## 2. External adapters
 
 - [x] 2.1 Extract typed IBKR fetch, response guards, Flex parsing, and dividend prerequisites. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_parsing.py tests/test_orchestration.py -k 'flex or prerequisite'`.
-- [ ] 2.2 Extract typed Ghostfolio authentication, reads, imports, and cash updates. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_ghostfolio.py tests/test_auth.py`.
+- [x] 2.2 Extract typed Ghostfolio authentication, reads, imports, and cash updates. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_ghostfolio.py tests/test_auth.py`.
 
 ## 3. Financial decisions
 

@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import ibkr
+from ghostfolio_ibkr_sync import ghostfolio, ibkr
 
 
 CFG = {"ghost_host": "http://ghost.invalid", "ghost_token": "SECRET_SENTINEL"}
@@ -70,10 +70,13 @@ def test_info_byte_identical(http, dry):
     handler.setFormatter(formatter)
     old_level = m.log.level
     old_ibkr_level = ibkr.log.level
+    old_ghostfolio_level = ghostfolio.log.level
     m.log.setLevel(logging.INFO)
     ibkr.log.setLevel(logging.INFO)
+    ghostfolio.log.setLevel(logging.INFO)
     m.log.addHandler(handler)
     ibkr.log.addHandler(handler)
+    ghostfolio.log.addHandler(handler)
     try:
         assert fetch(http) == XML
         cfg = dict(CFG, dry_run=dry)
@@ -87,8 +90,10 @@ def test_info_byte_identical(http, dry):
     finally:
         m.log.removeHandler(handler)
         ibkr.log.removeHandler(handler)
+        ghostfolio.log.removeHandler(handler)
         m.log.setLevel(old_level)
         ibkr.log.setLevel(old_ibkr_level)
+        ghostfolio.log.setLevel(old_ghostfolio_level)
     messages = [("INFO", "Got reference code synthetic-ref, fetching statement...")]
     if dry:
         messages += [("INFO", "[DRY RUN] would import 1 activities (no POST sent):"),

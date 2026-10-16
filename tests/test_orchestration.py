@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import ibkr
+from ghostfolio_ibkr_sync import ghostfolio, ibkr
 
 original_import = m.ghost_import_activities
 
@@ -770,7 +770,7 @@ def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch
     # real ghost_import_activities / ghost_update_cash_balance, only the account GET allowed
     monkeypatch.setattr(m, "fetch_flex_report", lambda *a, **k: report(trade_xml("T1"), div_xml()))
     monkeypatch.setattr(m, "ghost_find_account_id", lambda *a: ACC)
-    monkeypatch.setattr(m, "requests", ReadOnlyHttp())
+    monkeypatch.setattr(ghostfolio, "requests", ReadOnlyHttp())
     ids, comments, pos = set(), set(), positions()
     _, ok = m.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
     assert ok is True and ids == {"T1"} and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
