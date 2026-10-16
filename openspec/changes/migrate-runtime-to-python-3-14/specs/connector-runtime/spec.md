@@ -14,6 +14,8 @@ Baseline replaced: README “Prerequisites”, CONTRIBUTING “Tests”, `docs/u
 - **WHEN** startup configuration is evaluated
 - **THEN** authentication precedes reads; numeric five-field CRON is validated.
 
+Evidence: README “Running”; `python -m pytest -q tests/test_auth.py tests/test_entrypoint.py -k 'test_access_mode_authenticates_once_before_any_ghostfolio_or_ibkr_call or test_legacy_mode_never_logs_in_and_uses_the_token_as_bearer or test_valid_cron_is_written_and_tested_before_start or test_invalid_cron_is_rejected_without_echoing_input'`.
+
 #### Scenario: Repository runtime declarations
 - **WHEN** `.venv/bin/python -m pytest -q tests -k python_runtime_baseline` runs
 - **THEN** the Docker base, all seven workflow pins, both Renovate ranges, and public direct-run guidance require Python 3.14 as specified.
