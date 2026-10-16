@@ -2,10 +2,12 @@
 import base64
 import json
 import logging
+import time
 
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import app, notify
 
 NOW = 1800000000
 DAY = 86400
@@ -27,9 +29,9 @@ def env(monkeypatch):
         monkeypatch.setenv(key, value)
     for key in ("GHOST_ACCESS_TOKEN", "GHOST_TOKEN_EXPIRY_WARNING_DAYS", "DRY_RUN"):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(m.time, "time", lambda: NOW)
-    monkeypatch.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), {}))
-    monkeypatch.setattr(m, "process_account", lambda *args: ({}, True))
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    monkeypatch.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), {}))
+    monkeypatch.setattr(app, "process_account", lambda *args: ({}, True))
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: pytest.fail("no real HTTP"))
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: pytest.fail("no real HTTP"))
     monkeypatch.setenv("DRY_RUN", "false")
@@ -97,13 +99,13 @@ def notifications(env, status="sent"):
         if isinstance(status, Exception):
             raise status
         return status
-    env.setattr(m, "send_notification", send)
+    env.setattr(app, "send_notification", send)
     return sent
 
 
 def test_success_notifies_once_after_both_accounts_and_preserves_exit(env, caplog):
     events = []
-    env.setattr(m, "process_account", lambda cfg, account, *args: (events.append(account) or {}, True))
+    env.setattr(app, "process_account", lambda cfg, account, *args: (events.append(account) or {}, True))
     sent = notifications(env)
     assert m.main() == 0
     assert events == ["U1", "U2"]
@@ -129,7 +131,7 @@ def test_rejected_token_and_reminder_share_one_failure_notification(env):
 
     def rejected(cfg):
         raise m.requests.HTTPError("synthetic rejection", response=response)
-    env.setattr(m, "ghost_get_existing_orders", rejected)
+    env.setattr(app, "ghost_get_existing_orders", rejected)
     assert m.main() == 1 and len(sent) == 1
     assert sent[0][0] == m.NOTIFY_TITLE
     assert "ghost_startup: token_rejected" in sent[0][1]
@@ -155,7 +157,7 @@ def test_dry_run_modes_expiry_only_warns_without_notification(env, caplog, mode)
 
 
 def test_without_apprise_warning_still_appears(env, caplog):
-    env.setattr(m, "send_notification", lambda *a: pytest.fail("notifications are off"))
+    env.setattr(app, "send_notification", lambda *a: pytest.fail("notifications are off"))
     assert m.main() == 0 and "expires in 3 day(s)" in caplog.text
 
 
@@ -163,7 +165,7 @@ def test_access_mode_has_no_reminder_even_for_short_lived_exchanged_jwt(env, cap
     sent = notifications(env)
     env.delenv("GHOST_TOKEN")
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
-    env.setattr(m, "ghost_exchange_access_token", lambda *a: jwt({"exp": NOW + DAY}))
+    env.setattr(app, "ghost_exchange_access_token", lambda *a: jwt({"exp": NOW + DAY}))
     assert m.main() == 0 and sent == []
     assert "Legacy GHOST_TOKEN" not in caplog.text
 
@@ -180,7 +182,7 @@ def test_interrupted_run_does_not_send_reminder(env):
 
     def interrupted(*args):
         raise KeyboardInterrupt
-    env.setattr(m, "process_account", interrupted)
+    env.setattr(app, "process_account", interrupted)
     with pytest.raises(KeyboardInterrupt):
         m.main()
     assert sent == []

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import app, notify
 
 URL_SECRET = "CANARY-DEST-a41f"
 CANARY = "CANARY-ERR-77c0"
@@ -42,13 +43,13 @@ def spy_send(monkeypatch, status="sent"):
         if isinstance(status, BaseException):
             raise status
         return status
-    monkeypatch.setattr(m, "send_notification", send)
+    monkeypatch.setattr(app, "send_notification", send)
     return sent
 
 
 def accounts(monkeypatch, results):
     calls = []
-    monkeypatch.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    monkeypatch.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
 
     def process(cfg, ibkr_id, *a):
         calls.append(ibkr_id)
@@ -56,7 +57,7 @@ def accounts(monkeypatch, results):
         if isinstance(result, BaseException):
             raise result
         return result
-    monkeypatch.setattr(m, "process_account", process)
+    monkeypatch.setattr(app, "process_account", process)
     return calls
 
 
@@ -147,7 +148,7 @@ def test_login_failure_notifies_once(env):
 
 def test_ghostfolio_startup_failure_notifies_once(env):
     sent = spy_send(env)
-    env.setattr(m, "ghost_get_existing_orders",
+    env.setattr(app, "ghost_get_existing_orders",
                 lambda cfg: (_ for _ in ()).throw(RuntimeError(f"count={AMOUNT}")))
     assert m.main() == 1
     assert len(sent) == 1 and "- ghost_startup: activities_unavailable" in sent[0]["body"]
@@ -157,7 +158,7 @@ def test_expired_ghostfolio_token_notifies_token_rejected(env):
     sent = spy_send(env)
     resp = m.requests.Response()
     resp.status_code = 401
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
         m.requests.HTTPError("401 Unauthorized", response=resp)))
     assert m.main() == 1
     assert len(sent) == 1 and "- ghost_startup: token_rejected" in sent[0]["body"]
@@ -165,7 +166,7 @@ def test_expired_ghostfolio_token_notifies_token_rejected(env):
 
 def test_unexpected_failure_notifies_once(env):
     sent = spy_send(env)
-    env.setattr(m, "run_sync", lambda outcome: (_ for _ in ()).throw(ValueError(CANARY)))
+    env.setattr(app, "run_sync", lambda outcome: (_ for _ in ()).throw(ValueError(CANARY)))
     assert m.main() == 1
     assert len(sent) == 1 and "- unexpected: unhandled_error" in sent[0]["body"]
 
@@ -234,7 +235,7 @@ def test_timeout_is_logged_as_uncertain_without_retry(env, caplog):
 def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
     script = tmp_path / "hang.py"
     script.write_text("import time\ntime.sleep(60)\n")
-    env.setattr(m, "_notify_worker_argv", lambda: [sys.executable, str(script)])
+    env.setattr(notify, "_notify_worker_argv", lambda: [sys.executable, str(script)])
     env.setenv("APPRISE_TIMEOUT", "1")
     calls = accounts(env, {**ALL_OK, "U222": ({}, False)})
     start = time.monotonic()
@@ -249,7 +250,7 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
     from test_orchestration import World, structured_input_xml
 
     w = World(env, structured_input_xml(mode))
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
     assert m.main() == 0
     assert sent == []
@@ -267,7 +268,7 @@ def test_dividend_structured_input_other_failures_still_notify(env):
     from test_orchestration import World, structured_input_xml
 
     World(env, structured_input_xml("old"), cash_ok=False)
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
     assert m.main() == 1
     assert len(sent) == 1 and "Accounts failed: 3 of 3." in sent[0]["body"]
@@ -281,7 +282,7 @@ def test_historical_diagnostic_findings_preserve_success_and_notifications(env, 
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(unitPrice=price)])
     World(env, report(divs=div_xml()))
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     for verb in ("post", "put", "patch", "delete"):
         env.setattr(m.requests, verb, lambda *a, **kw: pytest.fail("financial HTTP write"))
@@ -294,9 +295,9 @@ def test_historical_diagnostic_findings_preserve_success_and_notifications(env, 
 def test_historical_diagnostic_read_failure_keeps_exit_and_notification_contract(env, dry):
     env.setenv("DRY_RUN", "1" if dry else "0")
     sent = spy_send(env)
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
         m.requests.ConnectionError("synthetic activity GET failure")))
-    env.setattr(m, "process_account", lambda *a: pytest.fail("account after failed reader"))
+    env.setattr(app, "process_account", lambda *a: pytest.fail("account after failed reader"))
     assert m.main() == 1
     assert len(sent) == 1
     assert sent[0]["title"] == m.NOTIFY_TITLE
@@ -312,8 +313,8 @@ def test_historical_diagnostic_preflight_invalid_tz_forces_whole_run_preview(env
         env.setenv("TZ", tz)
     sent = spy_send(env)
     seen = []
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
-    env.setattr(m, "process_account",
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "process_account",
                 lambda cfg, ibkr_id, *a: seen.append((ibkr_id, cfg["dry_run"])) or ({}, True))
     assert m.main() == 0
     assert seen == [("U111", True), ("U222", True), ("U333", True)]
@@ -338,8 +339,8 @@ def test_historical_diagnostic_preflight_valid_tz_keeps_live_run_silent(env, cap
     env.setenv("TZ", "Europe/Paris")
     sent = spy_send(env)
     seen = []
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
-    env.setattr(m, "process_account", lambda cfg, *a: seen.append(cfg["dry_run"]) or ({}, True))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "process_account", lambda cfg, *a: seen.append(cfg["dry_run"]) or ({}, True))
     assert m.main() == 0
     assert seen == [False] * 3 and sent == []
     assert "forced to DRY_RUN" not in caplog.text
@@ -360,7 +361,7 @@ def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, 
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
     World(env, report(divs=div_xml()))
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     caplog.set_level(logging.INFO)
     assert m.main() == 0 and sent == []

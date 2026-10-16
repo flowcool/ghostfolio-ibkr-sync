@@ -11,7 +11,7 @@ import types
 import pytest
 
 import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import config
+from ghostfolio_ibkr_sync import config, notify
 from ghostfolio_ibkr_sync.models import NotificationSettings
 
 URL_SECRET = "CANARY-DEST-3b9e"          # synthetic credential inside a notify URL
@@ -160,7 +160,7 @@ def test_default_worker_argv_is_fixed_and_carries_no_secret():
 def use_worker(monkeypatch, tmp_path, code):
     script = tmp_path / "worker.py"
     script.write_text(code)
-    monkeypatch.setattr(m, "_notify_worker_argv", lambda: [sys.executable, str(script)])
+    monkeypatch.setattr(notify, "_notify_worker_argv", lambda: [sys.executable, str(script)])
 
 
 def track_popen(monkeypatch):
@@ -170,7 +170,7 @@ def track_popen(monkeypatch):
     def popen(*a, **k):
         procs.append(real(*a, **k))
         return procs[-1]
-    monkeypatch.setattr(m.subprocess, "Popen", popen)
+    monkeypatch.setattr(notify.subprocess, "Popen", popen)
     return procs
 
 
@@ -224,7 +224,7 @@ def test_worker_exit_code_maps_to_a_fixed_status(monkeypatch, tmp_path, exit_cod
 
 
 def test_oversized_payload_spawns_nothing(monkeypatch):
-    monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn"))
+    monkeypatch.setattr(notify.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn"))
     body = "x" * m.NOTIFY_PAYLOAD_MAX
     assert m.send_notification({"urls": URLS, "timeout": 10}, "t", body) == "payload_too_large"
 
@@ -232,7 +232,7 @@ def test_oversized_payload_spawns_nothing(monkeypatch):
 def test_spawn_failure_is_a_status_not_an_exception(monkeypatch):
     def boom(*a, **k):
         raise OSError(URL_SECRET)
-    monkeypatch.setattr(m.subprocess, "Popen", boom)
+    monkeypatch.setattr(notify.subprocess, "Popen", boom)
     assert m.send_notification({"urls": URLS, "timeout": 10}, "t", "b") == "spawn_failed"
 
 
@@ -248,7 +248,7 @@ def test_interrupt_while_waiting_kills_the_worker_and_propagates(monkeypatch, tm
 
         def communicate(self, *a, **k):
             raise exc
-    monkeypatch.setattr(m.subprocess, "Popen", Interrupted)
+    monkeypatch.setattr(notify.subprocess, "Popen", Interrupted)
     with pytest.raises(exc):
         m.send_notification({"urls": URLS, "timeout": 10}, "t", "b")
     assert procs[0].returncode is not None                       # killed and reaped
@@ -296,8 +296,8 @@ def test_real_apprise_bounds_destinations_expanded_from_one_entry(monkeypatch):
 
 def test_script_read_from_stdin_cannot_spawn_a_worker(monkeypatch):
     # `python - < ibkr_to_ghostfolio.py` sets __file__ to "<stdin>"
-    monkeypatch.setattr(m, "__file__", "<stdin>")
-    monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn"))
+    monkeypatch.setattr(notify, "WORKER_SCRIPT", "<stdin>")
+    monkeypatch.setattr(notify.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn"))
     assert m.send_notification({"urls": URLS, "timeout": 10}, "t", "b") == "spawn_failed"
 
 
