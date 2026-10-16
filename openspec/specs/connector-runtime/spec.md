@@ -268,7 +268,7 @@ Baseline: the v2.5.0 dry run emitted 114 opaque findings. Saved evidence measure
 - **THEN** each row claimed by its old symbol comment appears in one source block even when a destination-row check fails; only comments that fail the account-and-comment claim criteria use residual skip-cause wording; import selection is unchanged.
 
 #### Scenario: Real read-only acceptance
-- **WHEN** the operator-authorized `DRY_RUN=1 LOG_LEVEL=DEBUG .venv/bin/python ibkr_to_ghostfolio.py` runs with the approved real-data ENV and private log capture
+- **WHEN** the operator-authorized `DRY_RUN=1 LOG_LEVEL=DEBUG .venv/bin/python -m ghostfolio_ibkr_sync` runs with the approved real-data ENV and private log capture
 - **THEN** zero financial writes occur; all 44 previously blocked groups pass the active, id, data-source, symbol and local-date checks, with ISIN pass or unavailable; each reaches exact amount comparison or stays uncertain only with `component partition identity not proven` or a currency-context finding that shows the observed currency, never a component assignment inferred from amounts; the outcome matches the replay baseline of 39 compared, 3 unproven partitions and 2 unsupported currency, and any other cause or count fails acceptance and is reported; every remaining anomaly is explainable from the log; both absent groups log `skipped by historical comment`, reconciled with their evidence rows; and both unsupported-currency groups show a `currency context:` line naming KRW.
 
 ### Requirement: Bounded SendRequest recovery
