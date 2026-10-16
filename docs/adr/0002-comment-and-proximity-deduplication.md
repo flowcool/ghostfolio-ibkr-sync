@@ -29,6 +29,8 @@ aggregated, not tracked as distinct payment events. Review unusual schedules
 and later corrections manually; this is not exact financial reconciliation or
 protection against simultaneous runs using stale snapshots.
 
-Sources: `ghost_get_existing_orders`, `_dividend_date_matches` and
-`process_account` in the [runtime](../../ghostfolio_ibkr_sync/app.py), and
+Sources: `ghost_get_existing_orders` in the
+[`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), `_dividend_date_matches` in the
+[`sync` module](../../ghostfolio_ibkr_sync/sync.py), `process_account` in the
+[`app` module](../../ghostfolio_ibkr_sync/app.py), and
 [conversion rules](../../README.md#how-activities-are-converted).

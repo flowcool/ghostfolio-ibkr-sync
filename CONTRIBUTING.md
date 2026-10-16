@@ -12,10 +12,13 @@ For a feature, explain the missing workflow, its impact and the smallest useful 
 
 ## Develop and verify
 
+The sync is the typed Python package `ghostfolio_ibkr_sync`, run only in Docker with `python -m ghostfolio_ibkr_sync`; there is no single-file launcher. Keep the functional style and strict application typing, and put new code in the module of its concern.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
+scripts/check.sh   # Ruff, strict mypy and pytest, as in CI
 ```
 
 CI and the container use Python 3.14. Tests use synthetic inputs and mocked HTTP; they require neither credentials nor running IBKR/Ghostfolio services. Do not point automated tests or cleanup tools at a live portfolio. Add regression coverage for a logic change, including account isolation and repeated runs when relevant.

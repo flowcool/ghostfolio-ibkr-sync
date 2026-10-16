@@ -9,12 +9,16 @@ the complete setup and configuration guide. Keep public artifacts free of person
 hosts, paths, account identifiers and private work-tracker IDs.
 
 This repository is the canonical source of the broker-agnostic Ghostfolio helpers
-projected into ghostfolio-degiro-sync (docs/adr/0007-pinned-degiro-core.md). A change
-to import, cash or Ghostfolio request helpers flags downstream propagation in its PR.
+projected into ghostfolio-degiro-sync (docs/adr/0007-pinned-degiro-core.md). DEGIRO stays
+pinned to the last single-file commit; propagating the package needs a separate DEGIRO
+change. A change to import, cash or Ghostfolio request helpers flags downstream
+propagation in its PR.
 
 ## Invariants
 
-- Single-file runtime: `ibkr_to_ghostfolio.py` (docs/adr/0001-single-file-runtime.md).
+- Typed modular runtime: installed package `ghostfolio_ibkr_sync`, run with
+  `python -m ghostfolio_ibkr_sync`, Docker only, no launcher
+  (docs/adr/0001-single-file-runtime.md is superseded).
 - Imports are additive: never update or delete existing Ghostfolio activities
   automatically (docs/adr/0003-additive-imports.md). Cleanup tools change records
   only on explicit operator action.
@@ -24,7 +28,7 @@ to import, cash or Ghostfolio request helpers flags downstream propagation in it
   automated tools never target a live portfolio.
 - Credentials (`IBKR_TOKEN`, `GHOST_ACCESS_TOKEN`, `GHOST_TOKEN`) come only from ENV;
   never hardcoded, logged, committed or written to notes.
-- Functional Python, no classes, no type hints:
+- Functional Python, no behavior classes; package code strictly typed (`scripts/check.sh`):
   [python conventions](.claude/rules/python-conventions.md),
   [security rules](.claude/rules/security.md).
 

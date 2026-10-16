@@ -385,19 +385,14 @@ docker run --rm --network your-ghostfolio-network \
 
 ### Without Docker
 
+Docker is the only supported way to run the sync. The image installs the
+`ghostfolio_ibkr_sync` package and starts it with `python -m ghostfolio_ibkr_sync`.
+Since v3.0.0 there is no `ibkr_to_ghostfolio.py` file or launcher: running the
+repository from a source checkout is not supported. To test local changes, build the
+image yourself and run it as shown above:
+
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp mapping.yaml.example mapping.yaml  # edit the copied mappings for your securities
-export IBKR_TOKEN=your_token
-export IBKR_ACCOUNT_IDS=U1234567
-export IBKR_QUERY_IDS=123456
-export GHOST_ACCESS_TOKEN=your_ghost_security_token
-export GHOST_HOST=http://localhost:3333
-export GHOST_ACCOUNT_NAMES="IBKR Main"
-export TZ=Europe/Warsaw
-export DRY_RUN=true
-.venv/bin/python ibkr_to_ghostfolio.py
+docker build -t ibkr-sync:local .
 ```
 
 ### Dry run first
@@ -595,8 +590,8 @@ worker still running at the deadline is killed. This adds at most `APPRISE_TIMEO
 plus Apprise's import time inside it, to a notifying run. There is **no retry**: after a timeout
 the notification may or may not have arrived (`Failure notification timed out (it may still
 arrive; not retried)`). Delivery problems (`timeout`, `failed`, `invalid_destination`,
-`unavailable` when Apprise cannot be imported, `payload_too_large`, `spawn_failed`, which
-includes a script piped on standard input as in `python - < ibkr_to_ghostfolio.py`) are logged as warnings
+`unavailable` when Apprise cannot be imported, `payload_too_large`, `spawn_failed` when the worker
+process (`python -I -m ghostfolio_ibkr_sync --notify-worker`) cannot start) are logged as warnings
 and never change the run's exit code. Apprise and its pinned dependencies ship in the image
 and are only imported by the worker.
 
@@ -738,8 +733,12 @@ container. It uses the container's environment, so `DRY_RUN` behaves as configur
 true, nothing is written):
 
 ```bash
-docker exec <container> python /app/ibkr_to_ghostfolio.py
+docker exec <container> python -m ghostfolio_ibkr_sync
 ```
+
+This is the only supported way to run the sync by hand. The old
+`python /app/ibkr_to_ghostfolio.py` command no longer works: v3.0.0 removed that file
+without a compatibility launcher, so update any script or note that calls it.
 
 ## Troubleshooting
 
@@ -784,12 +783,12 @@ Cleanup is not part of the additive sync; review its safety requirements first.
 See the [architecture decision records](docs/adr/README.md) for the existing
 sync boundaries, financial trade-offs and reviewed DEGIRO core propagation.
 
-The sync is a single file, `ibkr_to_ghostfolio.py`, with `requests` and `pyyaml` as its only runtime dependencies; `apprise` (with a pinned dependency closure in `requirements.txt`) is imported only by the notification worker (`--notify-worker`). Tests are offline (no network, no Ghostfolio, no IBKR): they exercise the pure decision logic with mocked HTTP.
+The sync is the Python package `ghostfolio_ibkr_sync` (one module per concern, strictly typed application code), installed in the image and started with `python -m ghostfolio_ibkr_sync`; Docker is the only supported way to run it. It has `requests` and `pyyaml` as its only runtime dependencies; `apprise` (with a pinned dependency closure in `requirements.txt`) is imported only by the notification worker (`--notify-worker`). Tests are offline (no network, no Ghostfolio, no IBKR): they exercise the pure decision logic with mocked HTTP. `scripts/check.sh` runs Ruff, strict mypy and pytest.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt   # pytest stays out of the Docker image
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q   # or scripts/check.sh: Ruff, mypy, pytest
 ```
 
 CI runs tests, an audit of the complete Python CI environment and Docker builds/scans for amd64 and arm64 on every pull request to `main`, including documentation-only changes. Required checks must pass before merging; PR builds never publish images. CodeQL analyzes Python separately. See [.github/BUILD.md](.github/BUILD.md) for publication rules, weekly maintenance and rollback. A change to the sync logic should come with a test; use synthetic fixtures and mocked HTTP for regression checks. See [Contributing](CONTRIBUTING.md) for review and reporting guidance.

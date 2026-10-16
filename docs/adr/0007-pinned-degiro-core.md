@@ -20,6 +20,14 @@ Commit the pin, generated artifact and necessary tests together only with explic
 authorization. Never hand-edit the projection or change the sibling implicitly.
 Main advancing is a review signal, not approval to propagate.
 
+**Package layout (v3.0.0 release candidates).** The IBKR runtime is now the package
+`ghostfolio_ibkr_sync` ([0001](0001-single-file-runtime.md), superseded) and the
+single source file no longer exists. DEGIRO stays pinned to the last single-file
+source commit recorded in its `CORE_PROVENANCE.md`, and this repository does not edit
+DEGIRO. DEGIRO's `check_core` hardcodes a single-file `source_path`, so it cannot read
+the package. Any future propagation needs a separate DEGIRO change that first updates
+that source mapping for the package layout, then follows the review steps above.
+
 Broker-specific parsing, comment indexing and orchestration stay outside the
 projection. Differences between the frozen core and current IBKR behavior must
 be reviewed, not hidden by a broad source refactor. Roll back an adopted

@@ -3,11 +3,13 @@ schema: spec-driven
 context: |
   Community Docker connector: Interactive Brokers Flex Web Service reports -> Ghostfolio.
   Docker-first, every setting through ENV, unattended run with `docker compose up -d`
-  and an optional CRON. Single-file Python runtime, functional style, no classes, no type hints.
+  and an optional CRON. Typed modular Python package `ghostfolio_ibkr_sync` run with `python -m ghostfolio_ibkr_sync` (Docker only, no launcher),
+  functional style, no behavior classes, strict application typing.
   Sibling contract shared with ../ghostfolio-degiro-sync and ../ghostfolio-boursedirect-sync:
   CRON, DRY_RUN, APPRISE_URLS, additive deduplicated import, ENV only.
   This repository is the canonical source of the Ghostfolio helpers projected into
   ghostfolio-degiro-sync; a change to them flags downstream propagation.
+  DEGIRO stays pinned to the last single-file commit; propagation needs a separate DEGIRO change.
   Imports are additive; existing activities are never changed automatically.
   The product already runs with live writes; specs describe observed behavior before any change.
   Readers: the operator (infrastructure expert, not a developer) and community users.
