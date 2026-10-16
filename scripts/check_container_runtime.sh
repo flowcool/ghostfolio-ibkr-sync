@@ -31,6 +31,7 @@ print("CPython", platform.python_version(), flush=True)
 assert importlib.util.find_spec("ghostfolio_ibkr_sync") is not None
 assert not os.path.exists("/app/ibkr_to_ghostfolio.py"), "the legacy launcher must not ship"
 assert not glob.glob("/app/*.py"), "no source file may ship in /app"
+assert not os.path.exists("/build"), "the build tree must not ship"
 '
 # The installed package, not a mounted source tree, is what the image runs:
 # the probe replaces only its __main__.py, and the checks below that must see
