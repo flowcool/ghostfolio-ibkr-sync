@@ -18,4 +18,4 @@ Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak 
 
 ## 5. Real validation
 
-- [ ] 5.1 Operation (needs a Florent-validated Operation plan; read only). On the same day, against the same Flex query, run the old main image and the new code with `DRY_RUN=1`; diff the dividend selections. Acceptance: the diff file exists and every difference is explained, both noted on the bead; INFO and WARNING counts recorded; exit 0, ERROR 0. Check: `diff <old-selection> <new-selection>`.
+- [x] 5.1 Operation (needs a Florent-validated Operation plan; read only). On the same day, against the same Flex query, run the old main image and the new code with `DRY_RUN=1`; diff the dividend selections. Acceptance: the diff file exists and every difference is explained, both noted on the bead; INFO and WARNING counts recorded; exit 0, ERROR 0. Check: `diff <old-selection> <new-selection>`.
