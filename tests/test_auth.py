@@ -16,7 +16,7 @@ def env(monkeypatch):
     for k, v in {"IBKR_TOKEN": "tok", "IBKR_ACCOUNT_IDS": "U1", "IBKR_QUERY_IDS": "q1",
                  "GHOST_HOST": "http://ghost:3333/", "MAPPING_FILE": ""}.items():
         monkeypatch.setenv(k, v)
-    for k in ("GHOST_TOKEN", "GHOST_ACCESS_TOKEN", "GHOST_ACCOUNT_NAMES", "DRY_RUN"):
+    for k in ("GHOST_TOKEN", "GHOST_ACCESS_TOKEN", "GHOST_ACCOUNT_NAMES", "GHOST_PLATFORM_ID", "DRY_RUN"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("DRY_RUN", "false")
     return monkeypatch
