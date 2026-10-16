@@ -127,10 +127,23 @@ def test_nearby_manual_sell_with_another_quantity_is_ambiguous_and_warns(caplog)
     assert any("another quantity" in r.message for r in caplog.records)
 
 
-def test_split_fills_summing_to_a_manual_sell_are_matched():
+@pytest.mark.parametrize("dates", [
+    ("20260801;090000", "20260801;100000"),
+    ("2026-08-01, 09:00:00", "2026-08-01, 10:00:00"),
+])
+def test_split_fills_summing_to_a_manual_sell_are_matched(dates):
     pos = positions(qty={(ACC, "KO"): 100}, manual_sells={(ACC, "KO"): [["2026-08-01", 50.0]]})
-    trades = [tr("S1", -20, "20260801;090000"), tr("S2", -30, "20260801;100000")]
+    trades = [tr("S1", -20, dates[0]), tr("S2", -30, dates[1])]
     assert gate(trades, pos) == []
+
+
+def test_split_fills_on_different_dashed_days_are_not_summed():
+    manual = [["2026-08-01", 50.0]]
+    pos = positions(qty={(ACC, "KO"): 100}, manual_sells={(ACC, "KO"): manual.copy()})
+    trades = [tr("S1", -20, "2026-08-01, 09:00:00"),
+              tr("S2", -30, "2026-08-02, 10:00:00")]
+    assert gate(trades, pos) == []
+    assert pos["manual_sells"][(ACC, "KO")] == manual
 
 
 def test_manual_sell_under_another_symbol_with_same_isin_is_found():

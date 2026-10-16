@@ -497,7 +497,10 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             continue
         if result == "ambiguous":
             # Maybe one order split into several fills: retried as a daily sum below
-            split_fills[(side, ticker, isin, trade.get("dateTime", "")[:8])].append(trade)
+            raw_date = trade.get("dateTime", "")
+            parsed_date = parse_ibkr_datetime(raw_date)
+            day = parsed_date[:10] if parsed_date else raw_date[:8]
+            split_fills[(side, ticker, isin, day)].append(trade)
             continue
         groups[ticker]["pending"] += qty
         groups[ticker]["symbol"] = groups[ticker]["symbol"] or symbol
