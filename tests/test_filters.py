@@ -3,7 +3,7 @@ from collections import defaultdict
 
 import pytest
 
-import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import sync
 
 ACC = "acc"
 ISIN = "US1912161007"
@@ -22,7 +22,7 @@ def tr(tid, qty, date="20260801;100000", symbol="KO", isin=ISIN):
 
 
 def gate(trades, pos, mapping=None, existing=()):
-    return m.filter_trades_by_holdings(trades, pos, ACC, mapping or {}, set(existing))
+    return sync.filter_trades_by_holdings(trades, pos, ACC, mapping or {}, set(existing))
 
 
 def ids(trades):
@@ -225,11 +225,11 @@ def act(date="2026-07-15", symbol="KO"):
 ])
 def test_dividend_date_matches_within_three_days(existing, expected):
     pos = positions(dividend_dates={(ACC, "KO"): [(existing, None, None, None)]})
-    match = m._dividend_date_matches(pos, act())
+    match = sync._dividend_date_matches(pos, act())
     assert (match[0] if match else None) == expected
 
 
 def test_dividend_date_match_is_per_account_and_symbol():
     pos = positions(dividend_dates={("other", "KO"): [("2026-07-15", None, None, None)],
                                       (ACC, "PEP"): [("2026-07-15", None, None, None)]})
-    assert m._dividend_date_matches(pos, act()) is None
+    assert sync._dividend_date_matches(pos, act()) is None

@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import app, notify
+import requests
+import logging
+from ghostfolio_ibkr_sync import app, notify, outcome
 
 URL_SECRET = "CANARY-DEST-a41f"
 CANARY = "CANARY-ERR-77c0"
@@ -69,27 +70,27 @@ ALL_OK = {"U111": ({}, True), "U222": ({}, True), "U333": ({}, True)}
 def test_success_sends_nothing(env):
     sent = spy_send(env)
     accounts(env, ALL_OK)
-    assert m.main() == 0 and sent == []
+    assert app.main() == 0 and sent == []
 
 
 def test_warning_only_run_sends_nothing(env):
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U222": ({"JP1": {"symbol": "X", "description": "Y"}}, True)})
-    assert m.main() == 0 and sent == []
+    assert app.main() == 0 and sent == []
 
 
 def test_disabled_notifications_send_nothing(env):
     env.delenv("APPRISE_URLS")
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U111": ({}, False)})
-    assert m.main() == 1 and sent == []
+    assert app.main() == 1 and sent == []
 
 
 def test_invalid_settings_warn_send_nothing_and_keep_the_exit_code(env, caplog):
     env.setenv("APPRISE_URLS", f"json://{URL_SECRET}")
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U111": ({}, False)})
-    assert m.main() == 1 and sent == []
+    assert app.main() == 1 and sent == []
     assert any("failure notifications disabled" in r.message for r in caplog.records)
     assert URL_SECRET not in caplog.text
 
@@ -98,15 +99,15 @@ def test_failed_dry_run_notifies_once(env):
     env.setenv("DRY_RUN", "1")
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U111": ({}, False)})
-    assert m.main() == 1 and len(sent) == 1
-    assert sent[0]["title"] == m.NOTIFY_TITLE
+    assert app.main() == 1 and len(sent) == 1
+    assert sent[0]["title"] == notify.NOTIFY_TITLE
 
 
 def test_dry_run_configuration_failure_notifies_once(env):
     env.setenv("DRY_RUN", " Yes ")
     env.delenv("IBKR_TOKEN")
     sent = spy_send(env)
-    assert m.main() == 1 and len(sent) == 1
+    assert app.main() == 1 and len(sent) == 1
     assert "config: invalid_configuration" in sent[0]["body"]
 
 
@@ -115,7 +116,7 @@ def test_interrupted_run_is_not_finalized(env, exc):
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U222": exc()})
     with pytest.raises(exc):
-        m.main()
+        app.main()
     assert sent == []
 
 
@@ -124,14 +125,14 @@ def test_interrupted_run_is_not_finalized(env, exc):
 def test_configuration_failure_notifies_once(env):
     env.delenv("IBKR_TOKEN")
     sent = spy_send(env)
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1 and "- config: invalid_configuration" in sent[0]["body"]
 
 
 def test_mapping_failure_notifies_once(env, tmp_path):
     env.setenv("MAPPING_FILE", str(tmp_path / f"{CANARY}.yaml"))
     sent = spy_send(env)
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1 and "- mapping: invalid_mapping" in sent[0]["body"]
     assert CANARY not in sent[0]["body"]
 
@@ -139,10 +140,10 @@ def test_mapping_failure_notifies_once(env, tmp_path):
 def test_login_failure_notifies_once(env):
     env.delenv("GHOST_TOKEN")
     env.setenv("GHOST_ACCESS_TOKEN", CANARY)
-    env.setattr(m.requests, "post", lambda *a, **k: (_ for _ in ()).throw(
-        m.requests.ConnectionError(CANARY)))
+    env.setattr(requests, "post", lambda *a, **k: (_ for _ in ()).throw(
+        requests.ConnectionError(CANARY)))
     sent = spy_send(env)
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1 and "- ghost_auth: login_failed" in sent[0]["body"]
 
 
@@ -150,24 +151,24 @@ def test_ghostfolio_startup_failure_notifies_once(env):
     sent = spy_send(env)
     env.setattr(app, "ghost_get_existing_orders",
                 lambda cfg: (_ for _ in ()).throw(RuntimeError(f"count={AMOUNT}")))
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1 and "- ghost_startup: activities_unavailable" in sent[0]["body"]
 
 
 def test_expired_ghostfolio_token_notifies_token_rejected(env):
     sent = spy_send(env)
-    resp = m.requests.Response()
+    resp = requests.Response()
     resp.status_code = 401
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
-        m.requests.HTTPError("401 Unauthorized", response=resp)))
-    assert m.main() == 1
+        requests.HTTPError("401 Unauthorized", response=resp)))
+    assert app.main() == 1
     assert len(sent) == 1 and "- ghost_startup: token_rejected" in sent[0]["body"]
 
 
 def test_unexpected_failure_notifies_once(env):
     sent = spy_send(env)
     env.setattr(app, "run_sync", lambda outcome: (_ for _ in ()).throw(ValueError(CANARY)))
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1 and "- unexpected: unhandled_error" in sent[0]["body"]
 
 
@@ -175,14 +176,14 @@ def test_several_failed_accounts_make_one_dispatch_after_every_account_ran(env):
     sent = spy_send(env)
     calls = accounts(env, {"U111": KeyError(f"{CANARY} {AMOUNT}"), "U222": ({}, True),
                            "U333": ({}, False)})
-    assert m.main() == 1
+    assert app.main() == 1
     assert calls == ["U111", "U222", "U333"]
     assert len(sent) == 1
     body = sent[0]["body"]
     assert "Accounts failed: 2 of 3." in body
     assert "- account: unexpected_error (account #1)" in body
     assert "- account: account_failed (account #3)" in body
-    assert sent[0]["title"] == m.NOTIFY_TITLE
+    assert sent[0]["title"] == notify.NOTIFY_TITLE
     assert sent[0]["settings"] == {"urls": URLS, "timeout": 10}
 
 
@@ -191,7 +192,7 @@ def test_summary_carries_no_secret_identifier_host_or_amount(env):
     sent = spy_send(env)
     accounts(env, {"U111": RuntimeError(f"{CANARY} {AMOUNT} http://ghost.internal:3333"),
                    "U222": ({}, False), "U333": ({}, True)})
-    assert m.main() == 1
+    assert app.main() == 1
     text = sent[0]["title"] + sent[0]["body"]
     for leak in (CANARY, AMOUNT, URL_SECRET, "U111", "U222", "Main", "Joint",
                  "ghost.internal", "RuntimeError", "tok"):
@@ -199,12 +200,12 @@ def test_summary_carries_no_secret_identifier_host_or_amount(env):
 
 
 def test_summary_format_is_fixed():
-    out = m.new_run_outcome()
+    out = outcome.new_run_outcome()
     out.update(accounts_total=3, accounts_failed=1)
-    m.record_failure(out, "account", "account_failed", 2)
+    outcome.record_failure(out, "account", "account_failed", 2)
     out["failures"].append({"stage": "account", "reason": f"forged {CANARY}", "ordinal": f"U{CANARY}"})
     out["dropped"] = 4
-    body = m.build_failure_summary(out, datetime(2026, 10, 8, 6, 5, tzinfo=timezone.utc))
+    body = notify.build_failure_summary(out, datetime(2026, 10, 8, 6, 5, tzinfo=timezone.utc))
     assert body == ("Run failed at 2026-10-08 06:05 UTC.\n"
                     "Accounts failed: 1 of 3.\n"
                     "- account: account_failed (account #2)\n"
@@ -220,7 +221,7 @@ def test_summary_format_is_fixed():
 def test_notification_problems_keep_exit_code_and_account_processing(env, caplog, status):
     sent = spy_send(env, status)
     calls = accounts(env, {**ALL_OK, "U111": ({}, False)})
-    assert m.main() == 1
+    assert app.main() == 1
     assert calls == ["U111", "U222", "U333"] and len(sent) == 1
     assert URL_SECRET not in caplog.text
 
@@ -228,7 +229,7 @@ def test_notification_problems_keep_exit_code_and_account_processing(env, caplog
 def test_timeout_is_logged_as_uncertain_without_retry(env, caplog):
     sent = spy_send(env, "timeout")
     accounts(env, {**ALL_OK, "U111": ({}, False)})
-    assert m.main() == 1 and len(sent) == 1
+    assert app.main() == 1 and len(sent) == 1
     assert any("may still arrive; not retried" in r.message for r in caplog.records)
 
 
@@ -239,7 +240,7 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
     env.setenv("APPRISE_TIMEOUT", "1")
     calls = accounts(env, {**ALL_OK, "U222": ({}, False)})
     start = time.monotonic()
-    assert m.main() == 1
+    assert app.main() == 1
     assert time.monotonic() - start < 10
     assert calls == ["U111", "U222", "U333"]
     assert any("timed out" in r.message for r in caplog.records)
@@ -252,7 +253,7 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
     w = World(env, structured_input_xml(mode))
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
-    assert m.main() == 0
+    assert app.main() == 0
     assert sent == []
     assert len(w.cash_calls) == 3
     assert any(a["type"] == "BUY" for a in w.activities)
@@ -270,7 +271,7 @@ def test_dividend_structured_input_other_failures_still_notify(env):
     World(env, structured_input_xml("old"), cash_ok=False)
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1 and "Accounts failed: 3 of 3." in sent[0]["body"]
 
 
@@ -278,16 +279,15 @@ def test_dividend_structured_input_other_failures_still_notify(env):
 def test_historical_diagnostic_findings_preserve_success_and_notifications(env, caplog, price):
     from test_dividend_diagnostics import destination, read
     from test_orchestration import World, report, div_xml
-    import logging
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(unitPrice=price)])
     World(env, report(divs=div_xml()))
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     for verb in ("post", "put", "patch", "delete"):
-        env.setattr(m.requests, verb, lambda *a, **kw: pytest.fail("financial HTTP write"))
+        env.setattr(requests, verb, lambda *a, **kw: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.INFO)
-    assert m.main() == 0 and sent == []
+    assert app.main() == 0 and sent == []
     assert "Historical dividends" in caplog.text
 
 
@@ -296,11 +296,11 @@ def test_historical_diagnostic_read_failure_keeps_exit_and_notification_contract
     env.setenv("DRY_RUN", "1" if dry else "0")
     sent = spy_send(env)
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (_ for _ in ()).throw(
-        m.requests.ConnectionError("synthetic activity GET failure")))
+        requests.ConnectionError("synthetic activity GET failure")))
     env.setattr(app, "process_account", lambda *a: pytest.fail("account after failed reader"))
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1
-    assert sent[0]["title"] == m.NOTIFY_TITLE
+    assert sent[0]["title"] == notify.NOTIFY_TITLE
 
 
 # --- TZ prerequisite: whole-run forced preview ---------------------------------
@@ -316,7 +316,7 @@ def test_historical_diagnostic_preflight_invalid_tz_forces_whole_run_preview(env
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     env.setattr(app, "process_account",
                 lambda cfg, ibkr_id, *a: seen.append((ibkr_id, cfg["dry_run"])) or ({}, True))
-    assert m.main() == 0
+    assert app.main() == 0
     assert seen == [("U111", True), ("U222", True), ("U333", True)]
     warnings = [r.getMessage() for r in caplog.records
                 if r.levelname == "WARNING" and "forced to DRY_RUN" in r.getMessage()]
@@ -329,7 +329,7 @@ def test_historical_diagnostic_preflight_forced_preview_failure_notification_nam
     env.setenv("TZ", "Not/AZone")
     sent = spy_send(env)
     accounts(env, {**ALL_OK, "U222": ({}, False)})
-    assert m.main() == 1
+    assert app.main() == 1
     assert len(sent) == 1
     assert "Accounts failed: 1 of 3" in sent[0]["body"]
     assert "TZ is not a valid IANA timezone" in sent[0]["body"]
@@ -341,7 +341,7 @@ def test_historical_diagnostic_preflight_valid_tz_keeps_live_run_silent(env, cap
     seen = []
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     env.setattr(app, "process_account", lambda cfg, *a: seen.append(cfg["dry_run"]) or ({}, True))
-    assert m.main() == 0
+    assert app.main() == 0
     assert seen == [False] * 3 and sent == []
     assert "forced to DRY_RUN" not in caplog.text
 
@@ -351,20 +351,19 @@ def test_historical_diagnostic_preflight_raw_dry_run_stays_silent(env):
     env.setenv("DRY_RUN", "1")
     sent = spy_send(env)
     accounts(env, ALL_OK)
-    assert m.main() == 0 and sent == []
+    assert app.main() == 0 and sent == []
 
 
 def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, caplog):
     from test_dividend_diagnostics import destination, read
     from test_orchestration import World, report, div_xml
-    import logging
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
     World(env, report(divs=div_xml()))
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     caplog.set_level(logging.INFO)
-    assert m.main() == 0 and sent == []
+    assert app.main() == 0 and sent == []
     assert "skipped by proximity" in caplog.text and "failed_checks=" in caplog.text
 
 
@@ -391,13 +390,13 @@ def test_dry_run_modes_notification_compatibility(env, mode, failed, configured,
     calls = accounts(env, {**ALL_OK, "U111": ({}, not failed)})
     sent = spy_send(env)
     invalid = mode == "invalid"
-    assert m.main() == int(failed or invalid)
+    assert app.main() == int(failed or invalid)
     assert calls == ([] if invalid else ["U111", "U222", "U333"])
-    notify = configured and (failed or invalid or mode == "false")
-    assert len(sent) == int(notify)
+    should_notify = configured and (failed or invalid or mode == "false")
+    assert len(sent) == int(should_notify)
     if sent:
-        title = m.NOTIFY_TITLE if failed or invalid else (
-            m.TOKEN_EXPIRY_NOTIFY_TITLE if tz == "UTC" else m.FORCED_PREVIEW_NOTIFY_TITLE)
+        title = notify.NOTIFY_TITLE if failed or invalid else (
+            notify.TOKEN_EXPIRY_NOTIFY_TITLE if tz == "UTC" else notify.FORCED_PREVIEW_NOTIFY_TITLE)
         assert sent[0]["title"] == title
         if not invalid:
             assert "ghost_auth: token_expiring" in sent[0]["body"]
@@ -414,6 +413,6 @@ def test_dry_run_modes_delivery_failure_keeps_exit(env, caplog, mode, status):
         env.setenv("DRY_RUN", mode)
     calls = accounts(env, {**ALL_OK, "U111": ({}, False)})
     sent = spy_send(env, status)
-    assert m.main() == 1 and len(sent) == 1
+    assert app.main() == 1 and len(sent) == 1
     assert calls == ([] if mode == "invalid" else ["U111", "U222", "U333"])
     assert URL_SECRET not in caplog.text

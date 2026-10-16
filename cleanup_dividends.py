@@ -31,7 +31,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
-from ibkr_to_ghostfolio import activity_is_active
+from ghostfolio_ibkr_sync.ghostfolio import activity_is_active
 from cleanup_recovery import process_pairs, resume_cleanup
 
 logging.basicConfig(

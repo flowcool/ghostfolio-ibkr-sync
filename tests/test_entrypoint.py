@@ -40,7 +40,7 @@ def run_entrypoint(tmp_path):
     )
     supercronic.chmod(0o755)
     python = tmp_path / 'python'
-    python.write_text('#!/bin/bash\nprintf "python %s\\n" "$1" >> "$CALLS"\n')
+    python.write_text('#!/bin/bash\nprintf "python %s\\n" "$*" >> "$CALLS"\n')
     python.chmod(0o755)
 
     def run(cron=None, validation_status=0, mktemp_status=0):
@@ -73,7 +73,7 @@ def run_entrypoint(tmp_path):
 def test_valid_cron_is_written_and_tested_before_start(run_entrypoint, cron):
     result, crontab, calls = run_entrypoint(cron)
     assert result.returncode == 0
-    assert crontab.read_text() == f'{cron} python /app/ibkr_to_ghostfolio.py\n'
+    assert crontab.read_text() == f'{cron} python -m ghostfolio_ibkr_sync\n'
     assert calls.read_text().splitlines() == ['test', 'run']
     assert crontab.stat().st_mode & 0o777 == 0o600
 
@@ -114,8 +114,8 @@ def test_repeated_scheduled_starts_keep_unique_crontabs(run_entrypoint):
     second, second_path, calls = run_entrypoint('5 6 * * *')
     assert first.returncode == second.returncode == 0
     assert first_path != second_path
-    assert first_path.read_text() == '0 6 * * * python /app/ibkr_to_ghostfolio.py\n'
-    assert second_path.read_text() == '5 6 * * * python /app/ibkr_to_ghostfolio.py\n'
+    assert first_path.read_text() == '0 6 * * * python -m ghostfolio_ibkr_sync\n'
+    assert second_path.read_text() == '5 6 * * * python -m ghostfolio_ibkr_sync\n'
     assert calls.read_text().splitlines() == ['test', 'run', 'test', 'run']
 
 
@@ -134,5 +134,5 @@ def test_private_crontab_umask_is_not_inherited_by_scheduler(run_entrypoint):
 def test_no_cron_preserves_one_off_run(run_entrypoint, cron):
     result, crontab, calls = run_entrypoint(cron)
     assert result.returncode == 0
-    assert calls.read_text() == 'python /app/ibkr_to_ghostfolio.py\n'
+    assert calls.read_text() == 'python -m ghostfolio_ibkr_sync\n'
     assert not crontab.exists()

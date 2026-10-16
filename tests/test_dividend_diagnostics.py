@@ -5,7 +5,9 @@ from decimal import Decimal
 
 import pytest
 
-import ibkr_to_ghostfolio as m
+import requests
+import logging
+from ghostfolio_ibkr_sync import diagnostics, ghostfolio, ibkr
 from test_orchestration import ACC, CFG, ISIN_KO, div_xml, report
 
 
@@ -19,20 +21,20 @@ def destination(**changes):
 
 
 def read(monkeypatch, rows, wire=None, dry=True):
-    response = m.requests.Response()
+    response = requests.Response()
     response.status_code = 200
     response._content = (wire or json.dumps({"activities": rows, "count": len(rows)})).encode()
     calls = []
-    monkeypatch.setattr(m.requests, "get", lambda *args, **kwargs: calls.append((args, kwargs)) or response)
-    result = m.ghost_get_existing_orders({**CFG, "dry_run": dry})
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: calls.append((args, kwargs)) or response)
+    result = ghostfolio.ghost_get_existing_orders({**CFG, "dry_run": dry})
     assert len(calls) == 1
     return result
 
 
 def comparison(monkeypatch, rows, xml=None, wire=None):
     _, _, positions = read(monkeypatch, rows, wire)
-    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
-    return m.historical_dividend_comparison(source, ACC, {}, positions)
+    source = ibkr.parse_cash_dividends(xml or report(divs=div_xml()))
+    return diagnostics.historical_dividend_comparison(source, ACC, {}, positions)
 
 
 def test_historical_diagnostic_coherent_whole_payment(monkeypatch):
@@ -67,7 +69,7 @@ def test_historical_diagnostic_coherent_retains_json_before_float_decoding(monke
     _, _, positions = read(monkeypatch, [row], wire)
     raw = positions["dividend_evidence"][0]
     assert raw["activity"]["unitPrice"] == Decimal("0.250000000000000000001")
-    finding = m.historical_dividend_comparison(m.parse_cash_dividends(report(divs=div_xml())), ACC, {}, positions)[0]
+    finding = diagnostics.historical_dividend_comparison(ibkr.parse_cash_dividends(report(divs=div_xml())), ACC, {}, positions)[0]
     assert finding["gross_delta"] == Decimal("0.000000000000000000100")
     assert finding["category"] == "differences"
 
@@ -119,10 +121,10 @@ def test_coherent_dividend_currency_invalid_never_falls_back(monkeypatch, curren
 def test_historical_diagnostic_coherent_unavailable_wire_is_uncertain(monkeypatch):
     from types import SimpleNamespace
     row = destination()
-    monkeypatch.setattr(m.requests, "get", lambda *args, **kwargs: SimpleNamespace(
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: SimpleNamespace(
         status_code=200, raise_for_status=lambda: None, json=lambda: {"activities": [row], "count": 1}))
-    _, _, positions = m.ghost_get_existing_orders({**CFG, "dry_run": True})
-    finding = m.historical_dividend_comparison(m.parse_cash_dividends(report(divs=div_xml())), ACC, {}, positions)[0]
+    _, _, positions = ghostfolio.ghost_get_existing_orders({**CFG, "dry_run": True})
+    finding = diagnostics.historical_dividend_comparison(ibkr.parse_cash_dividends(report(divs=div_xml())), ACC, {}, positions)[0]
     assert finding["category"] == "uncertain"
     assert finding["reason"] == "original JSON numeric evidence unavailable"
 
@@ -177,10 +179,10 @@ def representations(monkeypatch, rows, xml=None, identities=None, wire=None, rev
     A real reader does not claim component/partition identity from amounts.
     """
     _, _, positions = read(monkeypatch, rows, wire)
-    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
+    source = ibkr.parse_cash_dividends(xml or report(divs=div_xml()))
     for item, identity in zip(positions["dividend_evidence"], identities or []):
         item.update(identity)
-    return m.historical_dividend_comparison(list(reversed(source)) if reverse else source,
+    return diagnostics.historical_dividend_comparison(list(reversed(source)) if reverse else source,
                                           ACC, {}, positions)
 
 
@@ -270,9 +272,9 @@ def test_representations_contested_ownership_in_either_order(monkeypatch, revers
     other = div_xml().replace('conid="1"', 'conid="2"').replace('currency="USD"', 'currency="EUR"')
     # Supply separate synthetic source groups with the same canonical reference
     # to exercise globally contested ownership.
-    source = [m.parse_cash_dividends(report(divs=part))[0] for part in (div_xml(), other)]
+    source = [ibkr.parse_cash_dividends(report(divs=part))[0] for part in (div_xml(), other)]
     _, _, positions = read(monkeypatch, [destination()])
-    findings = m.historical_dividend_comparison(source[::-1] if reverse else source, ACC, {}, positions)
+    findings = diagnostics.historical_dividend_comparison(source[::-1] if reverse else source, ACC, {}, positions)
     assert len(findings) == 2
     assert all(finding["category"] == "uncertain" for finding in findings)
     assert all(finding["reason"] == "contested destination ownership" for finding in findings)
@@ -370,31 +372,30 @@ def test_evidence_incomplete_source_quantity_is_uncertain(monkeypatch, mode):
 ])
 def test_evidence_window_requires_explicit_valid_bounds(bounds, expected):
     xml = report().replace("<FlexStatement>", f"<FlexStatement {bounds}>")
-    assert m.historical_dividend_report_window(xml) == expected
+    assert ibkr.historical_dividend_report_window(xml) == expected
 
 
 def test_evidence_conflicting_statement_windows_are_not_inferred():
     xml = ('<R><FlexStatement fromDate="20260701" toDate="20260731"/>'
            '<FlexStatement fromDate="20260801" toDate="20260831"/></R>')
-    assert m.historical_dividend_report_window(xml) is None
+    assert ibkr.historical_dividend_report_window(xml) is None
 
 
 @pytest.mark.parametrize("window,category", [(None, "uncertain"),
     (("2026-07-01", "2026-07-31"), "outside_window")])
 def test_evidence_unmatched_older_history_and_empty_report(monkeypatch, window, category):
     _, _, pos = read(monkeypatch, [destination(date="2025-07-15T00:00:00Z")])
-    findings = m.historical_dividend_comparison([], ACC, {}, pos, window)
+    findings = diagnostics.historical_dividend_comparison([], ACC, {}, pos, window)
     assert len(findings) == 1
     assert findings[0]["category"] == category
     assert findings[0]["source"] is None and findings[0]["activity_ids"] == ["dividend-1"]
 
 
 def test_evidence_absent_destination_and_info_coverage(monkeypatch, caplog):
-    import logging
     findings = comparison(monkeypatch, [])
     assert len(findings) == 1 and findings[0]["category"] == "absent"
     caplog.set_level(logging.INFO)
-    m.log_historical_dividend_comparison(findings, ACC)
+    diagnostics.log_historical_dividend_comparison(findings, ACC)
     assert "source_groups=1 unmatched_destination=0" in caplog.text
     assert findings[0]["source"] in caplog.text and "no canonical destination identity" in caplog.text
     assert "1 to check, 0 informational, 0 noise" in caplog.text
@@ -484,11 +485,10 @@ def test_historical_diagnostic_identity_invalid_tz_makes_date_unavailable(monkey
 
 
 def test_historical_diagnostic_actionable_anomaly_block_and_failed_check_counts(monkeypatch, caplog):
-    import logging
     profile = {"symbol": "PEP", "isin": ISIN_KO, "dataSource": "YAHOO", "currency": "USD"}
     findings = comparison(monkeypatch, [destination(date="2026-07-16T00:00:00Z", assetProfile=profile)])
     caplog.set_level(logging.INFO)
-    m.log_historical_dividend_comparison(findings, ACC)
+    diagnostics.log_historical_dividend_comparison(findings, ACC)
     text = caplog.text
     assert "Dividend to check: uncertain" in text
     assert f"Security: KO (ISIN {ISIN_KO}), dividend date 2026-07-15" in text
@@ -500,14 +500,13 @@ def test_historical_diagnostic_actionable_anomaly_block_and_failed_check_counts(
 
 
 def test_historical_diagnostic_actionable_outside_window_shows_destination_values(monkeypatch, caplog):
-    import logging
     _, _, pos = read(monkeypatch, [destination(date="2025-07-15T00:00:00Z")])
-    findings = m.historical_dividend_comparison([], ACC, {}, pos, ("2026-07-01", "2026-07-31"))
+    findings = diagnostics.historical_dividend_comparison([], ACC, {}, pos, ("2026-07-01", "2026-07-31"))
     caplog.set_level(logging.INFO)
-    m.log_historical_dividend_comparison(findings, ACC)
+    diagnostics.log_historical_dividend_comparison(findings, ACC)
     assert "Ghostfolio: activity" not in caplog.text  # outside window logs at DEBUG only
     caplog.set_level(logging.DEBUG)
-    m.log_historical_dividend_comparison(findings, ACC)
+    diagnostics.log_historical_dividend_comparison(findings, ACC)
     assert "Dividend outside report window" in caplog.text
     assert "Ghostfolio: activity dividend-1 (KO) on 2025-07-15" in caplog.text
     assert "quantity 100, gross 25.00 USD" in caplog.text
@@ -515,7 +514,6 @@ def test_historical_diagnostic_actionable_outside_window_shows_destination_value
 
 
 def test_historical_diagnostic_actionable_proximity_skip_is_explained_not_certified(monkeypatch, caplog):
-    import logging
     weak = destination(comment="legacy KO dividend", date="2026-07-17T00:00:00Z")
     findings = comparison(monkeypatch, [weak])
     absent = findings[0]
@@ -523,7 +521,7 @@ def test_historical_diagnostic_actionable_proximity_skip_is_explained_not_certif
     assert absent["proximity"]["matched_date"] == "2026-07-17"
     assert [item["activity_id"] for item in absent["proximity"]["candidates"]] == ["dividend-1"]
     caplog.set_level(logging.INFO)
-    m.log_historical_dividend_comparison(findings, ACC)
+    diagnostics.log_historical_dividend_comparison(findings, ACC)
     assert "skipped by proximity" in caplog.text
     assert "Weak candidate: activity dividend-1 (comment legacy KO dividend, 2026-07-17)" in caplog.text
     assert "quantity 100, gross 25.00 USD" in caplog.text
@@ -537,15 +535,14 @@ def test_historical_diagnostic_actionable_no_proximity_note_beyond_window(monkey
 
 
 def test_historical_diagnostic_actionable_levels_and_privacy(monkeypatch, caplog):
-    import logging
     coherent = comparison(monkeypatch, [destination()])
     caplog.set_level(logging.INFO)
-    m.log_historical_dividend_comparison(coherent, ACC)
+    diagnostics.log_historical_dividend_comparison(coherent, ACC)
     assert "Dividend coherent" not in caplog.text  # coherent detail is DEBUG only
     assert "failed_checks=none" in caplog.text
     caplog.clear()
     caplog.set_level(logging.DEBUG)
-    m.log_historical_dividend_comparison(coherent, ACC)
+    diagnostics.log_historical_dividend_comparison(coherent, ACC)
     assert "Dividend coherent: coherent" in caplog.text
     assert CFG["ghost_host"] not in caplog.text
 
@@ -567,7 +564,7 @@ def test_historical_diagnostic_actionable_source_values_survive_failed_identity(
     assert finding["category"] == "uncertain"
     assert (finding["source_quantity"], finding["source_gross"], finding["source_fee"],
             finding["source_currency"]) == (Decimal(100), Decimal("25.00"), Decimal(0), "USD")
-    text = m.format_historical_dividend_finding(finding, ACC)
+    text = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "IBKR: quantity 100, gross 25.00 USD, fee 0.00 USD" in text
 
 
@@ -614,19 +611,18 @@ def test_coherent_dividend_legacy_identity_uses_resolved_symbol(monkeypatch):
     row = destination(comment="dividend#COKE#2026-07-15")
     row["assetProfile"]["symbol"] = "COKE"
     _, _, positions = read(monkeypatch, [row])
-    source = m.parse_cash_dividends(report(divs=div_xml()))
-    findings = m.historical_dividend_comparison(source, ACC, {ISIN_KO: "COKE"}, positions)
+    source = ibkr.parse_cash_dividends(report(divs=div_xml()))
+    findings = diagnostics.historical_dividend_comparison(source, ACC, {ISIN_KO: "COKE"}, positions)
     assert len(findings) == 1 and findings[0]["category"] == "coherent_single"
 
 
 def skip_cause(monkeypatch, rows, xml=None):
     _, comments, positions = read(monkeypatch, rows)
-    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
-    return m.historical_dividend_comparison(source, ACC, {}, positions, None, comments)[0]
+    source = ibkr.parse_cash_dividends(xml or report(divs=div_xml()))
+    return diagnostics.historical_dividend_comparison(source, ACC, {}, positions, None, comments)[0]
 
 
 def test_coherent_dividend_legacy_identity_failed_date_stays_in_claimed_block(monkeypatch, caplog):
-    import logging
     carrier = destination(id="old", comment="dividend#KO#2026-07-15", date="2026-07-17T00:00:00Z")
     finding = skip_cause(monkeypatch, [carrier])
     assert finding["category"] == "uncertain" and "proximity" not in finding
@@ -634,7 +630,7 @@ def test_coherent_dividend_legacy_identity_failed_date_stays_in_claimed_block(mo
     assert [(check["check"], check["status"]) for check in finding["identity_checks"]
             if check["status"] == "fail"] == [("date", "fail")]
     caplog.set_level(logging.INFO)
-    m.log_historical_dividend_comparison([finding], ACC)
+    diagnostics.log_historical_dividend_comparison([finding], ACC)
     assert "Identity check date fail for activity old" in caplog.text
     assert "Skipped by proximity" not in caplog.text
     assert "quantity 100, gross 25.00 USD" in caplog.text
@@ -670,7 +666,7 @@ def test_historical_diagnostic_skip_cause_manual_neighbour_shows_both_gross(monk
     proximity = finding["proximity"]
     assert [item["activity_id"] for item in proximity["candidates"]] == ["manual"]
     assert proximity["source_gross"] == "25.00 USD" and proximity["candidate_gross"] == "50.0 USD"
-    text = m.format_historical_dividend_finding(finding, ACC)
+    text = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "Gross: source 25.00 USD, candidate 50.0 USD" in text
     assert "activity canon" not in text
 
@@ -681,8 +677,8 @@ def test_historical_diagnostic_skip_cause_import_selection_unchanged(monkeypatch
     for rows in ([canonical], [canonical, manual]):
         _, comments, before = read(monkeypatch, rows)
         snapshot = {key: list(value) for key, value in before["dividend_dates"].items()}
-        source = m.parse_cash_dividends(report(divs=div_xml()))
-        m.historical_dividend_comparison(source, ACC, {}, before, None, comments)
+        source = ibkr.parse_cash_dividends(report(divs=div_xml()))
+        diagnostics.historical_dividend_comparison(source, ACC, {}, before, None, comments)
         assert {key: list(value) for key, value in before["dividend_dates"].items()} == snapshot
 
 
@@ -703,7 +699,7 @@ def test_coherent_dividend_currency_conflicting_supported_codes(monkeypatch):
     assert finding["reason"] == "conflicting currencies"
     assert finding["currency_context"] == {"source": "USD", "destination": ["KRW"], "provenance": ["activity"]}
     assert "Currency: IBKR USD, Ghostfolio KRW (from activity)" in \
-        m.format_historical_dividend_finding(finding, ACC)
+        diagnostics.format_historical_dividend_finding(finding, ACC)
 
 
 def test_coherent_dividend_currency_missing_destination(monkeypatch):
@@ -713,7 +709,7 @@ def test_coherent_dividend_currency_missing_destination(monkeypatch):
     finding = currency_finding(monkeypatch, [row])
     assert finding["reason"] == "missing currency"
     assert finding["currency_context"]["destination"] == [None]
-    block = m.format_historical_dividend_finding(finding, ACC)
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "Currency: IBKR USD, Ghostfolio unavailable" in block
     assert "None" not in block
 
@@ -744,7 +740,7 @@ def test_coherent_dividend_currency_unknown_code_is_unsupported(monkeypatch):
     finding = currency_finding(monkeypatch, [destination(currency="AAA")], xml=xml)
     assert finding["category"] == "uncertain"
     assert finding["reason"] == "unsupported currency"
-    block = m.format_historical_dividend_finding(finding, ACC)
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "Dividend information: unsupported currency" in block
     assert "Currency: IBKR AAA, Ghostfolio AAA" in block
 
@@ -778,8 +774,8 @@ def test_dividend_readable_classes_deltas(monkeypatch, currency, amount, price, 
     wire = json.dumps({"activities": [row], "count": 1}).replace(
         f'"unitPrice": {row["unitPrice"]}', f'"unitPrice": {price}', 1)
     _, _, positions = read(monkeypatch, [row], wire)
-    source = m.parse_cash_dividends(xml)
-    finding = m.historical_dividend_comparison(source, ACC, {}, positions)[0]
+    source = ibkr.parse_cash_dividends(xml)
+    finding = diagnostics.historical_dividend_comparison(source, ACC, {}, positions)[0]
     assert finding["delta_class"] == expected
 
 
@@ -792,7 +788,7 @@ def test_dividend_readable_classes_noise_stays_counted_and_visible(monkeypatch):
 
 
 def test_dividend_readable_classes_strongest_class_wins():
-    classify = m.classify_dividend_deltas
+    classify = diagnostics.classify_dividend_deltas
     zero = Decimal(0)
     assert classify("USD", [zero], [Decimal("0.001")], [Decimal("0.01")]) == "minimal"
     assert classify("USD", [zero], [Decimal("0.01")], [Decimal("0.5")]) == "other"
@@ -802,8 +798,8 @@ def test_dividend_readable_classes_strongest_class_wins():
 
 def readable(monkeypatch, rows, comments=(), xml=None):
     _, _, positions = read(monkeypatch, rows)
-    source = m.parse_cash_dividends(xml or report(divs=div_xml()))
-    return m.historical_dividend_comparison(source, ACC, {}, positions, existing_dividend_comments=set(comments))
+    source = ibkr.parse_cash_dividends(xml or report(divs=div_xml()))
+    return diagnostics.historical_dividend_comparison(source, ACC, {}, positions, existing_dividend_comments=set(comments))
 
 
 def test_dividend_readable_pairs_probable_duplicate(monkeypatch):
@@ -865,7 +861,7 @@ def test_dividend_readable_pairs_other_classes_and_catch_all(monkeypatch):
     assert coherent["readable"]["class"] == "coherent"
     old = destination(date="2025-07-15T00:00:00Z")
     _, _, positions = read(monkeypatch, [old])
-    window = m.historical_dividend_comparison([], ACC, {}, positions, ("2026-07-01", "2026-07-31"))[0]
+    window = diagnostics.historical_dividend_comparison([], ACC, {}, positions, ("2026-07-01", "2026-07-31"))[0]
     assert window["readable"]["class"] == "outside_window"
     krw = readable(monkeypatch, [destination(currency="KRW")],
                    xml=report(divs=div_xml().replace('currency="USD"', 'currency="KRW"')))[0]
@@ -887,10 +883,9 @@ def test_dividend_readable_pairs_equal_total_needs_accepted_identity(monkeypatch
 
 
 def report_text(findings, caplog, level="INFO"):
-    import logging
     caplog.clear()
     caplog.set_level(getattr(logging, level))
-    m.log_historical_dividend_comparison(findings, ACC)
+    diagnostics.log_historical_dividend_comparison(findings, ACC)
     return caplog.text
 
 
@@ -906,14 +901,14 @@ def test_dividend_readable_report_quantity_difference_with_two_legacy_twins(monk
     findings = readable(monkeypatch, rows)
     group = [f for f in findings if f["source"] is not None][0]
     twin = [f for f in findings if f["source"] is None][0]
-    block = m.format_historical_dividend_finding(group, ACC)
+    block = diagnostics.format_historical_dividend_finding(group, ACC)
     assert "Dividend to check: quantity difference" in block
     assert "IBKR: quantity 100, gross 25.00 USD, fee 0.00 USD" in block
     assert "Ghostfolio: activity dividend-1 (KO) on 2026-07-15, quantity 101, gross 25.25 USD" in block
     assert "Difference (Ghostfolio minus IBKR): quantity +1" in block
     assert "Probable duplicates" in block and "dividend-2, dividend-3" in block
     assert "Action:" in block and block.endswith("Nothing was written.")
-    twin_block = m.format_historical_dividend_finding(twin, ACC)
+    twin_block = diagnostics.format_historical_dividend_finding(twin, ACC)
     assert "This row looks like a duplicate" in twin_block and "Nothing was written." in twin_block
     assert_plain(block + twin_block)
     text = report_text(findings, caplog)
@@ -924,22 +919,22 @@ def test_dividend_readable_report_quantity_difference_with_two_legacy_twins(monk
 def test_dividend_readable_report_plain_decimals_without_exponent(monkeypatch, caplog):
     row = destination(unitPrice=0.25, quantity=100.0000001)
     findings = readable(monkeypatch, [row])
-    block = m.format_historical_dividend_finding(findings[0], ACC)
+    block = diagnostics.format_historical_dividend_finding(findings[0], ACC)
     assert "quantity +0.0000001" in block
     assert_plain(block)
-    assert m._plain(Decimal("1E-7")) == "0.0000001" and m._plain(Decimal("1E+3")) == "1000"
-    assert m._plain(0.0000001) == "0.0000001"
+    assert diagnostics._plain(Decimal("1E-7")) == "0.0000001" and diagnostics._plain(Decimal("1E+3")) == "1000"
+    assert diagnostics._plain(0.0000001) == "0.0000001"
 
 
 def test_coherent_dividend_format_quantizes_money_and_keeps_exact_quantity(monkeypatch, caplog):
     row = destination(quantity=100, unitPrice=0.24995)
     finding = readable(monkeypatch, [row])[0]
-    block = m.format_historical_dividend_finding(finding, ACC)
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "Ghostfolio: activity dividend-1 (KO) on 2026-07-15, quantity 100, " \
            "gross 25.00 USD, fee 0.00 USD" in block
     assert "Difference (Ghostfolio minus IBKR): quantity +0, gross -0.01 USD, fee +0.00 USD" in block
-    assert m._plain_money(Decimal("2.5"), "JPY") == "3"
-    assert m._plain_money(Decimal("-2.5"), "KRW") == "-3"
+    assert diagnostics._plain_money(Decimal("2.5"), "JPY") == "3"
+    assert diagnostics._plain_money(Decimal("-2.5"), "KRW") == "-3"
 
     failed = comparison(monkeypatch, [destination(isDraft=True)])
     text = report_text(failed, caplog)
@@ -956,13 +951,13 @@ def test_coherent_dividend_action_is_single_and_outside_match_section(monkeypatc
     ]
     for findings in cases:
         for finding in findings:
-            block = m.format_historical_dividend_finding(finding, ACC)
+            block = diagnostics.format_historical_dividend_finding(finding, ACC)
             assert block.count("\n  Action:") == 1
             assert "Proposed action:" not in block
             assert block.index("Proposed match") < block.index("\n  Action:")
 
     quantity = readable(monkeypatch, [destination(quantity=50, unitPrice=0.5)])[0]
-    block = m.format_historical_dividend_finding(quantity, ACC)
+    block = diagnostics.format_historical_dividend_finding(quantity, ACC)
     assert "Dividend to check: quantity difference" in block
     assert "Action: Compare activity dividend-1 with the IBKR statement" in block
     assert "Action: No action needed" not in block
@@ -983,7 +978,7 @@ def test_coherent_dividend_action_targets_compared_row_with_legacy_splits(monkey
     assert group["category"] == "differences"
     assert group["readable"]["label"] == "quantity difference"
     assert group["match"]["confidence"] == "strong"
-    block = m.format_historical_dividend_finding(group, ACC)
+    block = diagnostics.format_historical_dividend_finding(group, ACC)
     assert "Ghostfolio: activity dividend-1 (KO)" in block
     assert "Keep, quantity differs: activity dividend-1 (KO)" in block
     assert "Differs: activity history-400 (KO)" in block
@@ -1073,7 +1068,7 @@ def test_dividend_match_strong_leaves_classes_categories_and_counts_unchanged(mo
     twin = destination(id="dividend-2", comment="legacy KO dividend")
     findings = readable(monkeypatch, [destination(unitPrice=0.2501), twin])
     stripped = [{k: v for k, v in f.items() if k != "match"} for f in findings]
-    again = m.classify_dividend_findings([{k: v for k, v in f.items() if k != "readable"} for f in stripped])
+    again = diagnostics.classify_dividend_findings([{k: v for k, v in f.items() if k != "readable"} for f in stripped])
     assert [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings] == \
         [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in again]
 
@@ -1128,7 +1123,7 @@ def test_dividend_match_weak_leaves_classes_categories_and_counts_unchanged(monk
     twin = destination(id="dividend-2", comment="legacy KO dividend", unitPrice=0.26)
     findings = readable(monkeypatch, [destination(quantity=50), twin])
     stripped = [{k: v for k, v in f.items() if k not in ("match", "readable")} for f in findings]
-    again = m.classify_dividend_findings(stripped)
+    again = diagnostics.classify_dividend_findings(stripped)
     assert [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in findings] == \
         [(f["category"], f["readable"]["class"], f["readable"]["label"]) for f in again]
 
@@ -1166,7 +1161,7 @@ def test_dividend_match_unchanged_strong_block_on_both_sides(monkeypatch, caplog
     group = [f for f in findings if f["source"] is not None][0]
     legacy = [f for f in findings if f["source"] is None][0]
     for finding in (group, legacy):
-        block = m.format_historical_dividend_finding(finding, ACC)
+        block = diagnostics.format_historical_dividend_finding(finding, ACC)
         assert "Proposed match (strong: same security, local day, gross and fee)" in block
         assert "IBKR " in block and "quantity 100, gross 25.00 USD, fee 0.00 USD" in block
         assert "Keep: activity dividend-1 (KO), local day 2026-07-15, UTC date 2026-07-15" in block
@@ -1182,10 +1177,10 @@ def test_dividend_match_unchanged_strong_block_on_both_sides(monkeypatch, caplog
 
 def test_dividend_match_unchanged_weak_and_none_blocks(monkeypatch):
     weak = readable(monkeypatch, [destination(unitPrice=0.2501)])[0]
-    block = m.format_historical_dividend_finding(weak, ACC)
+    block = diagnostics.format_historical_dividend_finding(weak, ACC)
     assert "Proposed match (weak:" in block and "Differs: activity dividend-1" in block
     assert "Keep:" not in block and "no row is proposed to keep" in block
-    none = m.format_historical_dividend_finding(readable(monkeypatch, [])[0], ACC)
+    none = diagnostics.format_historical_dividend_finding(readable(monkeypatch, [])[0], ACC)
     assert "Proposed match: no confident match" in none and none.endswith("Nothing was written.")
     assert_plain(block + none)
 
@@ -1196,7 +1191,7 @@ def test_dividend_match_unchanged_classes_categories_summary_and_exits(monkeypat
     before = summary_of(findings)
     stripped = [{k: v for k, v in f.items() if k not in ("match", "match_source", "readable")}
                 for f in findings]
-    assert summary_of(m.classify_dividend_findings(stripped)) == before
+    assert summary_of(diagnostics.classify_dividend_findings(stripped)) == before
     text = report_text(findings, caplog)
     assert "Dividend report: 2 to check, 0 informational, 0 noise" in text
     assert "categories=" in text and "Proposed match" in text
@@ -1217,7 +1212,7 @@ def jpy_case(monkeypatch, amount="2541", price="25.4", fee=0, quantity=100, rate
     row["assetProfile"]["currency"] = "JPY"
     wire = json.dumps({"activities": [row], "count": 1}).replace('"unitPrice": 25.4', f'"unitPrice": {price}', 1)
     _, _, positions = read(monkeypatch, [row], wire)
-    findings = m.historical_dividend_comparison(m.parse_cash_dividends(xml), ACC, {}, positions)
+    findings = diagnostics.historical_dividend_comparison(ibkr.parse_cash_dividends(xml), ACC, {}, positions)
     assert len(findings) == 1
     return findings[0]
 
@@ -1228,12 +1223,12 @@ def test_coherent_dividend_one_jpy_proven_pattern_both_directions(monkeypatch, a
     assert finding["declared_rate"] == Decimal("25.4")
     assert finding["readable"]["class"] == "information"
     assert finding["readable"]["label"] == "legacy declared-rate rounding"
-    block = m.format_historical_dividend_finding(finding, ACC)
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "Dividend information: legacy declared-rate rounding" in block
     assert "Reason: Legacy row uses the declared rate; IBKR paid a rounded cash amount." in block
     assert block.count("Action:") == 1 and "  Action: No action: IBKR rounding accepted." in block
     caplog.set_level("INFO")
-    counts = m.log_historical_dividend_comparison([finding], ACC)
+    counts = diagnostics.log_historical_dividend_comparison([finding], ACC)
     assert counts == {"to_check": 0, "informational": 1, "noise": 0}
     assert "legacy declared-rate rounding" in caplog.text
 
@@ -1254,7 +1249,7 @@ def test_coherent_dividend_declared_rate_negative_boundaries_stay_to_check(monke
     finding = jpy_case(monkeypatch, **case)
     assert finding["readable"]["class"] == "to_check"
     assert finding["readable"]["label"] != "legacy declared-rate rounding"
-    block = m.format_historical_dividend_finding(finding, ACC)
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert "No action: IBKR rounding accepted." not in block
 
 
@@ -1282,7 +1277,7 @@ def test_coherent_dividend_keep_quantity_has_no_tolerance(monkeypatch, source_qu
     xml = report(divs=div_xml()).replace('quantity="100"', f'quantity="{source_quantity}"')
     finding = readable(monkeypatch, [destination(quantity=1, unitPrice=25)], xml=xml)[0]
     assert finding["match"]["confidence"] == "strong"
-    block = m.format_historical_dividend_finding(finding, ACC)
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
     assert f"    {label}: activity dividend-1 (KO)" in block
     if label != "Keep":
         assert "Action: Compare activity dividend-1" in block

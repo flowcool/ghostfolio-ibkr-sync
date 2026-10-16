@@ -1,5 +1,5 @@
 """Offline proximity index: connector-comment rows are excluded, exact identity still dedups."""
-import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import diagnostics
 from test_dividend_diagnostics import destination, read
 from test_orchestration import ACC, ISIN_KO, World, div_xml, report
 
@@ -108,5 +108,5 @@ def test_dividend_proximity_amount_readable_report_shows_no_raw_tuple(monkeypatc
     findings = comparison(monkeypatch, [manual()])
     absent = findings[0]
     assert absent["proximity"]["matched_date"] == "2026-07-17"
-    text = m.format_historical_dividend_finding(absent, ACC)
+    text = diagnostics.format_historical_dividend_finding(absent, ACC)
     assert "within 3 days of 2026-07-17" in text and "Decimal(" not in text and "('2026" not in text

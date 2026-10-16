@@ -1,3 +1,18 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Installation metadata only: the image installs the package with
+# `pip install --no-deps .`; dependencies live in requirements.txt and the
+# running version is APP_VERSION.
+name = "ghostfolio-ibkr-sync"
+version = "0.0.0"
+requires-python = ">=3.14"
+
+[tool.setuptools]
+packages = ["ghostfolio_ibkr_sync"]
+
 [tool.ruff]
 target-version = "py314"
 extend-exclude = ["tmp", "audit"]
@@ -7,7 +22,6 @@ select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # Pre-package code keeps its style until its extraction task moves it.
-"ibkr_to_ghostfolio.py" = ["I001", "UP", "B"]
 "cleanup_*.py" = ["I001", "UP", "B"]
 "scripts/*.py" = ["I001", "UP", "B"]
 "tests/*.py" = ["I001", "UP", "B", "E702", "F401", "F841"]
