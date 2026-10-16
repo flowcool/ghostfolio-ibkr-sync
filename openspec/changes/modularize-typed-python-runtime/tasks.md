@@ -16,7 +16,7 @@ Every task requires the full `scripts/check.sh` plus its targeted check below. M
 ## 3. Financial decisions
 
 - [x] 3.1 Extract mapping, conversion, holding checks, deduplication, and import acceptance as typed functions. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_conversion.py tests/test_filters.py`.
-- [ ] 3.2 Extract historical dividend evidence and comparison. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py -k 'historical or representations or evidence'`.
+- [x] 3.2 Extract historical dividend evidence and comparison. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py -k 'historical or representations or evidence'`.
 - [ ] 3.3 Extract finding classification, proposed matches, formatting, and logging. Acceptance: `scripts/check.sh` plus `.venv/bin/python -m pytest -q tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py`.
 
 ## 4. Orchestration and delivery
