@@ -2,47 +2,40 @@
 
 ## Why
 
-The 3,187-line runtime concentrates configuration, external access, financial decisions, reporting, and orchestration in one untyped file. The current release-candidate period is the safest time to replace that obsolete maintenance constraint while DRY_RUN remains the default.
+The 3,187-line runtime combines configuration, external access, financial decisions, reporting, and orchestration. A typed package removes this maintenance constraint.
 
 ## What Changes
 
-- Replace the runtime with a typed `ghostfolio_ibkr_sync` package containing deep modules for configuration, IBKR input, synchronization decisions, Ghostfolio access, diagnostics, and orchestration.
-- Use immutable standard-library dataclasses for internal records. Keep calculations as functions and restrict stateful classes to settings and external adapters.
-- Add one local and CI quality command covering Ruff, strict mypy checks for application code, and pytest. Keep pinned `pip` requirements and configure tools in `pyproject.toml`.
-- Supersede the single-file/no-types/no-classes policy and retain its ADR as history.
-- **BREAKING**: remove the documented `ibkr_to_ghostfolio.py` path. Use `python -m ghostfolio_ibkr_sync`; keep Docker, ENV, CRON, DRY_RUN, logs, exits, notifications, and financial behavior unchanged.
-- Apply this change after `dividend-proximity-amount-evidence` and the separate Python 3.14 migration, within the same RC series.
+- Create `ghostfolio_ibkr_sync` modules for configuration, IBKR input, synchronization, Ghostfolio access, diagnostics, and orchestration. Use immutable dataclasses for internal records. Keep calculations as functions; restrict stateful classes to settings and adapters.
+- Pin Ruff, mypy, types-requests, and types-PyYAML in `requirements-dev.txt`. Configure strict application typing in `pyproject.toml`; run Ruff, mypy, and pytest through `scripts/check.sh` locally and in CI.
+- **BREAKING**: Docker only. Delete `ibkr_to_ghostfolio.py` without a compatibility launcher. Document `docker exec <container> python -m ghostfolio_ibkr_sync`.
+- Install the package in the image with `pip install --no-deps .`. Start notifications with `[sys.executable, "-I", "-m", "ghostfolio_ibkr_sync", "--notify-worker"]`; prove worker startup in an isolated container. Adapt `scripts/check_container_runtime.sh`.
+- Migrate `cleanup_dividends.py`, `cleanup_duplicates.py`, and `cleanup_recovery.py` to import `activity_is_active` from the package.
+- Supersede the single-file/no-types/no-classes policy. Update user documentation, architecture rules, and ADR 0007. DEGIRO stays pinned to the last single-file commit. Future propagation requires a DEGIRO change because its `check_core` hardcodes `source_path`. Do not modify that repository.
+- Apply after `dividend-proximity-amount-evidence`, then the separate Python 3.12 → 3.14 migration, before task 1.1. Stay in the v3.0.0 RC series. Restart the 10-day production soak on the resulting RC.
 
-Saved synthetic Flex reports in `tests/test_parsing.py`, `tests/test_orchestration.py`, and `tests/test_auth.py` establish this record inventory:
+Saved synthetic Flex reports in `tests/test_parsing.py`, `tests/test_orchestration.py`, and `tests/test_auth.py` establish this inventory:
 
 | IBKR Flex record | In scope / out of scope |
 |---|---|
-| `Trade` except CASH/OPT | In — move unchanged |
-| CASH/OPT `Trade` | Out — remain ignored |
-| DETAIL `CashTransaction`: Dividends, Payment In Lieu, Withholding Tax | In — move unchanged |
-| Other `CashTransaction` types or levels | Out — remain ignored |
-| `ChangeInDividendAccrual` | In — move unchanged |
-| `CashReportCurrency` with BASE_SUMMARY | In — move unchanged |
-| Other `CashReportCurrency` rows | Out — remain ignored |
-| `AccountInformation` | In — move unchanged |
-| `AssetSummary` | Out — remain ignored |
+| `Trade` except CASH/OPT | In: move unchanged |
+| CASH/OPT `Trade` | Out: remain ignored |
+| DETAIL `CashTransaction`: Dividends, Payment In Lieu, Withholding Tax | In: move unchanged |
+| Other `CashTransaction` types or levels | Out: remain ignored |
+| `ChangeInDividendAccrual` | In: move unchanged |
+| `CashReportCurrency` with BASE_SUMMARY | In: move unchanged |
+| Other `CashReportCurrency` rows | Out: remain ignored |
+| `AccountInformation` | In: move unchanged |
+| `AssetSummary` | Out: remain ignored |
 
 ## Capabilities
 
-### New Capabilities
-
-None. This change adds no product behavior.
-
-### Modified Capabilities
-
-None. `skip_specs` is set because this is a refactor, tooling, and documentation change.
+No new or modified capabilities. `skip_specs` applies to this refactor.
 
 ## Non-goals
 
-- Change import selection, reconciliation, amounts, diagnostics, or writes.
-- Migrate Python, package management, or sibling connectors.
-- Add Pydantic, an application framework, or a shared connector library.
+Change financial behavior, ENV, CRON, DRY_RUN, logs, exits, or notifications; migrate Python here; publish to PyPI; change siblings.
 
 ## Impact
 
-The Python runtime, container layout, tests, CI, development dependencies, contributor guidance, runtime-path documentation, and architecture rules change. The public container contract and existing `connector-runtime` requirements do not change. Rollback is the prior RC image digest.
+Runtime, tests, image, CI, and documentation change. Each task requires `scripts/check.sh` plus its targeted check. Moved tests change only imports and patch targets; assertions remain identical. Rollback: prior RC image digest.
