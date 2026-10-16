@@ -30,7 +30,7 @@ Saved synthetic Flex reports in `tests/test_parsing.py`, `tests/test_orchestrati
 
 ## Capabilities
 
-No new or modified capabilities. `skip_specs` applies to this refactor.
+No new capability. Modified `connector-runtime`: the "Real read-only acceptance" scenario names the removed launcher; its command becomes `python -m ghostfolio_ibkr_sync`, with every other word unchanged (operator decision 2026-10-16).
 
 ## Non-goals
 
