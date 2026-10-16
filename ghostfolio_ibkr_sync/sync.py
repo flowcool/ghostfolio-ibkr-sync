@@ -8,11 +8,11 @@ and log why; additive-only imports and DRY_RUN guards live in `ghostfolio`.
 import logging
 import os
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal, DecimalException, localcontext
 from math import isfinite
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import yaml
 
@@ -642,3 +642,92 @@ def _historical_currency(currency: str | None) -> tuple[str, Decimal] | None:
 def _historical_minor_unit(currency: str) -> Decimal | None:
     """Return the explicit smallest amount of a supported major currency."""
     return CURRENCY_MINOR_UNITS.get(currency)
+
+
+# ---------------------------------------------------------------------------
+# Account decisions (pure; the orchestration loop performs the I/O and logging)
+# ---------------------------------------------------------------------------
+
+# Why a dividend group leaves the candidate list, or "new" when it stays
+DividendDecision = Literal["not_payable", "existing", "proximity", "new"]
+# Why a trade row is not converted, or "new" when it is a conversion candidate
+TradeIdDecision = Literal["missing", "conflict", "existing", "new"]
+
+
+def unique_trades(trades: Sequence[dict[str, str]]) -> tuple[list[dict[str, str]], int, set[str]]:
+    """Collapse repeated trade IDs; return (rows, repeated count, conflicting IDs).
+
+    A repeated ID with an identical row counts only as a duplicate; with a
+    different row the ID is also reported as a conflict. A row without ID is
+    kept so rejection diagnostics stay complete.
+    """
+    skipped_dup = 0
+    unique: dict[str | tuple[str, int], dict[str, str]] = {}
+    conflicts: set[str] = set()
+    for index, trade in enumerate(trades):
+        tid = trade.get("tradeID", "")
+        if not tid:
+            # Keep each unidentified row so rejection diagnostics remain complete.
+            unique[("missing", index)] = trade
+        elif tid in unique:
+            skipped_dup += 1
+            if trade != unique[tid]:
+                conflicts.add(tid)
+        else:
+            unique[tid] = trade
+    return list(unique.values()), skipped_dup, conflicts
+
+
+def trade_id_decision(trade_id: str, conflicts: set[str],
+                      existing_trade_ids: set[str]) -> TradeIdDecision:
+    """Classify one trade by its ID: missing, conflicting, already imported, or new."""
+    if not trade_id:
+        return "missing"
+    if trade_id in conflicts:
+        return "conflict"
+    if trade_id in existing_trade_ids:
+        return "existing"
+    return "new"
+
+
+def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: Mapping[str, str],
+                            positions: Positions, existing_dividend_comments: set[tuple[str, str]],
+                            ) -> tuple[DividendDecision, str | None, DividendEntry | None]:
+    """Decide whether a dividend group is a candidate, before any quantity or schema check.
+
+    Returns (decision, resolved symbol, nearby Ghostfolio entry for "proximity").
+    "existing" matches the current comment form or the older symbol-based form.
+    """
+    if not div["payments"] or div["amount"] <= 0:
+        # Preserve existing diagnostics for reversals and tax-only rows.
+        return "not_payable", None, None
+    symbol = resolve_symbol(div["isin"], div["symbol"], mapping)
+    identity = {
+        "accountId": ghost_account_id, "symbol": symbol,
+        "date": f"{div['date']}T00:00:00+00:00",
+        "comment": f"dividend#{div['isin'] or div['symbol']}#{div['date']}",
+    }
+    old_comment = f"dividend#{symbol}#{div['date']}"
+    if ((ghost_account_id, identity["comment"]) in existing_dividend_comments
+            or (ghost_account_id, old_comment) in existing_dividend_comments):
+        return "existing", symbol, None
+    matched = _dividend_date_matches(positions, identity) if symbol else None
+    if matched:
+        return "proximity", symbol, matched
+    return "new", symbol, None
+
+
+def split_import_phases(activities: Sequence[Activity]) -> list[list[Activity]]:
+    """Buys and dividends first, sells second, so a sell is checked after its buys."""
+    return [[a for a in activities if a["type"] != "SELL"],
+            [a for a in activities if a["type"] == "SELL"]]
+
+
+def rejected_sell_symbols(sells: Sequence[Activity], positions: Positions,
+                          ghost_account_id: str) -> set[str]:
+    """Symbols whose total sell quantity exceeds the accepted holdings of the account."""
+    totals: defaultdict[str, float] = defaultdict(float)
+    for a in sells:
+        totals[a["symbol"]] += a["quantity"]
+    return {symbol for symbol, qty in totals.items()
+            if positions["qty"].get((ghost_account_id, symbol), 0) - qty < -0.001}

@@ -3,6 +3,7 @@ import io
 import json
 import logging
 from unittest.mock import Mock
+import time
 
 import pytest
 
@@ -30,7 +31,7 @@ def http(monkeypatch):
     monkeypatch.setattr(m.requests, "get", get)
     monkeypatch.setattr(m.requests, "post", post)
     monkeypatch.setattr(m.requests, "put", put)
-    monkeypatch.setattr(m.time, "sleep", Mock())
+    monkeypatch.setattr(time, "sleep", Mock())
     return get, post, put
 
 

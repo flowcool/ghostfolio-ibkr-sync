@@ -6,6 +6,7 @@ from collections import defaultdict
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import app
 
 CANARY = "CANARY-SECRET-5e1d"
 AMOUNT = "987654.32"
@@ -37,19 +38,19 @@ def capture_outcome(monkeypatch):
     def new():
         holder["outcome"] = original()
         return holder["outcome"]
-    monkeypatch.setattr(m, "new_run_outcome", new)
+    monkeypatch.setattr(app, "new_run_outcome", new)
     return holder
 
 
 def stub_accounts(monkeypatch, results):
-    monkeypatch.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    monkeypatch.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
 
     def process(cfg, ibkr_id, *a):
         result = results[ibkr_id]
         if isinstance(result, BaseException):
             raise result
         return result
-    monkeypatch.setattr(m, "process_account", process)
+    monkeypatch.setattr(app, "process_account", process)
 
 
 # --- record_failure -----------------------------------------------------------
@@ -140,7 +141,7 @@ def test_login_failure_is_recorded(env):
 
     def refuse(host, token):
         raise RuntimeError("Ghostfolio login failed: HTTP 403")
-    env.setattr(m, "ghost_exchange_access_token", refuse)
+    env.setattr(app, "ghost_exchange_access_token", refuse)
     assert m.main() == 1
     assert holder["outcome"]["failures"] == [
         {"stage": "ghost_auth", "reason": "login_failed", "ordinal": None}]
@@ -151,7 +152,7 @@ def test_ghostfolio_startup_failure_is_recorded(env):
 
     def down(cfg):
         raise m.requests.ConnectionError(f"http://ghost:3333/?t={CANARY}")
-    env.setattr(m, "ghost_get_existing_orders", down)
+    env.setattr(app, "ghost_get_existing_orders", down)
     assert m.main() == 1
     assert holder["outcome"]["failures"] == [
         {"stage": "ghost_startup", "reason": "activities_unavailable", "ordinal": None}]
@@ -165,7 +166,7 @@ def http_error(status):
 
 def test_rejected_ghostfolio_token_is_recorded_as_token_rejected(env):
     holder = capture_outcome(env)
-    env.setattr(m, "ghost_get_existing_orders",
+    env.setattr(app, "ghost_get_existing_orders",
                 lambda cfg: (_ for _ in ()).throw(http_error(401)))
     assert m.main() == 1
     assert holder["outcome"]["failures"] == [
@@ -174,7 +175,7 @@ def test_rejected_ghostfolio_token_is_recorded_as_token_rejected(env):
 
 def test_other_http_errors_stay_activities_unavailable(env):
     holder = capture_outcome(env)
-    env.setattr(m, "ghost_get_existing_orders",
+    env.setattr(app, "ghost_get_existing_orders",
                 lambda cfg: (_ for _ in ()).throw(http_error(502)))
     assert m.main() == 1
     assert holder["outcome"]["failures"] == [
@@ -184,14 +185,14 @@ def test_other_http_errors_stay_activities_unavailable(env):
 def test_failed_and_crashing_accounts_record_ordinals_and_the_others_still_run(env):
     holder = capture_outcome(env)
     calls = []
-    env.setattr(m, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
 
     def process(cfg, ibkr_id, *a):
         calls.append(ibkr_id)
         if ibkr_id == "U111":
             raise KeyError(f"{CANARY} {AMOUNT}")
         return {}, ibkr_id != "U333"
-    env.setattr(m, "process_account", process)
+    env.setattr(app, "process_account", process)
     assert m.main() == 1
     assert calls == ["U111", "U222", "U333"]
     out = holder["outcome"]
@@ -209,7 +210,7 @@ def test_unexpected_error_outside_accounts_is_recorded_and_returns_one(env, capl
 
     def broken(outcome):
         raise ValueError(CANARY)
-    env.setattr(m, "run_sync", broken)
+    env.setattr(app, "run_sync", broken)
     assert m.main() == 1
     assert holder["outcome"]["failures"] == [
         {"stage": "unexpected", "reason": "unhandled_error", "ordinal": None}]

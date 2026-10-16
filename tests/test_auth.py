@@ -4,7 +4,7 @@ import dataclasses
 import pytest
 
 import ibkr_to_ghostfolio as m
-from ghostfolio_ibkr_sync import config
+from ghostfolio_ibkr_sync import app, config, notify
 from ghostfolio_ibkr_sync.models import Settings
 
 SECRET = "CANARY-ACCESS-7f3a"        # synthetic security token
@@ -233,9 +233,9 @@ def record_startup(monkeypatch, tokens=("bearer-1", "bearer-2", "bearer-3"), fai
     def process(cfg, ibkr_id, *a):
         events.append(("account", ibkr_id, cfg["ghost_token"]))
         return {}, True
-    monkeypatch.setattr(m, "ghost_exchange_access_token", exchange)
-    monkeypatch.setattr(m, "ghost_get_existing_orders", existing)
-    monkeypatch.setattr(m, "process_account", process)
+    monkeypatch.setattr(app, "ghost_exchange_access_token", exchange)
+    monkeypatch.setattr(app, "ghost_get_existing_orders", existing)
+    monkeypatch.setattr(app, "process_account", process)
     return events
 
 
@@ -271,10 +271,10 @@ def test_authentication_failure_stops_before_reads_accounts_and_writes(env, capl
 def test_unauthorised_read_after_login_is_not_retried_with_a_new_login(env):
     access_env(env)
     logins = []
-    env.setattr(m, "ghost_exchange_access_token", lambda h, t: logins.append(1) or "bearer")
+    env.setattr(app, "ghost_exchange_access_token", lambda h, t: logins.append(1) or "bearer")
     def unauthorised(cfg):
         raise m.requests.HTTPError("401 Client Error")
-    env.setattr(m, "ghost_get_existing_orders", unauthorised)
+    env.setattr(app, "ghost_get_existing_orders", unauthorised)
     assert m.main() == 1
     assert logins == [1]
 
@@ -298,7 +298,7 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
     env.setenv("GHOST_PLATFORM_ID", "synthetic-platform")
     env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
     sent = []
-    env.setattr(m, "send_notification", lambda settings, title, body: sent.append((title, body)) or "sent")
+    env.setattr(app, "send_notification", lambda settings, title, body: sent.append((title, body)) or "sent")
     reads, writes, logins = [], [], []
 
     class R:
@@ -342,7 +342,7 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
            f"<Trades>{trade}</Trades><CashTransactions>{div}</CashTransactions><ChangeInDividendAccruals/><CashReport>"
            '<CashReportCurrency currency="BASE_SUMMARY" endingCash="100"/></CashReport>'
            "</FlexStatement></FlexStatements></FlexQueryResponse>")
-    env.setattr(m, "fetch_flex_report", lambda *a, **k: xml)
+    env.setattr(app, "fetch_flex_report", lambda *a, **k: xml)
 
     assert m.main() == int(failed)
     assert logins == [{"accessToken": SECRET}]
