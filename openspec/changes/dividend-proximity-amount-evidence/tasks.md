@@ -14,7 +14,7 @@ Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak 
 
 ## 4. Docs
 
-- [ ] 4.1 Update `docs/adr/0002` (canonical rows excluded, warning on amount difference, trust principle: a connector-comment row is ours, trusted by exact identity; a user edit of it is out of contract), README line 51, the conversion-table Dividend row and the "Additive imports" limit, and `docs/ibkr-setup.md` line 123. Check: `rg -n -i 'proximity|±3 days|within 3 days' README.md docs/`.
+- [x] 4.1 Update `docs/adr/0002` (canonical rows excluded, warning on amount difference, trust principle: a connector-comment row is ours, trusted by exact identity; a user edit of it is out of contract), README line 51, the conversion-table Dividend row and the "Additive imports" limit, and `docs/ibkr-setup.md` line 123. Check: `rg -n -i 'proximity|±3 days|within 3 days' README.md docs/`.
 
 ## 5. Real validation
 

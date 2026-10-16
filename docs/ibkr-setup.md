@@ -120,7 +120,7 @@ Mandatory as soon as the report has dividend, payment-in-lieu or withholding cas
 
 Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. **Change in Dividend Accruals** supplies quantity evidence only; include it with the fields above.
 
-> **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or by any dividend of the same symbol in the same account within 3 days, so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
+> **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or, for manual or legacy rows without that comment, by a dividend of the same symbol in the same account within 3 days (logged as `INFO` when the gross agrees, otherwise as one `WARNING` telling you to check IBKR and add the payment by hand if it is distinct), so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
 
 5. Under **General Configuration**, set **Include Currency Rates** to **No**
 
