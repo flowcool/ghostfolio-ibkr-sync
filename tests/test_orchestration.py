@@ -311,7 +311,7 @@ def test_dividend_same_isin_and_date_on_a_different_account_is_not_deduped(monke
                                               ("2026-07-19", False), ("2026-07-11", False)])
 def test_dividend_match_window_is_exactly_three_days(monkeypatch, existing, skipped):
     pos = positions()
-    pos["dividend_dates"][(ACC, "KO")].append(existing)
+    pos["dividend_dates"][(ACC, "KO")].append((existing, None, None, None))
     w = World(monkeypatch, report(divs=div_xml()))              # dividend dated 2026-07-15
     w.run(pos=pos)
     assert (w.activities == []) is skipped
@@ -1078,7 +1078,7 @@ def test_dividend_structured_input_dedup_before_evidence(monkeypatch, caplog, mo
     pos = positions()
     comments = set()
     if dedup == "proximity":
-        pos["dividend_dates"][(ACC, "KO")].append("2026-07-17")
+        pos["dividend_dates"][(ACC, "KO")].append(("2026-07-17", None, None, None))
     else:
         key = ISIN_KO if dedup == "comment" else "KO"
         comments.add((ACC, f"dividend#{key}#2026-07-15"))

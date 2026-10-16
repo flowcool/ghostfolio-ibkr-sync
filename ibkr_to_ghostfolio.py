@@ -843,8 +843,9 @@ def ghost_get_existing_orders(config):
                   "manual_sells": [[date, qty], ...] by (accountId, symbol) for
                                   SELLs without an IBKR# comment,
                   "manual_buys": same for BUYs without an IBKR# comment,
-                  "dividend_dates": [date, ...] by (accountId, symbol) for
-                                    every DIVIDEND}
+                  "dividend_dates": [(date, gross, currency, fee), ...] by
+                                    (accountId, symbol) for every DIVIDEND without a
+                                    connector comment; gross and fee are Decimal or None}
     """
     url = f"{config['ghost_host']}/api/v1/activities"
     headers = ghost_headers(config["ghost_token"])
@@ -938,7 +939,7 @@ def ghost_get_existing_orders(config):
             symbol = profile["symbol"]
             if symbol and not comment.startswith("dividend#"):
                 positions["dividend_dates"][(order.get("accountId") or "", symbol)].append(
-                    (order.get("date") or "")[:10])
+                    ((order.get("date") or "")[:10], *_existing_dividend_amounts(order, profile)))
 
         if order.get("type") in ("BUY", "SELL"):
             qty = _parse_float(order.get("quantity"))
@@ -1631,18 +1632,85 @@ def filter_trades_by_holdings(trades, positions, ghost_account_id, mapping, exis
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 
+def _existing_dividend_amounts(order, profile):
+    """Return (gross, currency, fee) of an existing Ghostfolio dividend.
+
+    gross = quantity * unitPrice and fee are Decimal, None when missing or invalid.
+    A null activity currency falls back to the profile currency.
+    """
+    def decimal(value):
+        if value is None:
+            return None
+        try:
+            result = Decimal(str(value))
+        except (DecimalException, ValueError):
+            return None
+        return result if result.is_finite() else None
+
+    quantity, price, fee = (decimal(order.get(key)) for key in ("quantity", "unitPrice", "fee"))
+    gross = quantity * price if quantity is not None and price is not None else None
+    currency = order.get("currency")
+    if currency is None:
+        currency = profile.get("currency")
+    return gross, currency if isinstance(currency, str) and currency else None, fee
+
+
 def _dividend_date_matches(positions, activity):
-    """Return the date of a Ghostfolio dividend of the same account and symbol
-    within DIVIDEND_MATCH_DAYS of the activity date (any comment, or none),
-    else None."""
+    """Return the (date, gross, currency, fee) entry of a Ghostfolio dividend of
+    the same account and symbol within DIVIDEND_MATCH_DAYS of the activity date
+    (no connector comment), else None."""
     date = datetime.strptime(activity["date"][:10], "%Y-%m-%d")
     for existing in positions["dividend_dates"].get((activity["accountId"], activity["symbol"]), []):
         try:
-            if abs((datetime.strptime(existing, "%Y-%m-%d") - date).days) <= DIVIDEND_MATCH_DAYS:
+            if abs((datetime.strptime(existing[0], "%Y-%m-%d") - date).days) <= DIVIDEND_MATCH_DAYS:
                 return existing
         except ValueError:
             continue
     return None
+
+
+def _proximity_amounts(div, entry):
+    """Compare the exact source gross with an existing row's gross.
+
+    Returns (source_text, existing_text, agree): agree is True or False, or None
+    when not comparable. Both sides go to a common major unit, rounded to its minor unit.
+    """
+    _, gross, currency, _ = entry
+    source = div.get("gross")
+    source_unit = _historical_currency(div.get("currency"))
+    unit = _historical_currency(currency)
+    source_text = f"{source} {div.get('currency')}" if source is not None else "not comparable"
+    text = f"{gross} {currency}" if gross is not None else "not comparable"
+    if source is None or gross is None or source_unit is None or unit is None or source_unit[0] != unit[0]:
+        return source_text, text, None
+    step = _historical_minor_unit(unit[0])
+    try:
+        return (source_text, text,
+                (source * source_unit[1]).quantize(step) == (gross * unit[1]).quantize(step))
+    except DecimalException:
+        return source_text, text, None
+
+
+def _source_dividend_fee(div):
+    """Source fee by the import convention: max(0, -cash withholding)."""
+    tax = _dividend_cash_sum([row for row in div.get("cash_rows", [])
+                              if row.get("type") == WITHHOLDING_CASH_TYPE])
+    return None if tax is None else max(Decimal(0), tax.copy_negate())
+
+
+def log_dividend_proximity_skip(symbol, div, entry):
+    """Make a proximity skip visible: INFO when gross agrees, else one WARNING."""
+    source_text, text, agree = _proximity_amounts(div, entry)
+    fees = f"source fee {_source_dividend_fee(div)}, existing fee {entry[3]}"
+    if agree:
+        log.info("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, treated as "
+                 "the same payment (not imported); amounts agree (%s; %s)",
+                 symbol, div["date"], entry[0], text, fees)
+        return
+    log.warning("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, skipped as "
+                "the same payment (not imported), but gross differs: source %s, existing %s; %s. "
+                "Check IBKR; if the payment is distinct, add it by hand in Ghostfolio",
+                symbol, div["date"], entry[0], source_text, text, fees)
 
 
 CURRENCY_MINOR_UNITS = {
@@ -1909,7 +1977,7 @@ def _historical_proximity(positions, account_id, evidence, symbol, dividend):
             continue
         if near <= DIVIDEND_MATCH_DAYS:
             candidates.append({**_historical_destination(item), "comment": row.get("comment") or None})
-    return {"matched_date": matched, "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates}
+    return {"matched_date": matched[0], "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates}
 
 
 def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None,
@@ -2718,8 +2786,7 @@ def process_account(config, ibkr_account_id, query_id, ghost_account_name, mappi
             continue
         matched = _dividend_date_matches(positions, identity) if symbol else None
         if matched:
-            log.info("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, "
-                     "treated as the same payment (not imported)", symbol, div["date"], matched)
+            log_dividend_proximity_skip(symbol, div, matched)
             div_skipped_dup += 1
             continue
         candidates.append(div)
