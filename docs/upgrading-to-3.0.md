@@ -202,15 +202,20 @@ With `DRY_RUN` true, the candidate writes nothing.
    ([README](../README.md#run-once-by-hand-in-a-scheduled-container)):
 
    ```bash
-   docker exec <container> python /app/ibkr_to_ghostfolio.py
+   docker exec <container> python -m ghostfolio_ibkr_sync
    ```
+
+   The old `python /app/ibkr_to_ghostfolio.py` command no longer works: the candidate
+   removed that file without a compatibility launcher. Update any script that calls it.
 
 4. Read the log with the [Verify](#verify) list. The first start-up line names the candidate:
    `ghostfolio-ibkr-sync version v3.0.0-rc.N`.
 5. For rollback, select the saved image digest with the retained ENV and mounts, then run
    `docker compose up -d`. Set `DRY_RUN=true` explicitly for a rollback preview;
    older images can write when the variable is absent. If you changed the Flex query for 3.0, see the order warning in step 2.
-6. After the stable release, return to `:latest` (or pin `:3.0.0`). A pinned `-rc.N` tag gets no
+6. The latest candidates run the refactored typed package. The 10-day production soak
+   restarts on this refactored candidate, and the stable release follows only after it.
+7. After the stable release, return to `:latest` (or pin `:3.0.0`). A pinned `-rc.N` tag gets no
    automatic update, so change it yourself.
 
 ## Verify

@@ -16,6 +16,7 @@ for recovery instead of narrowing it casually: an omitted purchase can prevent
 a later sell from passing the holdings gate.
 
 Sources: [Flex setup](../ibkr-setup.md#2-create-a-flex-query),
-[Limitations](../../README.md#limitations), and `parse_trades`,
-`parse_cash_dividends`, `parse_cash_report` and `filter_trades_by_holdings` in the
-[runtime](../../ghostfolio_ibkr_sync/ibkr.py).
+[Limitations](../../README.md#limitations), `parse_trades`,
+`parse_cash_dividends` and `parse_cash_report` in the
+[`ibkr` module](../../ghostfolio_ibkr_sync/ibkr.py), and `filter_trades_by_holdings` in the
+[`sync` module](../../ghostfolio_ibkr_sync/sync.py).

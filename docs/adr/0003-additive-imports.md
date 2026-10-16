@@ -13,5 +13,5 @@ and may fill a missing platform ID. The separate
 [cleanup tool](../cleanup.md) can modify/delete activities only under its own
 operator-authorized maintenance workflow; it is not invoked by the sync.
 Sources: `ghost_import_activities` and `ghost_update_cash_balance` in the
-[runtime](../../ghostfolio_ibkr_sync/ghostfolio.py), and
+[`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), and
 [How it works](../../README.md#how-it-works).

@@ -21,6 +21,8 @@ must match IBKR's base currency: since 3.0 the update checks the Flex
 difference, or a report without that currency, sends no balance and fails the
 account (after the import phases, so trades and dividends are unaffected).
 
-Sources: `process_account`, `mark_import_uncertain`, `parse_cash_report` and
-`ghost_update_cash_balance` in the [runtime](../../ghostfolio_ibkr_sync/ghostfolio.py), and
+Sources: `process_account` in the [`app` module](../../ghostfolio_ibkr_sync/app.py),
+`mark_import_uncertain` and `ghost_update_cash_balance` in the
+[`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), `parse_cash_report` in the
+[`ibkr` module](../../ghostfolio_ibkr_sync/ibkr.py), and
 [How it works](../../README.md#how-it-works).

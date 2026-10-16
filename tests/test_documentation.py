@@ -58,5 +58,5 @@ def test_adr_index_links_all_eight_dated_decisions():
     for name in ADRS:
         assert f']({name})' in index
         text = (ROOT / 'docs/adr' / name).read_text(encoding='utf-8')
-        assert re.search(r'^Date: \d{4}-\d{2}-\d{2}\. Status: accepted( \(existing behavior\))?\.$',
+        assert re.search(r'^Date: \d{4}-\d{2}-\d{2}\. Status: (accepted( \(existing behavior\))?|superseded)\.$',
                          text, flags=re.M)

@@ -8,7 +8,7 @@ the 3.0 prerequisite policy.
 
 | Record | Decision |
 | --- | --- |
-| [0001](0001-single-file-runtime.md) | Single-file Python runtime |
+| [0001](0001-single-file-runtime.md) | Typed modular Python runtime (superseded decision: single file) |
 | [0002](0002-comment-and-proximity-deduplication.md) | Comment identities and dividend proximity matching |
 | [0003](0003-additive-imports.md) | Additive activity imports only |
 | [0004](0004-independent-cash-update.md) | Cash updates independent of import success |
