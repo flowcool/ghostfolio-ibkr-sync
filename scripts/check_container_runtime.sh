@@ -27,7 +27,9 @@ assert sys.version_info[:2] == (3, 14), sys.version
 import importlib.util
 assert importlib.util.find_spec("pip") is None, "pip must not ship in the image"
 print("CPython", platform.python_version(), flush=True)
-for name in ("/app/ibkr_to_ghostfolio.py", "/app/entrypoint.sh"):
+import glob
+for name in ("/app/ibkr_to_ghostfolio.py", "/app/entrypoint.sh", "/app/ghostfolio_ibkr_sync",
+             *glob.glob("/app/ghostfolio_ibkr_sync/*.py")):
     assert os.stat(name).st_uid == 0
     assert not os.stat(name).st_mode & 0o222
     assert not os.access(name, os.W_OK)

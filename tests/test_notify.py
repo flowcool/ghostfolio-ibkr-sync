@@ -1,6 +1,8 @@
 """Offline tests: Apprise settings, the isolated worker and its parent lifecycle."""
+import dataclasses
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -9,6 +11,8 @@ import types
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import config
+from ghostfolio_ibkr_sync.models import NotificationSettings
 
 URL_SECRET = "CANARY-DEST-3b9e"          # synthetic credential inside a notify URL
 SYNC_SECRET = "CANARY-SYNC-TOKEN-8d21"   # synthetic sync credential in the parent env
@@ -67,6 +71,17 @@ def test_oversized_setting_is_rejected_before_parsing(notify_env, monkeypatch):
     notify_env.setenv("APPRISE_URLS", json.dumps(["x" * 100] * 400))
     monkeypatch.setattr(m.json, "loads", lambda *a: pytest.fail("must not parse"))
     assert m.load_notification_config() is None
+
+
+
+def test_typed_settings_are_immutable_and_hide_urls(notify_env):
+    notify_env.setenv("APPRISE_URLS", json.dumps(URLS))
+    notify_env.setenv("APPRISE_TIMEOUT", "5")
+    settings = config.load_notifications()
+    assert settings == NotificationSettings(urls=tuple(URLS), timeout=5)
+    assert URL_SECRET not in repr(settings)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        settings.timeout = 1
 
 
 # --- worker (in process, fake apprise) ----------------------------------------
@@ -289,7 +304,8 @@ def test_script_read_from_stdin_cannot_spawn_a_worker(monkeypatch):
 def test_failed_run_piped_on_stdin_reports_spawn_failed(tmp_path):
     env = {"PATH": "/usr/bin:/bin", "IBKR_ACCOUNT_IDS": "U1", "IBKR_QUERY_IDS": "q",
            "GHOST_TOKEN": "g", "GHOST_HOST": "http://g", "MAPPING_FILE": "", "DRY_RUN": "false",
-           "APPRISE_URLS": json.dumps(URLS)}                  # IBKR_TOKEN missing -> exit 1
+           "APPRISE_URLS": json.dumps(URLS),                  # IBKR_TOKEN missing -> exit 1
+           "PYTHONPATH": os.path.dirname(m.__file__)}          # the package beside the script
     with open(m.__file__, "rb") as script:
         proc = subprocess.run([sys.executable, "-"], stdin=script, capture_output=True,
                               timeout=60, env=env, cwd=tmp_path)
