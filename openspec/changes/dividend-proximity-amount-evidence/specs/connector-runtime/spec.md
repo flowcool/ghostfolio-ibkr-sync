@@ -50,6 +50,10 @@ Baseline: the v2.5.0 dry run emitted 114 opaque findings. Saved evidence measure
 - **WHEN** `.venv/bin/python -m pytest -v tests -k 'historical_diagnostic_skip_cause'` exercises an absent group with an old symbol comment and a proximity candidate, the same with an inactive comment carrier, an absent group with only a proximity candidate, an absent group whose only nearby row is canonical, and unsupported, missing and conflicting source/destination currency context
 - **THEN** the first two show `skipped by historical comment`, the third `skipped by proximity` with both gross values, an absent group whose only nearby row has a connector comment is not proximity-skipped, each finding stays absent or uncertain, currency findings keep their reason and show observed source/destination currency and provenance, and import selection is unchanged.
 
+#### Scenario: Legacy identity and residual skip causes
+- **WHEN** `.venv/bin/python -m pytest -v tests -k 'coherent_dividend_legacy_identity or historical_diagnostic_skip_cause'` exercises a valid old symbol comment, an old comment with a failed identity check, and sources with only non-identity historical or proximity candidates
+- **THEN** each row claimed by its old symbol comment appears in one source block even when a destination-row check fails; only comments that fail the account-and-comment claim criteria use residual skip-cause wording; import selection is unchanged.
+
 #### Scenario: Real read-only acceptance
 - **WHEN** the operator-authorized `DRY_RUN=1 LOG_LEVEL=DEBUG .venv/bin/python ibkr_to_ghostfolio.py` runs with the approved real-data ENV and private log capture
 - **THEN** zero financial writes occur; all 44 previously blocked groups pass the active, id, data-source, symbol and local-date checks, with ISIN pass or unavailable; each reaches exact amount comparison or stays uncertain only with `component partition identity not proven` or a currency-context finding that shows the observed currency, never a component assignment inferred from amounts; the outcome matches the replay baseline of 39 compared, 3 unproven partitions and 2 unsupported currency, and any other cause or count fails acceptance and is reported; every remaining anomaly is explainable from the log; both absent groups log `skipped by historical comment`, reconciled with their evidence rows; and both unsupported-currency groups show a `currency context:` line naming KRW.
@@ -77,3 +81,11 @@ Check: `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k repr
 - **THEN** coverage and uncertainty are explicit; no weak match is certified.
 
 Check: `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k evidence`.
+
+#### Scenario: Legacy comment identity
+- **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k coherent_dividend_legacy_identity` runs canonical and legacy symbol comments with passing and failing identity checks
+- **THEN** a legacy comment whose account, comment symbol and comment date qualify owns one source block; a later failed destination-row check stays in that block with the check named; no row is reported twice.
+
+#### Scenario: Currency states and declared rate
+- **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k 'coherent_dividend_currency or coherent_dividend_declared_rate'` runs KRW, JPY, missing, conflicting and unknown currency cases plus one-action, multi-action and missing-rate evidence
+- **THEN** KRW and JPY compare with one-unit precision; each invalid state has the correct reason; only the one-action matched-Re rate is retained.
