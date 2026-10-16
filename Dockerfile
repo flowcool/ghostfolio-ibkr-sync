@@ -23,7 +23,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && \
     apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip is build-time only; removing it keeps its vendored packages out of the
+# runtime image and its scans.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y pip
 
 # Set by CI from `git describe --tags --always`; logged at start
 ARG APP_VERSION=dev

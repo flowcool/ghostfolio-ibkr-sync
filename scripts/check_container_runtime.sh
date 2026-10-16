@@ -24,6 +24,8 @@ import platform
 import sys
 assert platform.python_implementation() == "CPython"
 assert sys.version_info[:2] == (3, 14), sys.version
+import importlib.util
+assert importlib.util.find_spec("pip") is None, "pip must not ship in the image"
 print("CPython", platform.python_version(), flush=True)
 for name in ("/app/ibkr_to_ghostfolio.py", "/app/entrypoint.sh"):
     assert os.stat(name).st_uid == 0
