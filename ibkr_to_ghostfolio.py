@@ -1971,13 +1971,17 @@ def _historical_proximity(positions, account_id, evidence, symbol, dividend):
         if not (item["active"] and profile.get("dataSource") == "YAHOO" and profile.get("symbol") == symbol
                 and row.get("accountId") == account_id):
             continue
+        if (row.get("comment") or "").startswith("dividend#"):
+            continue  # connector rows are not in the proximity index
         try:
             near = abs((datetime.strptime((row.get("date") or "")[:10], "%Y-%m-%d") - source_day).days)
         except ValueError:
             continue
         if near <= DIVIDEND_MATCH_DAYS:
             candidates.append({**_historical_destination(item), "comment": row.get("comment") or None})
-    return {"matched_date": matched[0], "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates}
+    source_text, candidate_text, _ = _proximity_amounts(dividend, matched)
+    return {"matched_date": matched[0], "window_days": DIVIDEND_MATCH_DAYS, "candidates": candidates,
+            "source_gross": source_text, "candidate_gross": candidate_text}
 
 
 def historical_dividend_comparison(dividends, account_id, mapping, positions, report_window=None,
@@ -2577,6 +2581,8 @@ def format_historical_dividend_finding(finding, account_id):
     if proximity:
         lines.append(f"  Skipped by proximity: same symbol within {_plain(proximity['window_days'])} "
                      f"days of {_plain(proximity['matched_date'])}; weak candidates do not certify identity")
+        lines.append(f"    Gross: source {_plain(proximity['source_gross'])}, "
+                     f"candidate {_plain(proximity['candidate_gross'])}")
         for item in proximity["candidates"]:
             lines.append(f"    Weak candidate: activity {_plain(item['activity_id'])} "
                          f"(comment {_plain(item['comment'])}, {_plain(item['utc_date'])}), "
