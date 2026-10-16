@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import ibkr_to_ghostfolio as m
+from ghostfolio_ibkr_sync import ibkr
 
 original_import = m.ghost_import_activities
 
@@ -124,7 +125,7 @@ def test_oversized_flex_reply_prevents_import_and_cash_update(monkeypatch):
     monkeypatch.setattr(m, "fetch_flex_report", fetch)
     response = m.requests.Response()
     response._content = b"x" * (m.IBKR_MAX_XML_BYTES + 1)
-    monkeypatch.setattr(m, "_ibkr_get", lambda *a, **k: response)
+    monkeypatch.setattr(ibkr, "_ibkr_get", lambda *a, **k: response)
     assert w.run() == ({}, False)
     assert w.imported == [] and w.cash_calls == []
 
@@ -555,7 +556,7 @@ def script_flex(monkeypatch, *bodies):
     def get(url, params, timeout):
         urls.append((url, dict(params)))
         return Txt(seq.pop(0))
-    monkeypatch.setattr(m, "_ibkr_get", get)
+    monkeypatch.setattr(ibkr, "_ibkr_get", get)
     monkeypatch.setattr(m.time, "sleep", lambda s: sleeps.append(s))
     return urls, sleeps
 
@@ -715,13 +716,13 @@ def test_ibkr_get_gives_up_after_the_last_retry_and_never_leaks_the_token(monkey
 
 def test_ibkr_get_redacts_url_encoded_forms_of_the_token(monkeypatch):
     token = "a+b/c="
-    leaked = f"GET https://x/?t={m.quote_plus(token)} raw {token} and {m.quote(token, safe='')}"
+    leaked = f"GET https://x/?t={ibkr.quote_plus(token)} raw {token} and {ibkr.quote(token, safe='')}"
     monkeypatch.setattr(m.requests, "get", lambda *a, **k: (_ for _ in ()).throw(m.requests.ConnectionError(leaked)))
     monkeypatch.setattr(m.time, "sleep", lambda s: None)
     with pytest.raises(RuntimeError) as e:
         m._ibkr_get("https://x", {"t": token}, 5)
     msg = str(e.value)
-    assert token not in msg and m.quote_plus(token) not in msg and m.quote(token, safe="") not in msg
+    assert token not in msg and ibkr.quote_plus(token) not in msg and ibkr.quote(token, safe="") not in msg
 
 
 def test_ibkr_get_http_error_is_not_retried_and_is_redacted(monkeypatch):
