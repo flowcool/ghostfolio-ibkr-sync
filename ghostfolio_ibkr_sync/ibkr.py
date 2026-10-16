@@ -204,7 +204,7 @@ def fetch_flex_report(token: str, query_id: str, max_retries: int = 60, retry_de
                 log_lab_evidence("window", historical_dividend_report_window(resp.text))
             return resp.text
 
-        error_msg = root.findtext("ErrorMessage", "unknown error")
+        error_msg = _redact(root.findtext("ErrorMessage", "unknown error"), token)
         raise RuntimeError(f"IBKR GetStatement failed: {error_msg}")
 
     raise RuntimeError("Timed out waiting for IBKR Flex Query statement")

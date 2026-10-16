@@ -673,6 +673,15 @@ def test_flex_fetch_statement_error_status_is_reported(monkeypatch):
         ibkr.fetch_flex_report("TOK", "1")
 
 
+def test_flex_fetch_statement_error_redacts_token(monkeypatch):
+    script_flex(monkeypatch, SEND_OK, "<R><Status>Fail</Status><ErrorCode>1003</ErrorCode>"
+                                      "<ErrorMessage>Token TOK is invalid</ErrorMessage></R>")
+    with pytest.raises(RuntimeError) as exc:
+        ibkr.fetch_flex_report("TOK", "1")
+    assert "GetStatement failed: Token *** is invalid" in str(exc.value)
+    assert "TOK" not in str(exc.value)
+
+
 def test_flex_fetch_foreign_statement_host_is_rejected_before_the_token_is_sent(monkeypatch):
     evil = SEND_OK.replace("ndcdyn.interactivebrokers.com", "evil.example")
     urls, _ = script_flex(monkeypatch, evil)
