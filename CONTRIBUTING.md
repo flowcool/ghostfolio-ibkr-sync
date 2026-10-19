@@ -14,6 +14,8 @@ For a feature, explain the missing workflow, its impact and the smallest useful 
 
 The sync is the typed Python package `ghostfolio_ibkr_sync`, run only in Docker with `python -m ghostfolio_ibkr_sync`; there is no single-file launcher. Keep the functional style and strict application typing, and put new code in the module of its concern.
 
+The local Python commands below are only for development and tests. They are not a supported sync execution interface.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
