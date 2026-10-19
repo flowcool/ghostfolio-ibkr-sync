@@ -48,6 +48,36 @@ def ghost_response_is_redirect(resp: requests.Response) -> bool:
 GHOST_AUTH_TIMEOUT = (10, 30)
 # The bearer becomes an Authorization header value: printable ASCII, no space
 _HEADER_SAFE_TOKEN_RE = re.compile(r"[\x21-\x7e]+")
+_VERSIONED_ACTIVITY_IDENTITY_RE = re.compile(
+    r"IBKR#v([1-9][0-9]*)#([A-Za-z0-9._-]+):(TRADE|DIVIDEND):([A-Za-z0-9._-]+)"
+)
+
+# (source account, kind, source identifier)
+VersionedActivityIdentity = tuple[str, str, str]
+
+
+class InvalidActivityIdentityError(RuntimeError):
+    """A reserved activity identity is malformed or incompatible with its row."""
+
+
+def parse_versioned_activity_identity(
+    comment: object, activity_type: object,
+) -> VersionedActivityIdentity | None:
+    """Parse a supported IBKR versioned identity, or return None for legacy data.
+
+    Exact lowercase ``IBKR#v`` reserves the versioned namespace. Reserved
+    comments fail closed without including their contents in the exception.
+    """
+    if not isinstance(comment, str) or not comment.startswith("IBKR#v"):
+        return None
+    match = _VERSIONED_ACTIVITY_IDENTITY_RE.fullmatch(comment)
+    if match is None or match.group(1) != "2":
+        raise InvalidActivityIdentityError("Invalid reserved activity identity")
+    source_account, kind, source_id = match.group(2), match.group(3), match.group(4)
+    if ((kind == "TRADE" and activity_type not in ("BUY", "SELL"))
+            or (kind == "DIVIDEND" and activity_type != "DIVIDEND")):
+        raise InvalidActivityIdentityError("Invalid reserved activity identity")
+    return source_account, kind, source_id
 
 
 def ghost_exchange_access_token(host: str, access_token: str) -> str:
@@ -175,7 +205,7 @@ def ghost_get_existing_orders(
     dividend_comments = set()
     positions: dict[str, Any] = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
                  "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-                 "dividend_dates": defaultdict(list)}
+                 "dividend_dates": defaultdict(list), "versioned_identities": set()}
 
     # One request without skip/take: Ghostfolio has no take cap (default
     # MAX_SAFE_INTEGER), so one call returns one consistent list, with no
@@ -218,6 +248,17 @@ def ghost_get_existing_orders(
         positions["dividend_evidence"] = []
 
     for index, order in enumerate(activities):
+        raw_comment = order.get("comment")
+        if raw_comment is not None and not isinstance(raw_comment, str):
+            raise RuntimeError("Ghostfolio activity has an invalid comment; refusing to sync")
+        comment = raw_comment or ""
+        versioned_identity = parse_versioned_activity_identity(comment, order.get("type"))
+        if versioned_identity is not None:
+            positions["versioned_identities"].add((versioned_identity[0], comment))
+        is_versioned_dividend = (
+            versioned_identity is not None and versioned_identity[1] == "DIVIDEND"
+        )
+
         profile = {}
         if order.get("type") in ("BUY", "SELL", "DIVIDEND"):
             # Current API wins even if malformed: never hide an invalid current
@@ -233,16 +274,17 @@ def ghost_get_existing_orders(
                     "asset profile symbol (assetProfile / legacy SymbolProfile); "
                     "refusing to sync without position and reconciliation context")
         # comment is nullable in Ghostfolio, so JSON null arrives as None
-        comment = order.get("comment") or ""
-        if comment.startswith("IBKR#"):
-            tid = comment.split("#", 1)[1]
-            if tid:
-                trade_ids.add(tid)
-        elif comment.startswith("dividend#"):
-            dividend_comments.add((order.get("accountId") or "", comment))
+        if versioned_identity is None:
+            if comment.startswith("IBKR#"):
+                tid = comment.split("#", 1)[1]
+                if tid:
+                    trade_ids.add(tid)
+            elif comment.startswith("dividend#"):
+                dividend_comments.add((order.get("accountId") or "", comment))
 
         active = activity_is_active(order)
-        if config.get("dry_run") and order.get("type") == "DIVIDEND":
+        if (config.get("dry_run") and order.get("type") == "DIVIDEND"
+                and not is_versioned_dividend):
             raw = exact_rows[index] if exact_available else None
             exact = (isinstance(raw, dict)
                      and all(raw.get(key) == order.get(key)
@@ -259,7 +301,8 @@ def ghost_get_existing_orders(
 
         if order.get("type") == "DIVIDEND":
             symbol = profile["symbol"]
-            if symbol and not comment.startswith("dividend#"):
+            if (symbol and not comment.startswith("dividend#")
+                    and not is_versioned_dividend):
                 positions["dividend_dates"][(order.get("accountId") or "", symbol)].append(
                     ((order.get("date") or "")[:10], *_existing_dividend_amounts(order, profile)))
 
@@ -392,8 +435,9 @@ def ghost_import_activities(
     visible.  Other 400s (too many activities, premium, ...) are not per-symbol
     and fail hard without retrying.
 
-    Ghostfolio reports its own duplicate detection per activity in a 2xx and
-    silently skips those, so a short accepted count is not a failure.
+    A 2xx response is clean only when it proves every submitted activity.  A
+    shorter valid list preserves its exact accepted subset, fails the account
+    without retrying, and tells the operator which comments need inspection.
     """
     if config.get("dry_run"):
         log_lab_evidence("preview", activities)
@@ -443,11 +487,27 @@ def ghost_import_activities(
                 mark_import_uncertain(config, remaining)
                 return [], False
             log.info("Ghostfolio created %d of %d submitted activities", len(imported), len(remaining))
+            short_response = len(imported) < len(remaining)
+            if short_response:
+                accepted_keys = {
+                    (activity["accountId"], activity["comment"])
+                    for activity in imported
+                }
+                omitted_comments = [
+                    activity["comment"] for activity in remaining
+                    if (activity["accountId"], activity["comment"]) not in accepted_keys
+                ]
+                log.error(
+                    "Ghostfolio accepted only %d of %d submitted activities; omitted comments: "
+                    "%s — inspect Ghostfolio before rerun; the account failed and the batch "
+                    "was not retried",
+                    len(imported), len(remaining), ", ".join(omitted_comments),
+                )
             if dropped_symbols:
                 log.warning("Imported without %d unresolved symbol(s): %s — add a mapping entry "
                             "(symbol_mapping) so they are recognised next run",
                             len(dropped_symbols), ", ".join(dropped_symbols))
-            return imported, not dropped_symbols
+            return imported, not dropped_symbols and not short_response
 
         symbol = parse_unresolved_symbol(body, resp.text)
         if symbol is None:

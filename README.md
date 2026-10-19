@@ -49,7 +49,7 @@ One run does this, in order:
 2. Read **all** existing Ghostfolio activities once. Deduplication depends on them, so if the list looks incomplete or redacted the run stops and writes nothing.
 3. Then, for each IBKR account in turn (steps 3 to 6): fetch its Flex Query report (two steps: request, then poll until IBKR has generated the statement), find the Ghostfolio account by name (if `GHOST_ACCOUNT_NAMES` is unset, the IBKR account IDs are used as names, with a warning), and parse trades, dividend payments and the cash balance.
 4. Decide what is new: skip FX and options; skip trades already in Ghostfolio (`IBKR#<tradeID>` comment) and trades without a trade ID (they cannot be deduplicated); skip dividends already in Ghostfolio (`dividend#...` comment, or a manual or legacy dividend, one without a `dividend#` comment, of the same symbol in the same account within ±3 days, logged as `INFO` when the gross agrees and as one `WARNING` otherwise); skip trades already entered by hand; and check the net quantity against existing holdings. This is a batch-level guard, not chronological position reconciliation.
-5. Convert what is left to Ghostfolio activities and import them as a batch per account. If Ghostfolio reports an unresolved symbol, remove that symbol from the batch and retry the rest; the run still exits 1 so the omitted activities remain visible.
+5. Convert what is left to Ghostfolio activities and import them as a batch per account. If Ghostfolio reports an unresolved symbol, remove that symbol from the batch and retry the rest; the run still exits 1 so the omitted activities remain visible. If a successful response lists fewer created activities than were submitted, retain only the proven creations, log the omitted comments, do not retry the batch, and fail that account. Sells use only the proven buys. Cash and later accounts continue.
 6. Set the account's cash balance. This happens even if the import failed; it is skipped, with a warning, only when the report has no base-currency cash row. The Ghostfolio account currency must equal the IBKR base currency (Account Information `CurrencyPrimary` in the Flex Query): on a mismatch, or when the report has no base currency, the update is refused with an `ERROR` naming the cause, no balance is sent and the account counts as failed. `DRY_RUN` still reads the account and reports the same refusal. After all accounts, the run exits `0` if every account was clean and `1` otherwise.
 
 The tool never deletes or edits an existing Ghostfolio activity: it only adds new ones and updates each account's cash balance (and its platform, if `GHOST_PLATFORM_ID` is set and the account has none). Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
@@ -746,6 +746,13 @@ without a compatibility launcher, so update any script or note that calls it.
 See the [troubleshooting guide](docs/troubleshooting.md) for exit codes,
 import failures, missing positions, token expiry and login diagnostics.
 For interrupted operator maintenance, use the [cleanup recovery guide](docs/cleanup.md).
+
+`Ghostfolio accepted only ...; omitted comments: ...` means Ghostfolio returned
+a valid but shorter creation list. The listed creations remain in Ghostfolio.
+The connector does not retry the batch because that could create duplicates.
+Inspect the account and every omitted comment in Ghostfolio before rerunning.
+The affected account exits with failure, while its cash update and later
+accounts continue.
 
 ## Limitations
 

@@ -22,6 +22,7 @@ from ghostfolio_ibkr_sync.diagnostics import (
     log_historical_dividend_comparison,
 )
 from ghostfolio_ibkr_sync.ghostfolio import (
+    InvalidActivityIdentityError,
     activity_date_is_current,
     ghost_exchange_access_token,
     ghost_find_account_id,
@@ -258,6 +259,11 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         if dedup == "existing":
             div_skipped_dup += 1
             continue
+        if dedup == "partial":
+            log.error("Dividend %s %s: partial versioned action coverage — not imported; "
+                      "account failed", symbol or div.get("symbol") or "unknown", div["date"])
+            ok = False
+            continue
         if dedup == "proximity":
             log_dividend_proximity_skip(cast(str, symbol), div, cast(DividendEntry, matched))
             div_skipped_dup += 1
@@ -427,6 +433,10 @@ def run_sync(outcome: RunOutcome) -> int:
     # sets current as it imports
     try:
         existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
+    except InvalidActivityIdentityError:
+        log.error("Ghostfolio has an invalid reserved activity identity; refusing to sync")
+        record_failure(outcome, "ghost_startup", "invalid_identity")
+        return 1
     except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to fetch existing Ghostfolio activities: %s", exc)
         if is_token_rejection(exc):
@@ -436,8 +446,10 @@ def run_sync(outcome: RunOutcome) -> int:
         else:
             record_failure(outcome, "ghost_startup", "activities_unavailable")
         return 1
-    log.info("Found %d existing trade activities and %d existing dividend activities in Ghostfolio",
-             len(existing_trade_ids), len(existing_dividend_comments))
+    log.info("Found %d existing trade activities, %d existing dividend activities and "
+             "%d versioned identities in Ghostfolio",
+             len(existing_trade_ids), len(existing_dividend_comments),
+             len(positions.get("versioned_identities", set())))
 
     all_unmapped = {}
     failed_accounts = []

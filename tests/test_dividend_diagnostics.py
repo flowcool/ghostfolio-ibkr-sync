@@ -88,6 +88,18 @@ def test_historical_diagnostic_coherent_reader_preserves_tuple_and_indexes(monke
     assert len(dry[2]["dividend_evidence"]) == 1
 
 
+def test_versioned_identity_reader_excludes_dividends_from_history_and_proximity(monkeypatch):
+    row = destination(comment="IBKR#v2#U1:DIVIDEND:OTHER")
+    _, comments, positions = read(monkeypatch, [row])
+    assert comments == set()
+    assert positions["dividend_evidence"] == []
+    assert dict(positions["dividend_dates"]) == {}
+
+    source = ibkr.parse_cash_dividends(report(divs=div_xml()))
+    findings = diagnostics.historical_dividend_comparison(source, ACC, {}, positions)
+    assert len(findings) == 1 and findings[0]["category"] == "absent"
+
+
 @pytest.mark.parametrize("currency,profile_currency,provenance", [
     ("USD", "EUR", "activity"), (None, "USD", "assetProfile"),
 ])

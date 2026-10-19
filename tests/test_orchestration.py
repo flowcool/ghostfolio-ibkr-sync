@@ -19,10 +19,11 @@ CFG = {"ibkr_token": "SECRET-TOK", "dry_run": False, "ghost_host": "http://g", "
 
 # --- helpers ----------------------------------------------------------------
 
-def positions(qty=None):
+def positions(qty=None, versioned_identities=None):
     return {"qty": defaultdict(float, qty or {}), "isin_symbols": defaultdict(set),
             "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-            "dividend_dates": defaultdict(list)}
+            "dividend_dates": defaultdict(list),
+            "versioned_identities": set(versioned_identities or ())}
 
 
 def trade_xml(tid, side="BUY", qty=10, symbol="KO", isin=ISIN_KO, date="20260801;100000", **extra):
@@ -503,6 +504,93 @@ def test_main_untrusted_or_unreadable_existing_activities_stops_before_any_accou
     env.setattr(app, "ghost_get_existing_orders", boom)
     assert app.main() == 1
     assert calls == []
+
+
+def test_versioned_identity_reader_invalid_identity_stops_before_financial_writes(
+        env, caplog):
+    invalid_identity = "IBKR#v2#PRIVATE-ACCOUNT:TRADE:PRIVATE-ID:extra"
+    row = {"type": "BUY", "quantity": 1, "comment": invalid_identity,
+           "accountId": "destination", "date": "2026-08-01T00:00:00.000Z",
+           "assetProfile": {"symbol": "KO", "isin": ISIN_KO, "dataSource": "YAHOO"}}
+
+    class ExistingActivities:
+        status_code = 200
+        content = b""
+
+        @staticmethod
+        def json():
+            return {"activities": [row], "count": 1}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    env.setattr(requests, "get", lambda *args, **kwargs: ExistingActivities())
+    for verb in ("post", "put", "patch", "delete"):
+        env.setattr(requests, verb,
+                    lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+    env.setattr(app, "process_account",
+                lambda *args, **kwargs: pytest.fail("account processing"))
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    sent = []
+    env.setattr(app, "send_notification",
+                lambda settings, title, body: sent.append((title, body)) or "sent")
+
+    assert app.main() == 1
+    assert len(sent) == 1
+    assert "ghost_startup: invalid_identity" in sent[0][1]
+    assert invalid_identity not in sent[0][1]
+    assert "PRIVATE-ACCOUNT" not in caplog.text
+
+
+def test_versioned_identity_reader_partial_dividend_coverage_is_account_local(
+        env, caplog):
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    a1 = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
+    env.setattr(app, "ghost_get_existing_orders",
+                lambda cfg: (set(), set(), positions(versioned_identities={a1})))
+
+    u1_dividends = (
+        div_xml(amount="15").replace('accountId="broker-account"', 'accountId="U1"')
+        + div_xml(amount="10").replace('accountId="broker-account"', 'accountId="U1"')
+        .replace('actionID="A1"', 'actionID="A2"')
+    )
+    u2_dividend = (div_xml(isin=ISIN_PEP, symbol="PEP")
+                   .replace('accountId="broker-account"', 'accountId="U2"')
+                   .replace('actionID="A1"', 'actionID="B1"'))
+    reports = {
+        "q1": report(trade_xml("T1"), u1_dividends),
+        "q2": report(trade_xml("T2", symbol="PEP", isin=ISIN_PEP), u2_dividend,
+                     source_account="U2"),
+    }
+    env.setattr(app, "fetch_flex_report", lambda token, query_id: reports[query_id])
+    env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
+    imported = []
+    env.setattr(app, "ghost_import_activities",
+                lambda cfg, rows: imported.append(list(rows)) or (list(rows), True))
+    cash = []
+    env.setattr(app, "ghost_update_cash_balance",
+                lambda cfg, account, balance, currency: cash.append(account) or True)
+
+    assert app.main() == 1
+    by_account = defaultdict(list)
+    for activity in [activity for batch in imported for activity in batch]:
+        by_account[activity["accountId"]].append(activity["type"])
+    assert by_account == {"gf-A": ["BUY"], "gf-B": ["BUY", "DIVIDEND"]}
+    assert cash == ["gf-A", "gf-B"]
+    assert "partial versioned action coverage" in caplog.text
+    assert "1 of 2 account(s): U1" in caplog.text
+
+
+def test_versioned_identity_reader_invalid_actions_keep_local_rejection(monkeypatch, caplog):
+    rows = (div_xml(amount="30")
+            + div_xml(amount="-5").replace('actionID="A1"', 'actionID="A2"'))
+    w = World(monkeypatch, report(trade_xml("SAFE-T"), rows))
+    a1 = ("broker-account", "IBKR#v2#broker-account:DIVIDEND:A1")
+    assert w.run(pos=positions(versioned_identities={a1}))[1] is True
+    assert [activity["type"] for activity in w.activities] == ["BUY"]
+    assert w.cash_calls == [(ACC, 100.5)]
+    assert "contradictory negative-net cash action" in caplog.text
 
 
 def test_main_invalid_mapping_stops_the_run(env, tmp_path):
@@ -992,6 +1080,63 @@ def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
     w.run(ids=w.ids, pos=w.pos)
     assert len(sent) == 1
     assert w.pos["qty"][(ACC, "KO")] == 10
+
+
+def test_short_import_acceptance_keeps_proven_buys_and_continues_safely(
+        env, caplog):
+    from types import SimpleNamespace
+
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    env.setenv("TZ", "Europe/Zurich")
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    env.setattr(app, "load_mapping", lambda path: {})
+    shared_positions = positions()
+    env.setattr(app, "ghost_get_existing_orders",
+                lambda cfg: (set(), set(), shared_positions))
+    reports = {
+        "q1": report(trade_xml("B1") + trade_xml("B2")
+                     + trade_xml("S1", "SELL", 15)),
+        "q2": report(trade_xml("LATER", symbol="PEP", isin=ISIN_PEP),
+                     source_account="U2"),
+    }
+    env.setattr(app, "fetch_flex_report", lambda token, query_id: reports[query_id])
+    env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
+
+    batches = []
+
+    def post(*args, **kwargs):
+        activities = kwargs["json"]["activities"]
+        batches.append(activities)
+        accepted = activities[:1] if len(batches) == 1 else activities
+        rows = [
+            {**activity, "id": f"created-{activity['comment']}",
+             "assetProfile": {"symbol": activity["symbol"],
+                              "dataSource": activity["dataSource"]}}
+            for activity in accepted
+        ]
+        return SimpleNamespace(status_code=201, text="", json=lambda: {"activities": rows})
+
+    env.setattr(requests, "post", post)
+    cash = []
+    env.setattr(app, "ghost_update_cash_balance",
+                lambda cfg, account, balance, currency: cash.append(account) or True)
+    notifications = []
+    env.setattr(app, "send_notification",
+                lambda settings, title, body: notifications.append((title, body)) or "sent")
+
+    assert app.main() == 1
+    assert [[activity["comment"] for activity in batch] for batch in batches] == [
+        ["IBKR#B1", "IBKR#B2"], ["IBKR#LATER"],
+    ]
+    assert shared_positions["qty"][("gf-A", "KO")] == 10
+    assert shared_positions["qty"][("gf-B", "PEP")] == 10
+    assert cash == ["gf-A", "gf-B"]
+    assert "IBKR#B2" in caplog.text
+    assert "inspect Ghostfolio before rerun" in caplog.text
+    assert len(notifications) == 1
+    assert "account: account_failed (account #1)" in notifications[0][1]
+    for identifier in ("IBKR#B2", "U1", "gf-A", "KO"):
+        assert identifier not in notifications[0][1]
 
 
 def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch):

@@ -60,6 +60,59 @@ def test_existing_activities_are_indexed(monkeypatch, profile_key):
     assert pos["dividend_dates"][("acc", "KO")] == []                    # connector rows are not proximity candidates
 
 
+@pytest.mark.parametrize("comment,activity_type,expected", [
+    ("IBKR#v2#U1:TRADE:T-1", "BUY", ("U1", "TRADE", "T-1")),
+    ("IBKR#v2#U_2:TRADE:T.2", "SELL", ("U_2", "TRADE", "T.2")),
+    ("IBKR#v2#U-3:DIVIDEND:A_1", "DIVIDEND", ("U-3", "DIVIDEND", "A_1")),
+    ("IBKR#legacy", "BUY", None),
+    ("IBKR#V2#U1:TRADE:T1", "BUY", None),
+    (None, "BUY", None),
+])
+def test_versioned_identity_reader_accepts_legacy_and_strict_v2(
+        comment, activity_type, expected):
+    assert ghostfolio.parse_versioned_activity_identity(comment, activity_type) == expected
+
+
+@pytest.mark.parametrize("comment,activity_type", [
+    ("IBKR#v", "BUY"),
+    ("IBKR#v0#U1:TRADE:T1", "BUY"),
+    ("IBKR#v02#U1:TRADE:T1", "BUY"),
+    ("IBKR#v3#U1:TRADE:T1", "BUY"),
+    ("IBKR#v2#U/1:TRADE:T1", "BUY"),
+    ("IBKR#v2#U1:trade:T1", "BUY"),
+    ("IBKR#v2#U1:TRADE:T/1", "BUY"),
+    ("IBKR#v2#U1:TRADE:T1:extra", "BUY"),
+    ("IBKR#v2#U1:TRADE:T1", "DIVIDEND"),
+    ("IBKR#v2#U1:DIVIDEND:A1", "BUY"),
+    ("IBKR#v2#U1:TRADE:T1", None),
+])
+def test_versioned_identity_reader_rejects_invalid_reserved_grammar_and_type(
+        comment, activity_type):
+    with pytest.raises(ghostfolio.InvalidActivityIdentityError,
+                       match="Invalid reserved activity identity"):
+        ghostfolio.parse_versioned_activity_identity(comment, activity_type)
+
+
+def test_versioned_identity_reader_builds_global_source_account_index(monkeypatch):
+    trade_comment = "IBKR#v2#U1:TRADE:T1"
+    dividend_comment = "IBKR#v2#U2:DIVIDEND:A1"
+    acts = [
+        activity(accountId="same-destination", comment=trade_comment),
+        activity(type="DIVIDEND", accountId="same-destination", comment=dividend_comment),
+        activity(comment="IBKR#legacy-trade"),
+    ]
+    serve(monkeypatch, {"activities": acts, "count": len(acts)})
+    trade_ids, div_comments, pos = ghostfolio.ghost_get_existing_orders(
+        {**CFG, "dry_run": True})
+    assert trade_ids == {"legacy-trade"}
+    assert div_comments == set()
+    assert pos["versioned_identities"] == {
+        ("U1", trade_comment), ("U2", dividend_comment),
+    }
+    assert pos["dividend_dates"][("same-destination", "KO")] == []
+    assert pos["dividend_evidence"] == []
+
+
 def test_count_mismatch_refuses_to_sync(monkeypatch):
     serve(monkeypatch, {"activities": [activity()], "count": 2})
     with pytest.raises(RuntimeError, match="incomplete list"):
@@ -123,7 +176,7 @@ def test_dry_run_never_posts(monkeypatch):
     assert ghostfolio.ghost_import_activities({**CFG, "dry_run": True}, acts) == (acts, True)
 
 
-def test_import_success_returns_all_activities(monkeypatch):
+def test_short_import_acceptance_full_response_is_clean(monkeypatch):
     acts = [import_candidate("IBKR#1"), import_candidate("IBKR#2")]
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [created(a) for a in acts]}, 201))
     assert ghostfolio.ghost_import_activities(CFG, acts) == (acts, True)
@@ -157,10 +210,18 @@ def test_import_rejects_redirect_without_following(monkeypatch, caplog):
                       "timeout": 60, "allow_redirects": False}]
 
 
-def test_import_short_accepted_count_is_not_a_failure(monkeypatch):
+def test_short_import_acceptance_known_subset_fails_without_retry(
+        monkeypatch, caplog):
     acts = [import_candidate("IBKR#1"), import_candidate("IBKR#2")]
-    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [created(acts[1])]}, 201))
-    assert ghostfolio.ghost_import_activities(CFG, acts) == ([acts[1]], True)
+    sent = sequence_post(monkeypatch, [Resp({"activities": [created(acts[1])]}, 201)])
+
+    assert ghostfolio.ghost_import_activities(CFG, acts) == ([acts[1]], False)
+    assert len(sent) == 1
+    assert "IBKR#1" in caplog.text
+    assert "IBKR#2" not in caplog.text
+    assert "inspect Ghostfolio before rerun" in caplog.text
+    assert [record.levelno for record in caplog.records
+            if "accepted only" in record.message] == [logging.ERROR]
 
 
 # --- unresolved-symbol drop-and-retry -------------------------------------
@@ -379,19 +440,24 @@ def created(candidate):
                                      {"activities": [import_candidate(), import_candidate()]},
                                      {"activities": [{**import_candidate(), "quantity": 99}]},
                                      {"activities": [{**import_candidate(), "error": "duplicate"}]}])
-def test_unknown_acceptance_is_not_assumed_and_blocks_target(monkeypatch, body):
+def test_short_import_acceptance_unknown_response_is_not_assumed_and_blocks_target(
+        monkeypatch, body):
     cfg = {**CFG}
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(body, 201))
     assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
     assert cfg["_uncertain_import_accounts"] == {"synthetic"}
 
 
-def test_server_empty_created_list_changes_no_bookkeeping(monkeypatch):
+def test_short_import_acceptance_empty_created_list_fails_without_uncertainty(
+        monkeypatch):
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": []}, 201))
-    assert ghostfolio.ghost_import_activities({**CFG}, [import_candidate()]) == ([], True)
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
+    assert not cfg["_uncertain_import_accounts"]
 
 
-def test_created_rows_map_to_original_candidates_despite_enriched_profile(monkeypatch):
+def test_short_import_acceptance_maps_created_rows_despite_enriched_profile(
+        monkeypatch):
     candidate = import_candidate()
     server_row = {**created(candidate), "date": "2026-08-01T00:00:00.000Z",
                   "assetProfile": {"symbol": "CANONICAL", "dataSource": "YAHOO"}}
@@ -405,7 +471,8 @@ def test_created_rows_map_to_original_candidates_despite_enriched_profile(monkey
                                         ("assetProfile", None),
                                         ("assetProfile", {"symbol": "KO", "dataSource": "MANUAL"}),
                                         ("assetProfile", {"symbol": "", "dataSource": "YAHOO"})])
-def test_created_identity_date_and_source_required(monkeypatch, field, value):
+def test_short_import_acceptance_requires_created_identity_date_and_source(
+        monkeypatch, field, value):
     candidate = import_candidate()
     row = created(candidate)
     row[field] = value
@@ -417,14 +484,15 @@ def test_created_identity_date_and_source_required(monkeypatch, field, value):
 
 @pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
 @pytest.mark.parametrize("value", [True, False, None, float("nan"), float("inf"), "1"])
-def test_response_financial_evidence_is_numeric_finite_and_not_boolean(field, value):
+def test_short_import_acceptance_requires_numeric_finite_financial_evidence(
+        field, value):
     candidate = {**import_candidate(), field: 1}
     row = {**created(candidate), field: value}
     with pytest.raises(RuntimeError, match="financial evidence"):
         ghostfolio.accepted_import_subset([candidate], {"activities": [row]})
 
 
-def test_repeated_created_id_does_not_prove_two_created_buys():
+def test_short_import_acceptance_rejects_repeated_created_id():
     first, second = import_candidate("IBKR#1"), import_candidate("IBKR#2")
     rows = [created(first), {**created(second), "id": created(first)["id"]}]
     with pytest.raises(RuntimeError, match="created identity"):
