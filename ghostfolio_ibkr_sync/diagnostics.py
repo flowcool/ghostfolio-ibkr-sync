@@ -314,7 +314,8 @@ def historical_dividend_findings(dividends: Sequence[DividendGroup], account_id:
     """
     findings = []
     evidence = [item for item in positions.get("dividend_evidence", [])
-                if item["activity"].get("accountId") == account_id]
+                if item["activity"].get("accountId") == account_id
+                and not (item["activity"].get("comment") or "").startswith("IBKR#v")]
     # Resolve all claims first. Neither input order nor repeated IDs may allow
     # one destination activity to certify several source groups.
     owners = defaultdict(set)
