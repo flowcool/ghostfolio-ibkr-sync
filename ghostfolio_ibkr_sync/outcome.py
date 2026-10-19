@@ -27,7 +27,7 @@ OUTCOME_REASONS = {
     "config": ("invalid_configuration",),
     "mapping": ("invalid_mapping",),
     "ghost_auth": ("login_failed",),
-    "ghost_startup": ("activities_unavailable", "token_rejected"),
+    "ghost_startup": ("activities_unavailable", "token_rejected", "invalid_identity"),
     "account": ("account_failed", "unexpected_error"),
     "unexpected": ("unhandled_error",),
 }

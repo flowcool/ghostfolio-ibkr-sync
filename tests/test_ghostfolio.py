@@ -60,6 +60,59 @@ def test_existing_activities_are_indexed(monkeypatch, profile_key):
     assert pos["dividend_dates"][("acc", "KO")] == []                    # connector rows are not proximity candidates
 
 
+@pytest.mark.parametrize("comment,activity_type,expected", [
+    ("IBKR#v2#U1:TRADE:T-1", "BUY", ("U1", "TRADE", "T-1")),
+    ("IBKR#v2#U_2:TRADE:T.2", "SELL", ("U_2", "TRADE", "T.2")),
+    ("IBKR#v2#U-3:DIVIDEND:A_1", "DIVIDEND", ("U-3", "DIVIDEND", "A_1")),
+    ("IBKR#legacy", "BUY", None),
+    ("IBKR#V2#U1:TRADE:T1", "BUY", None),
+    (None, "BUY", None),
+])
+def test_versioned_identity_reader_accepts_legacy_and_strict_v2(
+        comment, activity_type, expected):
+    assert ghostfolio.parse_versioned_activity_identity(comment, activity_type) == expected
+
+
+@pytest.mark.parametrize("comment,activity_type", [
+    ("IBKR#v", "BUY"),
+    ("IBKR#v0#U1:TRADE:T1", "BUY"),
+    ("IBKR#v02#U1:TRADE:T1", "BUY"),
+    ("IBKR#v3#U1:TRADE:T1", "BUY"),
+    ("IBKR#v2#U/1:TRADE:T1", "BUY"),
+    ("IBKR#v2#U1:trade:T1", "BUY"),
+    ("IBKR#v2#U1:TRADE:T/1", "BUY"),
+    ("IBKR#v2#U1:TRADE:T1:extra", "BUY"),
+    ("IBKR#v2#U1:TRADE:T1", "DIVIDEND"),
+    ("IBKR#v2#U1:DIVIDEND:A1", "BUY"),
+    ("IBKR#v2#U1:TRADE:T1", None),
+])
+def test_versioned_identity_reader_rejects_invalid_reserved_grammar_and_type(
+        comment, activity_type):
+    with pytest.raises(ghostfolio.InvalidActivityIdentityError,
+                       match="Invalid reserved activity identity"):
+        ghostfolio.parse_versioned_activity_identity(comment, activity_type)
+
+
+def test_versioned_identity_reader_builds_global_source_account_index(monkeypatch):
+    trade_comment = "IBKR#v2#U1:TRADE:T1"
+    dividend_comment = "IBKR#v2#U2:DIVIDEND:A1"
+    acts = [
+        activity(accountId="same-destination", comment=trade_comment),
+        activity(type="DIVIDEND", accountId="same-destination", comment=dividend_comment),
+        activity(comment="IBKR#legacy-trade"),
+    ]
+    serve(monkeypatch, {"activities": acts, "count": len(acts)})
+    trade_ids, div_comments, pos = ghostfolio.ghost_get_existing_orders(
+        {**CFG, "dry_run": True})
+    assert trade_ids == {"legacy-trade"}
+    assert div_comments == set()
+    assert pos["versioned_identities"] == {
+        ("U1", trade_comment), ("U2", dividend_comment),
+    }
+    assert pos["dividend_dates"][("same-destination", "KO")] == []
+    assert pos["dividend_evidence"] == []
+
+
 def test_count_mismatch_refuses_to_sync(monkeypatch):
     serve(monkeypatch, {"activities": [activity()], "count": 2})
     with pytest.raises(RuntimeError, match="incomplete list"):
