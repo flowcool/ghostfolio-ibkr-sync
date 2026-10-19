@@ -8,7 +8,7 @@
 
 | Import | Reconcile | Run |
 | --- | --- | --- |
-| Trades, dividend payments and withholding tax | Trade IDs, manual-entry matching and a holdings gate | Docker on amd64 / arm64, or plain Python |
+| Trades, dividend payments and withholding tax | Trade IDs, manual-entry matching and a holdings gate | Docker on amd64 / arm64 |
 | ISIN → Yahoo Finance ticker mapping | Separate Ghostfolio accounts for IBKR sub-accounts | One-off runs, cron scheduling and a preview with `DRY_RUN=1` |
 | | Automatic Ghostfolio login from the security token | Optional failure alerts (ntfy, Telegram, email...) through Apprise |
 
@@ -142,7 +142,7 @@ See the [2.2 upgrade and rollback guide](docs/upgrading-to-2.2.md).
 
 - A running self-hosted Ghostfolio instance, version **2.248.0 or newer**
 - An Interactive Brokers account with Flex Web Service enabled
-- Docker (for containerised runs) or Python 3.14+ with the pinned packages from `requirements.txt` (CI and the container use Python 3.14)
+- Docker, the only supported sync execution interface. Local development and tests use Python 3.14+ with the pinned packages from `requirements-dev.txt` (CI and the container use Python 3.14).
 
 The tool reads existing activities via `GET /api/v1/activities`, which landed in Ghostfolio 2.248.0. The `/api/v1/order` endpoints it replaced were deprecated in that same release and removed in 3.5.0, so on Ghostfolio 3.x this is the only endpoint that works.
 
@@ -383,7 +383,7 @@ docker run --rm --network your-ghostfolio-network \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
-### Without Docker
+### Local development
 
 Docker is the only supported way to run the sync. The image installs the
 `ghostfolio_ibkr_sync` package and starts it with `python -m ghostfolio_ibkr_sync`.
@@ -409,7 +409,7 @@ write occurs. Other safety guards still apply.
 
 Set `DRY_RUN=1` explicitly for the preview. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
-Set a valid IANA `TZ`, such as `Europe/Warsaw`, even for one-off Python runs.
+Set a valid IANA `TZ`, such as `Europe/Warsaw`, even for one-off Docker runs.
 Missing or invalid `TZ` forces every account into `DRY_RUN` before processing,
 with one WARNING explaining the reason. No activities, cash or platform are
 written. With explicit false `DRY_RUN`, the final notification includes the

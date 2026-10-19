@@ -9,9 +9,9 @@ Commands cite existing offline tests, run from the repository root; expect passi
 
 ### Requirement: Execution and authentication
 
-The shipped Docker image and every CI or scheduled Python job SHALL use CPython 3.14. Direct Python runs SHALL be documented for Python 3.14 or newer. The connector SHALL NOT reject Python 3.12 explicitly.
+The shipped Docker image and every CI job SHALL use CPython 3.14. Local development and tests from a source checkout SHALL use Python 3.14 or newer when documented. Docker SHALL be the only supported sync execution interface. The package SHALL NOT add an explicit Python 3.12 startup rejection; that compatibility is tested but is not a supported runtime guarantee.
 
-The connector SHALL use ENV, Python/Docker one-off runs or Docker CRON, and exactly one credential: GHOST_ACCESS_TOKEN exchanged once per run or unchanged GHOST_TOKEN bearer.
+The connector SHALL use ENV, Docker one-off runs or Docker CRON, and exactly one credential: GHOST_ACCESS_TOKEN exchanged once per run or unchanged GHOST_TOKEN bearer. Inside the image, Docker starts the installed package with `python -m ghostfolio_ibkr_sync`.
 
 Baseline replaced: README “Prerequisites”, CONTRIBUTING “Tests”, `docs/upstreams.md`, and `tests/test_dockerfile.py` record Python 3.12.
 
@@ -23,7 +23,7 @@ Evidence: README “Running”; `python -m pytest -q tests/test_auth.py tests/te
 
 #### Scenario: Repository runtime declarations
 - **WHEN** `.venv/bin/python -m pytest -q tests -k python_runtime_baseline` runs
-- **THEN** the Docker base, all seven workflow pins, both Renovate ranges, and public direct-run guidance require Python 3.14 as specified.
+- **THEN** the Docker base, all seven workflow pins, both Renovate ranges, and public development guidance require Python 3.14 as specified, while Docker remains the only supported sync execution interface.
 
 #### Scenario: Built runtime
 - **WHEN** `docker build -t ibkr-python314:check . && bash scripts/check_container_runtime.sh ibkr-python314:check` runs
