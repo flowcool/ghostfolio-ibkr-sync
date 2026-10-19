@@ -3,7 +3,7 @@
 ## 1. Versioned reader
 
 - [x] 1.1 Amend ADR 0002; add a pre-loop parser/index; run `.venv/bin/python -m pytest -q tests -k versioned_identity_reader`.
-- [ ] 1.2 Add action coverage, precedence, exclusions and account-local failure; prove them with the same command.
+- [x] 1.2 Add action coverage, precedence, exclusions and account-local failure; prove them with the same command.
 
 ## 2. Import acceptance and guidance
 

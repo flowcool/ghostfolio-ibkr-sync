@@ -115,11 +115,16 @@ def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -
     if len({row.get("currency", "") for row in cash_rows}) > 1:
         return reject("contradictory cash currencies")
     actions = defaultdict(list)
+    association_by_action: dict[tuple[str, str], tuple[str, ...]] = {}
     keys = DIVIDEND_PAYMENT_KEYS
     for row in dividend.get("payments", []):
         key = tuple(row.get(field, "") for field in keys)
         if not all(key):
             return reject("missing payment association keys")
+        action = key[0], key[3]
+        previous = association_by_action.setdefault(action, key)
+        if previous != key:
+            return reject("conflicting payment association keys")
         actions[key].append(row)
     common_quantity = None
     for key, payments in actions.items():
@@ -652,7 +657,7 @@ def _historical_minor_unit(currency: str) -> Decimal | None:
 # ---------------------------------------------------------------------------
 
 # Why a dividend group leaves the candidate list, or "new" when it stays
-DividendDecision = Literal["not_payable", "existing", "proximity", "new"]
+DividendDecision = Literal["not_payable", "existing", "partial", "proximity", "new"]
 # Why a trade row is not converted, or "new" when it is a conversion candidate
 TradeIdDecision = Literal["missing", "conflict", "existing", "new"]
 
@@ -693,6 +698,37 @@ def trade_id_decision(trade_id: str, conflicts: set[str],
     return "new"
 
 
+def dividend_positive_actions(dividend: DividendGroup) -> set[tuple[str, str]] | None:
+    """Return exact net-positive ``(accountId, actionID)`` pairs.
+
+    Zero-net actions do not need destination coverage. Missing association keys,
+    one action with conflicting association evidence, non-decimal money and
+    negative-net actions make the evidence unusable for versioned deduplication.
+    The existing quantity validation remains responsible for logging and rejecting
+    such a candidate.
+    """
+    rows_by_action: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    association_by_action: dict[tuple[str, str], tuple[str, ...]] = {}
+    for row in dividend.get("payments", []):
+        association = tuple(row.get(field, "") for field in DIVIDEND_PAYMENT_KEYS)
+        if not all(association):
+            return None
+        action = association[0], association[3]
+        previous = association_by_action.setdefault(action, association)
+        if previous != association:
+            return None
+        rows_by_action[action].append(row)
+
+    positive = set()
+    for action, rows in rows_by_action.items():
+        net = _dividend_cash_sum(rows)
+        if net is None or net < 0:
+            return None
+        if net > 0:
+            positive.add(action)
+    return positive
+
+
 def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: Mapping[str, str],
                             positions: Positions, existing_dividend_comments: set[tuple[str, str]],
                             ) -> tuple[DividendDecision, str | None, DividendEntry | None]:
@@ -714,6 +750,17 @@ def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: 
     if ((ghost_account_id, identity["comment"]) in existing_dividend_comments
             or (ghost_account_id, old_comment) in existing_dividend_comments):
         return "existing", symbol, None
+
+    actions = dividend_positive_actions(div)
+    if actions:
+        expected = {(account_id, f"IBKR#v2#{account_id}:DIVIDEND:{action_id}")
+                    for account_id, action_id in actions}
+        covered = expected & positions.get("versioned_identities", set())
+        if covered == expected:
+            return "existing", symbol, None
+        if covered:
+            return "partial", symbol, None
+
     matched = _dividend_date_matches(positions, identity) if symbol else None
     if matched:
         return "proximity", symbol, matched

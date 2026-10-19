@@ -1,5 +1,6 @@
 """Offline tests: trade gate (filter_trades_by_holdings) and dividend date matching."""
 from collections import defaultdict
+from decimal import Decimal
 
 import pytest
 
@@ -9,12 +10,14 @@ ACC = "acc"
 ISIN = "US1912161007"
 
 
-def positions(qty=None, isin_symbols=None, manual_sells=None, dividend_dates=None, manual_buys=None):
+def positions(qty=None, isin_symbols=None, manual_sells=None, dividend_dates=None, manual_buys=None,
+              versioned_identities=None):
     return {"qty": defaultdict(float, qty or {}),
             "isin_symbols": defaultdict(set, isin_symbols or {}),
             "manual_sells": defaultdict(list, manual_sells or {}),
             "manual_buys": defaultdict(list, manual_buys or {}),
-            "dividend_dates": defaultdict(list, dividend_dates or {})}
+            "dividend_dates": defaultdict(list, dividend_dates or {}),
+            "versioned_identities": set(versioned_identities or ())}
 
 
 def tr(tid, qty, date="20260801;100000", symbol="KO", isin=ISIN):
@@ -246,3 +249,58 @@ def test_dividend_date_match_is_per_account_and_symbol():
     pos = positions(dividend_dates={("other", "KO"): [("2026-07-15", None, None, None)],
                                       (ACC, "PEP"): [("2026-07-15", None, None, None)]})
     assert sync._dividend_date_matches(pos, act()) is None
+
+
+# --- versioned dividend action coverage ----------------------------------
+
+def payment(action, amount, *, account="U1", conid="1", currency="USD",
+            ex_date="20260701"):
+    return {"accountId": account, "conid": conid, "currency": currency,
+            "actionID": action, "exDate": ex_date, "amount": amount}
+
+
+def dividend(payments):
+    try:
+        amount = float(sum((Decimal(row["amount"]) for row in payments), Decimal(0)))
+    except ArithmeticError:
+        amount = 1.0
+    return {"isin": ISIN, "symbol": "KO", "currency": "USD", "date": "2026-07-15",
+            "amount": amount, "tax": 0.0,
+            "description": "", "payments": payments, "cash_rows": list(payments),
+            "accruals": [], "accrual_section": True, "gross": None}
+
+
+def test_versioned_identity_reader_positive_action_set_is_exact_and_excludes_zero():
+    source = dividend([
+        payment("A1", "25.00"), payment("ZERO", "0.1"),
+        payment("ZERO", "0.2"), payment("ZERO", "-0.3"),
+    ])
+    assert sync.dividend_positive_actions(source) == {("U1", "A1")}
+
+
+@pytest.mark.parametrize("payments", [
+    [payment("", "25")],
+    [payment("A1", "10"), payment("A1", "15", conid="2")],
+    [payment("A1", "30"), payment("A2", "-5")],
+    [payment("A1", "not-a-decimal")],
+])
+def test_versioned_identity_reader_invalid_action_evidence_is_not_coverage(payments):
+    assert sync.dividend_positive_actions(dividend(payments)) is None
+
+
+def test_versioned_identity_reader_complete_partial_absent_and_legacy_precedence():
+    source = dividend([payment("A1", "15"), payment("A2", "10")])
+    a1 = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
+    a2 = ("U1", "IBKR#v2#U1:DIVIDEND:A2")
+
+    complete = positions(versioned_identities={a1, a2})
+    assert sync.dividend_dedup_decision(source, ACC, {}, complete, set())[0] == "existing"
+
+    partial = positions(versioned_identities={a1})
+    assert sync.dividend_dedup_decision(source, ACC, {}, partial, set())[0] == "partial"
+
+    absent = positions(versioned_identities=set())
+    assert sync.dividend_dedup_decision(source, ACC, {}, absent, set())[0] == "new"
+
+    legacy = {(ACC, f"dividend#{ISIN}#2026-07-15")}
+    assert sync.dividend_dedup_decision(source, ACC, {}, partial, legacy)[0] == "existing"

@@ -19,10 +19,11 @@ CFG = {"ibkr_token": "SECRET-TOK", "dry_run": False, "ghost_host": "http://g", "
 
 # --- helpers ----------------------------------------------------------------
 
-def positions(qty=None):
+def positions(qty=None, versioned_identities=None):
     return {"qty": defaultdict(float, qty or {}), "isin_symbols": defaultdict(set),
             "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-            "dividend_dates": defaultdict(list)}
+            "dividend_dates": defaultdict(list),
+            "versioned_identities": set(versioned_identities or ())}
 
 
 def trade_xml(tid, side="BUY", qty=10, symbol="KO", isin=ISIN_KO, date="20260801;100000", **extra):
@@ -459,6 +460,55 @@ def test_versioned_identity_reader_invalid_identity_stops_before_financial_write
     assert "ghost_startup: invalid_identity" in sent[0][1]
     assert invalid_identity not in sent[0][1]
     assert "PRIVATE-ACCOUNT" not in caplog.text
+
+
+def test_versioned_identity_reader_partial_dividend_coverage_is_account_local(
+        env, caplog):
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    a1 = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
+    env.setattr(app, "ghost_get_existing_orders",
+                lambda cfg: (set(), set(), positions(versioned_identities={a1})))
+
+    u1_dividends = (
+        div_xml(amount="15").replace('accountId="broker-account"', 'accountId="U1"')
+        + div_xml(amount="10").replace('accountId="broker-account"', 'accountId="U1"')
+        .replace('actionID="A1"', 'actionID="A2"')
+    )
+    u2_dividend = (div_xml(isin=ISIN_PEP, symbol="PEP")
+                   .replace('accountId="broker-account"', 'accountId="U2"')
+                   .replace('actionID="A1"', 'actionID="B1"'))
+    reports = {
+        "q1": report(trade_xml("T1"), u1_dividends),
+        "q2": report(trade_xml("T2", symbol="PEP", isin=ISIN_PEP), u2_dividend),
+    }
+    env.setattr(app, "fetch_flex_report", lambda token, query_id: reports[query_id])
+    env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
+    imported = []
+    env.setattr(app, "ghost_import_activities",
+                lambda cfg, rows: imported.append(list(rows)) or (list(rows), True))
+    cash = []
+    env.setattr(app, "ghost_update_cash_balance",
+                lambda cfg, account, balance, currency: cash.append(account) or True)
+
+    assert app.main() == 1
+    by_account = defaultdict(list)
+    for activity in [activity for batch in imported for activity in batch]:
+        by_account[activity["accountId"]].append(activity["type"])
+    assert by_account == {"gf-A": ["BUY"], "gf-B": ["BUY", "DIVIDEND"]}
+    assert cash == ["gf-A", "gf-B"]
+    assert "partial versioned action coverage" in caplog.text
+    assert "1 of 2 account(s): U1" in caplog.text
+
+
+def test_versioned_identity_reader_invalid_actions_keep_local_rejection(monkeypatch, caplog):
+    rows = (div_xml(amount="30")
+            + div_xml(amount="-5").replace('actionID="A1"', 'actionID="A2"'))
+    w = World(monkeypatch, report(trade_xml("SAFE-T"), rows))
+    a1 = ("broker-account", "IBKR#v2#broker-account:DIVIDEND:A1")
+    assert w.run(pos=positions(versioned_identities={a1}))[1] is True
+    assert [activity["type"] for activity in w.activities] == ["BUY"]
+    assert w.cash_calls == [(ACC, 100.5)]
+    assert "contradictory negative-net cash action" in caplog.text
 
 
 def test_main_invalid_mapping_stops_the_run(env, tmp_path):

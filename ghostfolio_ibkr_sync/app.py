@@ -246,6 +246,11 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         if dedup == "existing":
             div_skipped_dup += 1
             continue
+        if dedup == "partial":
+            log.error("Dividend %s %s: partial versioned action coverage — not imported; "
+                      "account failed", symbol or div.get("symbol") or "unknown", div["date"])
+            ok = False
+            continue
         if dedup == "proximity":
             log_dividend_proximity_skip(cast(str, symbol), div, cast(DividendEntry, matched))
             div_skipped_dup += 1
