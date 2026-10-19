@@ -1,12 +1,23 @@
 # Identify trades by comment and match nearby dividends conservatively
 
-Date: 2026-10-12. Status: accepted (existing behavior).
+Date: 2026-10-12. Status: accepted.
 
 The sync reads existing Ghostfolio activities once and skips trades whose
 `IBKR#<tradeID>` comment is already present; the trade-ID set is shared across
 accounts, not account-scoped. Trades without an ID are refused. Dividend
 comments use `dividend#<ISIN>#<date>` (raw IBKR symbol when ISIN is absent), with
 account-scoped matching and support for older resolved-symbol comments.
+
+The reader also accepts strict versioned identities in the global
+`IBKR#v2#<source-account>:<kind>:<source-id>` namespace. Source-account and
+source-id segments use ASCII letters, digits, `.`, `_`, or `-`. `TRADE` applies
+only to BUY and SELL activities. `DIVIDEND` applies only to DIVIDEND activities.
+Exact lowercase `IBKR#v` reserves the namespace. An unsupported version,
+malformed segment, unknown kind, or activity-type mismatch stops the run before
+any financial write with the fixed `invalid_identity` outcome. Other
+`IBKR#<rest>` comments keep their legacy meaning. The reader indexes v2 comments
+globally by source account and exact comment, independent of the destination
+Ghostfolio account. It does not write v2 identities.
 
 To avoid duplicating manual or legacy dividends, an active YAHOO dividend of
 the same resolved symbol in the same destination account within inclusive
@@ -16,6 +27,8 @@ principle: a row with a connector comment is ours and is trusted by exact
 comment identity; a user edit of such a row is out of contract. A distinct
 payment next to an imported one is therefore imported.
 Inactive activities retain their identifiers but do not supply proximity evidence.
+Versioned dividend identities are connector-owned. They do not supply proximity
+or historical-diagnostic evidence.
 A proximity skip stays a skip, but it is visible. The source gross is compared
 with the existing row's quantity × unitPrice after normalization to a common
 major unit. Equal gross logs INFO; different or not comparable gross (for

@@ -424,6 +424,43 @@ def test_main_untrusted_or_unreadable_existing_activities_stops_before_any_accou
     assert calls == []
 
 
+def test_versioned_identity_reader_invalid_identity_stops_before_financial_writes(
+        env, caplog):
+    invalid_identity = "IBKR#v2#PRIVATE-ACCOUNT:TRADE:PRIVATE-ID:extra"
+    row = {"type": "BUY", "quantity": 1, "comment": invalid_identity,
+           "accountId": "destination", "date": "2026-08-01T00:00:00.000Z",
+           "assetProfile": {"symbol": "KO", "isin": ISIN_KO, "dataSource": "YAHOO"}}
+
+    class ExistingActivities:
+        status_code = 200
+        content = b""
+
+        @staticmethod
+        def json():
+            return {"activities": [row], "count": 1}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    env.setattr(requests, "get", lambda *args, **kwargs: ExistingActivities())
+    for verb in ("post", "put", "patch", "delete"):
+        env.setattr(requests, verb,
+                    lambda *args, **kwargs: pytest.fail("financial HTTP write"))
+    env.setattr(app, "process_account",
+                lambda *args, **kwargs: pytest.fail("account processing"))
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    sent = []
+    env.setattr(app, "send_notification",
+                lambda settings, title, body: sent.append((title, body)) or "sent")
+
+    assert app.main() == 1
+    assert len(sent) == 1
+    assert "ghost_startup: invalid_identity" in sent[0][1]
+    assert invalid_identity not in sent[0][1]
+    assert "PRIVATE-ACCOUNT" not in caplog.text
+
+
 def test_main_invalid_mapping_stops_the_run(env, tmp_path):
     env.setenv("MAPPING_FILE", str(tmp_path / "missing.yaml"))
     calls = stub_main(env, {})
