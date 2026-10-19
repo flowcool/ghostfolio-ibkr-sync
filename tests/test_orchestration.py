@@ -102,11 +102,14 @@ class World:
         self.cash_calls.append((acc, balance))
         return self.cash_ok
 
-    def run(self, ids=None, comments=None, pos=None, mapping=None):
+    def run(self, ids=None, comments=None, pos=None, mapping=None, source_account="U1"):
         self.ids = set() if ids is None else ids
         self.comments = set() if comments is None else comments
         self.pos = pos or positions()
-        self.result = app.process_account(CFG, "U1", "q1", "IBKR", mapping or {}, self.ids, self.comments, self.pos)
+        self.result = app.process_account(
+            CFG, source_account, "q1", "IBKR", mapping or {},
+            self.ids, self.comments, self.pos,
+        )
         return self.result
 
     @property
@@ -231,6 +234,19 @@ def test_second_account_sharing_the_sets_does_not_reimport(monkeypatch):
                         lambda *args: report(trade_xml("T1"), div_xml(), source_account="U2"))
     app.process_account(CFG, "U2", "q2", "IBKR", {}, w.ids, w.comments, w.pos)
     assert first == 2 and w.activities == []
+
+
+def test_versioned_identity_reader_trade_dedup_is_applied_by_source_account(monkeypatch):
+    indexed = positions(versioned_identities={
+        ("U1", "IBKR#v2#U1:TRADE:T1"),
+    })
+    matching = World(monkeypatch, report(trade_xml("T1"), source_account="U1"))
+    assert matching.run(pos=indexed, source_account="U1")[1] is True
+    assert matching.activities == []
+
+    other = World(monkeypatch, report(trade_xml("T1"), source_account="U2"))
+    assert other.run(pos=indexed, source_account="U2")[1] is True
+    assert [activity["comment"] for activity in other.activities] == ["IBKR#T1"]
 
 
 def test_trade_without_id_is_skipped_and_warned(monkeypatch, caplog):

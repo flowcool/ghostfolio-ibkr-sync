@@ -17,7 +17,10 @@ malformed segment, unknown kind, or activity-type mismatch stops the run before
 any financial write with the fixed `invalid_identity` outcome. Other
 `IBKR#<rest>` comments keep their legacy meaning. The reader indexes v2 comments
 globally by source account and exact comment, independent of the destination
-Ghostfolio account. It does not write v2 identities.
+Ghostfolio account. A v2 trade identity suppresses only the matching source
+account and trade ID; the same trade ID from another source account remains a
+candidate. Legacy trade comments retain their global behavior. The reader does
+not write v2 identities.
 
 To avoid duplicating manual or legacy dividends, an active YAHOO dividend of
 the same resolved symbol in the same destination account within inclusive
