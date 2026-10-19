@@ -39,6 +39,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     parse_base_currency,
     parse_cash_dividends,
     parse_cash_report,
+    parse_source_account_ids,
     parse_trades,
 )
 from ghostfolio_ibkr_sync.notify import (
@@ -128,6 +129,18 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         xml_text = fetch_flex_report(config["ibkr_token"], query_id)
     except Exception as exc:
         log.error("Failed to fetch Flex Query for account %s: %s", ibkr_account_id, exc)
+        return {}, False
+
+    source_account_ids = parse_source_account_ids(xml_text)
+    if source_account_ids != {ibkr_account_id}:
+        if source_account_ids is None:
+            reason = "missing"
+        elif len(source_account_ids) > 1:
+            reason = "mixed"
+        else:
+            reason = "mismatched"
+        log.error("Flex Query %s source account evidence is %s; account failed before "
+                  "Ghostfolio lookup or any write", query_id, reason)
         return {}, False
 
     # Find the Ghostfolio account

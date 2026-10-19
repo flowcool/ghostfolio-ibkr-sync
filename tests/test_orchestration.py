@@ -45,10 +45,11 @@ def div_xml(amount="25.00", date="20260715", isin=ISIN_KO, symbol="KO"):
             f'isin="{isin}" symbol="{symbol}" currency="USD" description="X CASH DIVIDEND USD 0.25 PER SHARE"/>')
 
 
-def report(trades="", divs="", cash="100.5", cash_section=True, base_currency="USD"):
+def report(trades="", divs="", cash="100.5", cash_section=True, base_currency="USD",
+           source_account="U1"):
     cash_xml = (f'<CashReport><CashReportCurrency currency="BASE_SUMMARY" endingCash="{cash}"/></CashReport>'
                 if cash is not None else "")
-    info = f'<AccountInformation accountId="broker-account" currency="{base_currency}"/>' if base_currency else ""
+    info = f'<AccountInformation accountId="{source_account}" currency="{base_currency}"/>' if base_currency else ""
     ct = f"<CashTransactions>{divs}</CashTransactions>" if cash_section else ""
     # Enrich existing fixtures; input compatibility scenarios belong to task 2.1.
     accruals = []
@@ -118,6 +119,41 @@ def test_flex_fetch_failure_returns_failed_and_does_nothing_else(monkeypatch):
     w = World(monkeypatch, RuntimeError("IBKR down"))
     assert w.run() == ({}, False)
     assert w.imported == [] and w.cash_calls == []
+
+
+@pytest.mark.parametrize(("account_info", "reason", "observed"), [
+    ("", "missing", None),
+    ('<AccountInformation currency="USD"/>', "missing", None),
+    ('<AccountInformation accountId="  " currency="USD"/>', "missing", None),
+    ('<AccountInformation accountId="WRONG" currency="USD"/>', "mismatched", "WRONG"),
+    ('<AccountInformation accountId="U1" currency="USD"/>'
+     '<AccountInformation accountId="WRONG" currency="USD"/>', "mixed", "WRONG"),
+])
+def test_source_account_unsafe_evidence_stops_before_target_lookup_and_writes(
+        monkeypatch, caplog, account_info, reason, observed):
+    xml = report(trade_xml("T1")).replace(
+        '<AccountInformation accountId="U1" currency="USD"/>', account_info)
+    w = World(monkeypatch, xml)
+    lookups = []
+    monkeypatch.setattr(app, "ghost_find_account_id",
+                        lambda *args: lookups.append(args) or ACC)
+
+    assert w.run() == ({}, False)
+    assert lookups == [] and w.imported == [] and w.cash_calls == []
+    assert f"source account evidence is {reason}" in caplog.text
+    if observed is not None:
+        assert observed not in caplog.text
+
+
+def test_source_account_duplicate_matching_evidence_allows_existing_paths(monkeypatch):
+    xml = report(trade_xml("T1")).replace(
+        '<AccountInformation accountId="U1" currency="USD"/>',
+        '<AccountInformation accountId="U1" currency="USD"/>' * 2)
+    w = World(monkeypatch, xml)
+
+    assert w.run()[1] is True
+    assert [activity["comment"] for activity in w.activities] == ["IBKR#T1"]
+    assert w.cash_calls == [(ACC, 100.5)]
 
 
 def test_oversized_flex_reply_prevents_import_and_cash_update(monkeypatch):
@@ -190,6 +226,8 @@ def test_second_account_sharing_the_sets_does_not_reimport(monkeypatch):
     w.run()
     first = len(w.activities)
     w.imported.clear()
+    monkeypatch.setattr(app, "fetch_flex_report",
+                        lambda *args: report(trade_xml("T1"), div_xml(), source_account="U2"))
     app.process_account(CFG, "U2", "q2", "IBKR", {}, w.ids, w.comments, w.pos)
     assert first == 2 and w.activities == []
 
@@ -373,6 +411,47 @@ def test_main_failed_account_exits_one_but_still_processes_the_others(env, caplo
     assert any("1 of 2 account(s): U1" in r.message for r in caplog.records)
 
 
+def test_source_account_swapped_queries_fail_before_target_lookup_and_continue(env):
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    reports = {
+        "q1": report(trade_xml("T1"), source_account="U2"),
+        "q2": report(trade_xml("T2"), source_account="U1"),
+    }
+    fetched = []
+    env.setattr(app, "fetch_flex_report",
+                lambda token, query_id: fetched.append(query_id) or reports[query_id])
+    env.setattr(app, "ghost_find_account_id",
+                lambda *args: pytest.fail("target lookup after source-account rejection"))
+    env.setattr(app, "ghost_import_activities",
+                lambda *args: pytest.fail("financial import after source-account rejection"))
+    env.setattr(app, "ghost_update_cash_balance",
+                lambda *args: pytest.fail("cash update after source-account rejection"))
+
+    assert app.main() == 1
+    assert fetched == ["q1", "q2"]
+
+
+def test_source_account_mismatch_notification_omits_observed_account(env, caplog):
+    env.setenv("IBKR_ACCOUNT_IDS", "U1")
+    env.setenv("IBKR_QUERY_IDS", "q1")
+    env.setenv("GHOST_ACCOUNT_NAMES", "A")
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "fetch_flex_report",
+                lambda *args: report(trade_xml("T1"), source_account="OBSERVED-PRIVATE"))
+    env.setattr(app, "ghost_find_account_id",
+                lambda *args: pytest.fail("target lookup after source-account rejection"))
+    notifications = []
+    env.setattr(app, "send_notification",
+                lambda settings, title, body: notifications.append((title, body)) or "sent")
+
+    assert app.main() == 1
+    assert len(notifications) == 1
+    assert "OBSERVED-PRIVATE" not in caplog.text
+    assert "OBSERVED-PRIVATE" not in notifications[0][1]
+
+
 def test_main_unmapped_isin_is_reported_but_is_not_a_failure(env, caplog):
     stub_main(env, {"U1": ({"JP1": {"symbol": "1234.T", "description": "ACME"}}, True), "U2": ({}, True)})
     assert app.main() == 0
@@ -384,7 +463,9 @@ def test_main_unexpected_exception_in_one_account_does_not_stop_the_others(env, 
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
     fetched, imported, cash = [], [], []
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
-    env.setattr(app, "fetch_flex_report", lambda token, qid, *a, **k: fetched.append(qid) or report(trade_xml("T1")))
+    env.setattr(app, "fetch_flex_report", lambda token, qid, *a, **k:
+                fetched.append(qid) or report(
+                    trade_xml("T1"), source_account="U1" if qid == "q1" else "U2"))
     env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
     env.setattr(app, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(app, "ghost_update_cash_balance", lambda cfg, acc, bal, cur: cash.append(acc) or True)
@@ -790,7 +871,8 @@ def test_main_shares_the_existing_sets_between_accounts_through_the_real_process
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
     imported = []
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
-    env.setattr(app, "fetch_flex_report", lambda *a, **k: report(trade_xml("T1")))        # same trade for both
+    env.setattr(app, "fetch_flex_report", lambda token, qid, *a, **k:
+                report(trade_xml("T1"), source_account="U1" if qid == "q1" else "U2"))  # same trade for both
     env.setattr(app, "ghost_find_account_id", lambda cfg, name: "same-gf-account")       # both map to one account
     env.setattr(app, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(app, "ghost_update_cash_balance", lambda *a: True)
@@ -923,6 +1005,9 @@ def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch)
     cfg = {**CFG}
     assert app.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions())[1] is False
     cash_count = len(w.cash_calls)
+    monkeypatch.setattr(app, "fetch_flex_report",
+                        lambda *args: report(trade_xml("B") + trade_xml("S", "SELL"),
+                                             source_account="U2"))
     assert app.process_account(cfg, "U2", "q2", "IBKR", {}, set(), set(), positions())[1] is False
     assert len(calls) == 1 and len(w.cash_calls) == cash_count
 
@@ -1393,7 +1478,8 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
             return response(SEND_OK)
         if "GetStatement" in url:
             reads.append("flex-report")
-            return response(report(trade_xml("DEFAULT-T")))
+            source_account = "U1" if reads.count("flex-report") % 2 else "U2"
+            return response(report(trade_xml("DEFAULT-T"), source_account=source_account))
         pytest.fail("unexpected HTTP read")
     env.setattr(requests, "get", get)
     for verb in ("post", "put", "patch", "delete"):

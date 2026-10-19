@@ -292,6 +292,22 @@ def parse_base_currency(xml_text: str) -> str | None:
     return None
 
 
+def parse_source_account_ids(xml_text: str) -> set[str] | None:
+    """Return the unique nonempty source accounts from Account Information.
+
+    ``None`` means that the report has no Account Information or at least one
+    entry lacks usable account evidence. Callers must separately reject a set
+    with more than one account or one that differs from configuration.
+    """
+    entries = list(ET.fromstring(xml_text).iter("AccountInformation"))
+    if not entries:
+        return None
+    account_ids = {entry.attrib.get("accountId", "").strip() for entry in entries}
+    if "" in account_ids:
+        return None
+    return account_ids
+
+
 def _dividend_decimal(value: object) -> Decimal | None:
     """Parse exact finite broker evidence without rounding through a float."""
     try:
