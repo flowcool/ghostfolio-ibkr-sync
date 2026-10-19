@@ -9,7 +9,7 @@ body:
     id: versions
     attributes:
       label: Versions
-      description: Sync version from startup log, Ghostfolio version, and Python version if running without Docker.
+      description: Sync version from startup log, Ghostfolio version, and the container image tag or digest. Include the Python version only for a local development or test reproduction.
     validations:
       required: true
   - type: dropdown
@@ -19,7 +19,7 @@ body:
       options:
         - Docker one-off
         - Docker scheduled / Compose / Portainer
-        - Python
+        - Local development or test reproduction
     validations:
       required: true
   - type: textarea
