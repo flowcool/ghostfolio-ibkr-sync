@@ -47,10 +47,11 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   its last task: archive, replay on `main`, semver tag on the operator's go,
   image pullable; the parent item closes only after it.
 - **Release lab gate.** Publish the immutable RC digest before lab validation.
-  Before production soak or stable promotion, validate every published RC digest
-  with the versioned infra `lab.py` runner in both `ghostfolio-lab` (empty
-  first-install) and `ghostfolio-lab-golden` (golden-copy upgrade). The lab result
-  gates the next step, not image publication. Keep lab credentials separate from
+  Before production soak or stable promotion, require every published RC digest
+  to pass the versioned infra `lab.py` runner in both `ghostfolio-lab` (empty
+  first-install) and `ghostfolio-lab-golden` (golden-copy upgrade). A failed or
+  incomplete scenario blocks both next steps; it does not block image publication.
+  Keep lab credentials separate from
   production; a production token must not authenticate to either lab. Stop both
   instances after every run. Operational details live
   in the shared knowledge concept `operations/ghostfolio/connector-lab.md`;
