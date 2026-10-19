@@ -46,6 +46,15 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Release.** A change that touches shipped code ends with a release item after
   its last task: archive, replay on `main`, semver tag on the operator's go,
   image pullable; the parent item closes only after it.
+- **Release lab gate.** Publish the immutable RC digest before lab validation.
+  Before production soak or stable promotion, validate every published RC digest
+  with the versioned infra `lab.py` runner in both `ghostfolio-lab` (empty
+  first-install) and `ghostfolio-lab-golden` (golden-copy upgrade). The lab result
+  gates the next step, not image publication. Keep lab credentials separate from
+  production; a production token must not authenticate to either lab. Stop both
+  instances after every run. Operational details live
+  in the shared knowledge concept `operations/ghostfolio/connector-lab.md`;
+  executable commands remain versioned in the infra repository.
 - **One item = one fresh session.** Claim, implement, prove, close, stop. Do not
   start the next item or arm a goal across items. Budget about 150 tool calls;
   above that, stop and report the state.
