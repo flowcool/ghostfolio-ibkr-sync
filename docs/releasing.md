@@ -99,10 +99,11 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
 
    `release-image.yml` runs the same checks and the same single-publication
    guard as for stable, and publishes only `:X.Y.Z-rc.N`.
-2. **Validate.** Before production soak or stable promotion, require the
-   published digest to pass the versioned infra `lab.py` runner in both isolated
-   scenarios: empty first install and golden-copy upgrade. A failed or incomplete
-   scenario blocks both next steps. Stop both lab instances after the run. Lab
+2. **Validate.** Before an RC digest proceeds to production soak or stable
+   promotion, require it to pass the versioned infra `lab.py` runner in both
+   isolated scenarios: empty first install and golden-copy upgrade. A failed or
+   incomplete digest cannot proceed; publish a new RC for its fix and run both
+   scenarios for that new digest. Stop both lab instances after the run. Lab
    credentials remain separate from production credentials. Production validation
    is a separate operator-validated operation. Users can try a candidate with the
    [user procedure](upgrading-to-3.0.md#try-a-release-candidate). A fix creates a
