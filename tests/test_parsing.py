@@ -448,3 +448,25 @@ def test_base_currency_parse_report_fixture():
     from test_orchestration import report
     assert ibkr.parse_base_currency(report()) == "USD"
     assert ibkr.parse_base_currency(report(base_currency=None)) is None
+
+
+def test_source_account_parser_returns_one_unique_nonempty_account():
+    xml = _info_xml('<AccountInformation accountId=" U1 "/>'
+                     '<AccountInformation accountId="U1"/>')
+    assert ibkr.parse_source_account_ids(xml) == {"U1"}
+
+
+@pytest.mark.parametrize("info", [
+    "",
+    '<AccountInformation currency="USD"/>',
+    '<AccountInformation accountId=""/>',
+    '<AccountInformation accountId="U1"/><AccountInformation accountId=" "/>',
+])
+def test_source_account_parser_rejects_missing_or_blank_evidence(info):
+    assert ibkr.parse_source_account_ids(_info_xml(info)) is None
+
+
+def test_source_account_parser_returns_mixed_unique_accounts_for_caller_rejection():
+    xml = _info_xml('<AccountInformation accountId="U1"/>'
+                     '<AccountInformation accountId="U2"/>')
+    assert ibkr.parse_source_account_ids(xml) == {"U1", "U2"}
