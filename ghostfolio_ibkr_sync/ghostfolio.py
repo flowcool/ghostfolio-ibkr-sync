@@ -497,7 +497,7 @@ def ghost_import_activities(
                     activity["comment"] for activity in remaining
                     if (activity["accountId"], activity["comment"]) not in accepted_keys
                 ]
-                log.warning(
+                log.error(
                     "Ghostfolio accepted only %d of %d submitted activities; omitted comments: "
                     "%s — inspect Ghostfolio before rerun; the account failed and the batch "
                     "was not retried",

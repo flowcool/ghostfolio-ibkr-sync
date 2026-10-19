@@ -220,6 +220,8 @@ def test_short_import_acceptance_known_subset_fails_without_retry(
     assert "IBKR#1" in caplog.text
     assert "IBKR#2" not in caplog.text
     assert "inspect Ghostfolio before rerun" in caplog.text
+    assert [record.levelno for record in caplog.records
+            if "accepted only" in record.message] == [logging.ERROR]
 
 
 # --- unresolved-symbol drop-and-retry -------------------------------------
