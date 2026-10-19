@@ -65,6 +65,18 @@ def accounts(monkeypatch, results):
 ALL_OK = {"U111": ({}, True), "U222": ({}, True), "U333": ({}, True)}
 
 
+def bind_flex_report_to_query_account(monkeypatch, xml):
+    """Return the same synthetic report with account evidence bound to each query."""
+    accounts_by_query = {"q1": "U111", "q2": "U222", "q3": "U333"}
+
+    def fetch(token, query_id):
+        account_id = accounts_by_query[query_id]
+        return xml.replace('<AccountInformation accountId="U1"',
+                           f'<AccountInformation accountId="{account_id}"')
+
+    monkeypatch.setattr(app, "fetch_flex_report", fetch)
+
+
 # --- gates: no worker ----------------------------------------------------------
 
 def test_success_sends_nothing(env):
@@ -250,7 +262,9 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
 def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifications(env, mode):
     from test_orchestration import World, structured_input_xml
 
-    w = World(env, structured_input_xml(mode))
+    xml = structured_input_xml(mode)
+    w = World(env, xml)
+    bind_flex_report_to_query_account(env, xml)
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
     assert app.main() == 0
@@ -268,7 +282,9 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
 def test_dividend_structured_input_other_failures_still_notify(env):
     from test_orchestration import World, structured_input_xml
 
-    World(env, structured_input_xml("old"), cash_ok=False)
+    xml = structured_input_xml("old")
+    World(env, xml, cash_ok=False)
+    bind_flex_report_to_query_account(env, xml)
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
     assert app.main() == 1
@@ -281,7 +297,9 @@ def test_historical_diagnostic_findings_preserve_success_and_notifications(env, 
     from test_orchestration import World, report, div_xml
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(unitPrice=price)])
-    World(env, report(divs=div_xml()))
+    xml = report(divs=div_xml())
+    World(env, xml)
+    bind_flex_report_to_query_account(env, xml)
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     for verb in ("post", "put", "patch", "delete"):
@@ -359,7 +377,9 @@ def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, 
     from test_orchestration import World, report, div_xml
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
-    World(env, report(divs=div_xml()))
+    xml = report(divs=div_xml())
+    World(env, xml)
+    bind_flex_report_to_query_account(env, xml)
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     caplog.set_level(logging.INFO)
