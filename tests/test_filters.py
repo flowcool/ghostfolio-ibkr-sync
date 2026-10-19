@@ -32,6 +32,23 @@ def ids(trades):
     return [t["tradeID"] for t in trades]
 
 
+# --- trade identity decisions --------------------------------------------
+
+def test_versioned_identity_reader_trade_dedup_is_source_account_scoped():
+    indexed = positions(versioned_identities={
+        ("U1", "IBKR#v2#U1:TRADE:T1"),
+    })
+
+    assert sync.trade_id_decision("T1", "U1", set(), set(), indexed) == "existing"
+    assert sync.trade_id_decision("T1", "U2", set(), set(), indexed) == "new"
+
+
+def test_versioned_identity_reader_trade_dedup_preserves_global_legacy_comments():
+    assert sync.trade_id_decision(
+        "T1", "different-source-account", set(), {"T1"}, positions(),
+    ) == "existing"
+
+
 # --- holdings gate --------------------------------------------------------
 
 def test_sell_of_long_held_position_is_kept():

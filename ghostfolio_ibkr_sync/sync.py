@@ -686,14 +686,17 @@ def unique_trades(trades: Sequence[dict[str, str]]) -> tuple[list[dict[str, str]
     return list(unique.values()), skipped_dup, conflicts
 
 
-def trade_id_decision(trade_id: str, conflicts: set[str],
-                      existing_trade_ids: set[str]) -> TradeIdDecision:
-    """Classify one trade by its ID: missing, conflicting, already imported, or new."""
+def trade_id_decision(trade_id: str, source_account: str, conflicts: set[str],
+                      existing_trade_ids: set[str], positions: Positions) -> TradeIdDecision:
+    """Classify one trade using legacy-global and v2 account-scoped identities."""
     if not trade_id:
         return "missing"
     if trade_id in conflicts:
         return "conflict"
     if trade_id in existing_trade_ids:
+        return "existing"
+    versioned_comment = f"IBKR#v2#{source_account}:TRADE:{trade_id}"
+    if (source_account, versioned_comment) in positions.get("versioned_identities", set()):
         return "existing"
     return "new"
 

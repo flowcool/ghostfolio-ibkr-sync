@@ -201,7 +201,9 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     for trade in unique:
         trade_id = trade.get("tradeID", "")
-        decision = trade_id_decision(trade_id, conflicts, existing_trade_ids)
+        decision = trade_id_decision(
+            trade_id, ibkr_account_id, conflicts, existing_trade_ids, positions,
+        )
         if decision == "missing":
             log.warning("Skipping trade for %s (%s) — missing tradeID, cannot deduplicate safely",
                         trade.get("symbol") or trade.get("isin") or "unknown",
