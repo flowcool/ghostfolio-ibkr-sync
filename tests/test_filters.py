@@ -304,3 +304,16 @@ def test_versioned_identity_reader_complete_partial_absent_and_legacy_precedence
 
     legacy = {(ACC, f"dividend#{ISIN}#2026-07-15")}
     assert sync.dividend_dedup_decision(source, ACC, {}, partial, legacy)[0] == "existing"
+
+
+def test_versioned_identity_reader_coverage_is_global_across_destination_accounts():
+    source = dividend([payment("A1", "25")])
+    index = positions(versioned_identities={
+        ("U1", "IBKR#v2#U1:DIVIDEND:A1"),
+    })
+
+    # The approved identity contract is global by source account and comment.
+    # A destination Ghostfolio account is intentionally not part of this key.
+    assert sync.dividend_dedup_decision(
+        source, "different-destination-account", {}, index, set(),
+    )[0] == "existing"
