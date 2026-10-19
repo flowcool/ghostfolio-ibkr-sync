@@ -435,8 +435,9 @@ def ghost_import_activities(
     visible.  Other 400s (too many activities, premium, ...) are not per-symbol
     and fail hard without retrying.
 
-    Ghostfolio reports its own duplicate detection per activity in a 2xx and
-    silently skips those, so a short accepted count is not a failure.
+    A 2xx response is clean only when it proves every submitted activity.  A
+    shorter valid list preserves its exact accepted subset, fails the account
+    without retrying, and tells the operator which comments need inspection.
     """
     if config.get("dry_run"):
         log_lab_evidence("preview", activities)
@@ -486,11 +487,27 @@ def ghost_import_activities(
                 mark_import_uncertain(config, remaining)
                 return [], False
             log.info("Ghostfolio created %d of %d submitted activities", len(imported), len(remaining))
+            short_response = len(imported) < len(remaining)
+            if short_response:
+                accepted_keys = {
+                    (activity["accountId"], activity["comment"])
+                    for activity in imported
+                }
+                omitted_comments = [
+                    activity["comment"] for activity in remaining
+                    if (activity["accountId"], activity["comment"]) not in accepted_keys
+                ]
+                log.error(
+                    "Ghostfolio accepted only %d of %d submitted activities; omitted comments: "
+                    "%s — inspect Ghostfolio before rerun; the account failed and the batch "
+                    "was not retried",
+                    len(imported), len(remaining), ", ".join(omitted_comments),
+                )
             if dropped_symbols:
                 log.warning("Imported without %d unresolved symbol(s): %s — add a mapping entry "
                             "(symbol_mapping) so they are recognised next run",
                             len(dropped_symbols), ", ".join(dropped_symbols))
-            return imported, not dropped_symbols
+            return imported, not dropped_symbols and not short_response
 
         symbol = parse_unresolved_symbol(body, resp.text)
         if symbol is None:

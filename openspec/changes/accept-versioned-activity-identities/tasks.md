@@ -7,4 +7,4 @@
 
 ## 2. Import acceptance and guidance
 
-- [ ] 2.1 Fail known short 2xx responses while preserving safe results and continuation; update README troubleshooting; run `.venv/bin/python -m pytest -q tests -k short_import_acceptance`.
+- [x] 2.1 Fail known short 2xx responses while preserving safe results and continuation; update README troubleshooting; run `.venv/bin/python -m pytest -q tests -k short_import_acceptance`.
