@@ -999,6 +999,62 @@ def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
     assert w.pos["qty"][(ACC, "KO")] == 10
 
 
+def test_short_import_acceptance_keeps_proven_buys_and_continues_safely(
+        env, caplog):
+    from types import SimpleNamespace
+
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    env.setenv("TZ", "Europe/Zurich")
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    env.setattr(app, "load_mapping", lambda path: {})
+    shared_positions = positions()
+    env.setattr(app, "ghost_get_existing_orders",
+                lambda cfg: (set(), set(), shared_positions))
+    reports = {
+        "q1": report(trade_xml("B1") + trade_xml("B2")
+                     + trade_xml("S1", "SELL", 15)),
+        "q2": report(trade_xml("LATER", symbol="PEP", isin=ISIN_PEP)),
+    }
+    env.setattr(app, "fetch_flex_report", lambda token, query_id: reports[query_id])
+    env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
+
+    batches = []
+
+    def post(*args, **kwargs):
+        activities = kwargs["json"]["activities"]
+        batches.append(activities)
+        accepted = activities[:1] if len(batches) == 1 else activities
+        rows = [
+            {**activity, "id": f"created-{activity['comment']}",
+             "assetProfile": {"symbol": activity["symbol"],
+                              "dataSource": activity["dataSource"]}}
+            for activity in accepted
+        ]
+        return SimpleNamespace(status_code=201, text="", json=lambda: {"activities": rows})
+
+    env.setattr(requests, "post", post)
+    cash = []
+    env.setattr(app, "ghost_update_cash_balance",
+                lambda cfg, account, balance, currency: cash.append(account) or True)
+    notifications = []
+    env.setattr(app, "send_notification",
+                lambda settings, title, body: notifications.append((title, body)) or "sent")
+
+    assert app.main() == 1
+    assert [[activity["comment"] for activity in batch] for batch in batches] == [
+        ["IBKR#B1", "IBKR#B2"], ["IBKR#LATER"],
+    ]
+    assert shared_positions["qty"][("gf-A", "KO")] == 10
+    assert shared_positions["qty"][("gf-B", "PEP")] == 10
+    assert cash == ["gf-A", "gf-B"]
+    assert "IBKR#B2" in caplog.text
+    assert "inspect Ghostfolio before rerun" in caplog.text
+    assert len(notifications) == 1
+    assert "account: account_failed (account #1)" in notifications[0][1]
+    for identifier in ("IBKR#B2", "U1", "gf-A", "KO"):
+        assert identifier not in notifications[0][1]
+
+
 def test_uncertain_import_blocks_further_writes_only_to_same_target(monkeypatch):
     from types import SimpleNamespace
     w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL")))

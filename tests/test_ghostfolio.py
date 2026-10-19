@@ -176,7 +176,7 @@ def test_dry_run_never_posts(monkeypatch):
     assert ghostfolio.ghost_import_activities({**CFG, "dry_run": True}, acts) == (acts, True)
 
 
-def test_import_success_returns_all_activities(monkeypatch):
+def test_short_import_acceptance_full_response_is_clean(monkeypatch):
     acts = [import_candidate("IBKR#1"), import_candidate("IBKR#2")]
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [created(a) for a in acts]}, 201))
     assert ghostfolio.ghost_import_activities(CFG, acts) == (acts, True)
@@ -210,10 +210,16 @@ def test_import_rejects_redirect_without_following(monkeypatch, caplog):
                       "timeout": 60, "allow_redirects": False}]
 
 
-def test_import_short_accepted_count_is_not_a_failure(monkeypatch):
+def test_short_import_acceptance_known_subset_fails_without_retry(
+        monkeypatch, caplog):
     acts = [import_candidate("IBKR#1"), import_candidate("IBKR#2")]
-    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [created(acts[1])]}, 201))
-    assert ghostfolio.ghost_import_activities(CFG, acts) == ([acts[1]], True)
+    sent = sequence_post(monkeypatch, [Resp({"activities": [created(acts[1])]}, 201)])
+
+    assert ghostfolio.ghost_import_activities(CFG, acts) == ([acts[1]], False)
+    assert len(sent) == 1
+    assert "IBKR#1" in caplog.text
+    assert "IBKR#2" not in caplog.text
+    assert "inspect Ghostfolio before rerun" in caplog.text
 
 
 # --- unresolved-symbol drop-and-retry -------------------------------------
@@ -432,19 +438,24 @@ def created(candidate):
                                      {"activities": [import_candidate(), import_candidate()]},
                                      {"activities": [{**import_candidate(), "quantity": 99}]},
                                      {"activities": [{**import_candidate(), "error": "duplicate"}]}])
-def test_unknown_acceptance_is_not_assumed_and_blocks_target(monkeypatch, body):
+def test_short_import_acceptance_unknown_response_is_not_assumed_and_blocks_target(
+        monkeypatch, body):
     cfg = {**CFG}
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(body, 201))
     assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
     assert cfg["_uncertain_import_accounts"] == {"synthetic"}
 
 
-def test_server_empty_created_list_changes_no_bookkeeping(monkeypatch):
+def test_short_import_acceptance_empty_created_list_fails_without_uncertainty(
+        monkeypatch):
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": []}, 201))
-    assert ghostfolio.ghost_import_activities({**CFG}, [import_candidate()]) == ([], True)
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
+    assert not cfg["_uncertain_import_accounts"]
 
 
-def test_created_rows_map_to_original_candidates_despite_enriched_profile(monkeypatch):
+def test_short_import_acceptance_maps_created_rows_despite_enriched_profile(
+        monkeypatch):
     candidate = import_candidate()
     server_row = {**created(candidate), "date": "2026-08-01T00:00:00.000Z",
                   "assetProfile": {"symbol": "CANONICAL", "dataSource": "YAHOO"}}
@@ -458,7 +469,8 @@ def test_created_rows_map_to_original_candidates_despite_enriched_profile(monkey
                                         ("assetProfile", None),
                                         ("assetProfile", {"symbol": "KO", "dataSource": "MANUAL"}),
                                         ("assetProfile", {"symbol": "", "dataSource": "YAHOO"})])
-def test_created_identity_date_and_source_required(monkeypatch, field, value):
+def test_short_import_acceptance_requires_created_identity_date_and_source(
+        monkeypatch, field, value):
     candidate = import_candidate()
     row = created(candidate)
     row[field] = value
@@ -470,14 +482,15 @@ def test_created_identity_date_and_source_required(monkeypatch, field, value):
 
 @pytest.mark.parametrize("field", ["quantity", "unitPrice", "fee"])
 @pytest.mark.parametrize("value", [True, False, None, float("nan"), float("inf"), "1"])
-def test_response_financial_evidence_is_numeric_finite_and_not_boolean(field, value):
+def test_short_import_acceptance_requires_numeric_finite_financial_evidence(
+        field, value):
     candidate = {**import_candidate(), field: 1}
     row = {**created(candidate), field: value}
     with pytest.raises(RuntimeError, match="financial evidence"):
         ghostfolio.accepted_import_subset([candidate], {"activities": [row]})
 
 
-def test_repeated_created_id_does_not_prove_two_created_buys():
+def test_short_import_acceptance_rejects_repeated_created_id():
     first, second = import_candidate("IBKR#1"), import_candidate("IBKR#2")
     rows = [created(first), {**created(second), "id": created(first)["id"]}]
     with pytest.raises(RuntimeError, match="created identity"):
