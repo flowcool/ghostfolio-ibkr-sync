@@ -145,7 +145,7 @@ def activity_is_active(activity: Any) -> bool:
 def ghost_get_accounts(config: Config) -> Any:
     """Fetch all accounts from Ghostfolio."""
     url = f"{config['ghost_host']}/api/v1/account"
-    resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=30,
+    resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=120,
                         allow_redirects=False)
     if ghost_response_is_redirect(resp):
         raise RuntimeError(GHOST_REDIRECT_ERROR)
@@ -563,7 +563,7 @@ def ghost_update_cash_balance(
                   "(Account Information CurrencyPrimary missing from the Flex Query)", account_id)
         return False
     url = f"{config['ghost_host']}/api/v1/account/{account_id}"
-    resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=30,
+    resp = requests.get(url, headers=ghost_headers(config["ghost_token"]), timeout=120,
                         allow_redirects=False)
     if ghost_response_is_redirect(resp):
         raise RuntimeError(GHOST_REDIRECT_ERROR)
