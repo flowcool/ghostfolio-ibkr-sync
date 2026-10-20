@@ -269,6 +269,45 @@ def test_unmatched_rejected_symbol_aborts_without_looping(monkeypatch):
 
 # --- account lookup and cash balance -------------------------------------
 
+def test_account_read_timeout_preserves_write_timeout(monkeypatch):
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append(("GET", url, kwargs["timeout"]))
+        if url.endswith("/api/v1/account"):
+            return Resp({"accounts": [{"id": "9", "name": "IBKR"}]})
+        return Resp({"id": "9", "currency": "EUR", "name": "IBKR", "platformId": "p1"})
+
+    def put(url, **kwargs):
+        calls.append(("PUT", url, kwargs["timeout"]))
+        return Resp({}, 200)
+
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "put", put)
+    assert ghostfolio.ghost_find_account_id(CFG, "IBKR") == "9"
+    assert ghostfolio.ghost_update_cash_balance(CFG, "9", 123.456, "EUR") is True
+    assert calls == [
+        ("GET", f"{CFG['ghost_host']}/api/v1/account", 120),
+        ("GET", f"{CFG['ghost_host']}/api/v1/account/9", 120),
+        ("PUT", f"{CFG['ghost_host']}/api/v1/account/9", 30),
+    ]
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_account_read_timeout_never_retries_or_writes(monkeypatch, dry_run):
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs["timeout"]))
+        raise requests.ReadTimeout("synthetic slow account read")
+
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "put", lambda *a, **k: pytest.fail("no PUT after read timeout"))
+    with pytest.raises(requests.ReadTimeout):
+        ghostfolio.ghost_update_cash_balance({**CFG, "dry_run": dry_run}, "9", 1.0, "EUR")
+    assert calls == [(f"{CFG['ghost_host']}/api/v1/account/9", 120)]
+
+
 def test_find_account_by_name_and_missing_account(monkeypatch):
     serve(monkeypatch, {"accounts": [{"id": "1", "name": "IBKR"}, {"id": "2", "name": "PEA"}]})
     assert ghostfolio.ghost_find_account_id(CFG, "PEA") == "2"
@@ -285,7 +324,7 @@ def test_accounts_reject_redirect_without_following(monkeypatch):
     monkeypatch.setattr(requests, "get", get)
     with pytest.raises(RuntimeError, match="Ghostfolio request redirected"):
         ghostfolio.ghost_get_accounts(CFG)
-    assert calls == [{"headers": ghostfolio.ghost_headers("tok"), "timeout": 30, "allow_redirects": False}]
+    assert calls == [{"headers": ghostfolio.ghost_headers("tok"), "timeout": 120, "allow_redirects": False}]
 
 
 def test_cash_balance_payload_is_the_five_whitelisted_fields(monkeypatch):
@@ -308,7 +347,7 @@ def test_cash_balance_get_rejects_redirect_without_following(monkeypatch):
     monkeypatch.setattr(requests, "get", get)
     with pytest.raises(RuntimeError, match="Ghostfolio request redirected"):
         ghostfolio.ghost_update_cash_balance(CFG, "9", 123.456, "EUR")
-    assert calls == [{"headers": ghostfolio.ghost_headers("tok"), "timeout": 30, "allow_redirects": False}]
+    assert calls == [{"headers": ghostfolio.ghost_headers("tok"), "timeout": 120, "allow_redirects": False}]
 
 
 def test_cash_balance_put_rejects_redirect_without_following(monkeypatch, caplog):
