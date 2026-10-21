@@ -3,6 +3,15 @@
 from dataclasses import dataclass, field
 
 
+@dataclass(frozen=True, slots=True)
+class DividendContext:
+    """Known security/day context; None cannot rule out an overlapping event."""
+
+    symbol: str | None
+    isin: str | None
+    day: str | None
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Settings:
     """Validated run settings read from ENV.

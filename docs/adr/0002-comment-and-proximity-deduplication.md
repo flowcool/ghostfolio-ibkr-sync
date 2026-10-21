@@ -5,9 +5,10 @@ Date: 2026-10-12. Status: accepted.
 The sync reads existing Ghostfolio activities once. Historical
 `IBKR#<tradeID>` comments suppress trades globally across accounts.
 New trades use `IBKR#v2#<source-account>:TRADE:<tradeID>` with the verified
-report account. Trades without an ID are refused. Dividend
-comments use `dividend#<ISIN>#<date>` (raw IBKR symbol when ISIN is absent), with
-account-scoped matching and support for older resolved-symbol comments.
+report account. Trades without an ID are refused. New dividends use
+`IBKR#v2#<source-account>:DIVIDEND:<actionID>`, one row per proven positive cash
+action. Historical `dividend#<ISIN>#<date>`, raw-symbol and resolved-symbol
+comments remain account-scoped.
 
 The reader also accepts strict versioned identities in the global
 `IBKR#v2#<source-account>:<kind>:<source-id>` namespace. Source-account and
@@ -36,6 +37,22 @@ add legacy-global trade IDs or v2 accepted identities. Advice for a manual BUY
 shows its exact proposed v2 comment. Dry runs copy the loaded snapshot and
 share simulated state across queries; they do not change the loaded real state.
 
+For dividends, exact historical comments in the destination account win before
+v2 coverage. Otherwise, complete positive-action coverage skips the group,
+even when the stored rows moved to another destination account or became inactive.
+Partial coverage fails the account and imports no dividend from that group.
+Normal reruns do not fill missing actions. This refusal can recur for the whole
+report window after partial server acceptance.
+
+Before a group with no coverage can use proximity, the sync checks stored v2
+dividend context for the same source account. A different known day or security
+rules out overlap. A matching symbol or ISIN on the same day, or context that
+cannot rule out overlap, blocks the group for manual review. The check retains
+inactive rows and all contexts of duplicate identities. It ignores amounts and
+destination ownership. Accepted rows also supply context to later queries in
+the same run. This is an exact-context guard; it does not use a date window.
+Safe trades, sales, cash updates and later accounts continue when a group fails.
+
 To avoid duplicating manual or legacy dividends, an active YAHOO dividend of
 the same resolved symbol in the same destination account within inclusive
 ±3 calendar days also suppresses a candidate, regardless of amount. Rows whose
@@ -54,10 +71,15 @@ values, fees and the operator action: check IBKR and add the payment by hand if
 it is distinct. Equal gross does not prove the same payment. Exit status and
 notifications do not change.
 This heuristic can omit distinct payments: a payment on day 3 can be skipped
-because a different manual or legacy payment exists on day 1. Same-security/day cash rows are
-aggregated, not tracked as distinct payment events. Review unusual schedules
-and later corrections manually; this is not exact financial reconciliation or
-protection against simultaneous runs using stale snapshots.
+because a different manual or legacy payment exists on day 1. Historical exact
+comments can also hide a later distinct same-security/day event; they do not
+prove completeness. Security/day groups remain the historical matching boundary;
+new eligible groups are partitioned into actions before writing. The conflict
+guard can refuse a legitimate additional same-day event. It cannot detect every
+revision, including changes to both day and security. An existing exact identity
+does not certify unchanged financial values. Review corrections manually. No
+automatic backfill, correction or historical edit is authorized. Concurrent runs
+with stale snapshots remain outside this protection.
 
 Sources: `ghost_get_existing_orders` in the
 [`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), `_dividend_date_matches` in the

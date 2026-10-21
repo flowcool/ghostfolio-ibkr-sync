@@ -100,6 +100,17 @@ def test_versioned_identity_reader_excludes_dividends_from_history_and_proximity
     assert len(findings) == 1 and findings[0]["category"] == "absent"
 
 
+def test_v2_generation_dedup_raw_historical_comment_remains_visible_with_mapping(monkeypatch):
+    row = destination(comment="dividend#KO#2026-07-15", date="2026-07-10T00:00:00Z")
+    _, comments, pos = read(monkeypatch, [row])
+    source = ibkr.parse_cash_dividends(report(divs=div_xml()))
+    finding = diagnostics.historical_dividend_comparison(
+        source, ACC, {ISIN_KO: "MAPPED"}, pos, existing_dividend_comments=comments)[0]
+    assert finding["category"] == "uncertain"
+    assert finding["activity_ids"] == [row["id"]]
+    assert finding["reason"] == "inactive, unsupported or conflicting security/date identity"
+
+
 @pytest.mark.parametrize("currency,profile_currency,provenance", [
     ("USD", "EUR", "activity"), (None, "USD", "assetProfile"),
 ])

@@ -30,6 +30,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     _parse_float,
     parse_ibkr_datetime,
 )
+from ghostfolio_ibkr_sync.models import DividendContext
 
 log = logging.getLogger(__name__)
 
@@ -803,7 +804,7 @@ def _historical_minor_unit(currency: str) -> Decimal | None:
 # ---------------------------------------------------------------------------
 
 # Why a dividend group leaves the candidate list, or "new" when it stays
-DividendDecision = Literal["not_payable", "existing", "partial", "proximity", "new"]
+DividendDecision = Literal["not_payable", "existing", "partial", "action_conflict", "proximity", "new"]
 # Why a trade row is not converted, or "new" when it is a conversion candidate
 TradeIdDecision = Literal["missing", "conflict", "existing", "new"]
 
@@ -898,8 +899,10 @@ def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: 
         "comment": f"dividend#{div['isin'] or div['symbol']}#{div['date']}",
     }
     old_comment = f"dividend#{symbol}#{div['date']}"
+    raw_comment = f"dividend#{div['symbol']}#{div['date']}"
     if ((ghost_account_id, identity["comment"]) in existing_dividend_comments
-            or (ghost_account_id, old_comment) in existing_dividend_comments):
+            or (ghost_account_id, old_comment) in existing_dividend_comments
+            or (ghost_account_id, raw_comment) in existing_dividend_comments):
         return "existing", symbol, None
 
     actions = dividend_positive_actions(div)
@@ -911,11 +914,41 @@ def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: 
             return "existing", symbol, None
         if covered:
             return "partial", symbol, None
+        if dividend_action_conflict(div, symbol, actions, positions):
+            return "action_conflict", symbol, None
 
     matched = _dividend_date_matches(positions, identity) if symbol else None
     if matched:
         return "proximity", symbol, matched
     return "new", symbol, None
+
+
+def dividend_action_conflict(div: DividendGroup, symbol: str | None,
+                            actions: set[tuple[str, str]], positions: Positions) -> bool:
+    """Refuse no-coverage groups unless stored same-source events are disjoint.
+
+    This is exact security/day context, never proximity or financial comparison.
+    Missing context is unknown; an occupied identity is not an absent event.
+    """
+    accounts = {account for account, _ in actions}
+    for key in positions.get("versioned_identities", set()):
+        account, comment = key
+        if account not in accounts or not comment.startswith(f"IBKR#v2#{account}:DIVIDEND:"):
+            continue
+        contexts = positions.get("versioned_dividend_context", {}).get(key)
+        if not contexts:
+            return True
+        for context in cast(list[DividendContext], contexts):
+            if context.day is not None and context.day != div["date"]:
+                continue
+            same_symbol = bool(symbol and context.symbol and symbol == context.symbol)
+            same_isin = bool(div["isin"] and context.isin and div["isin"] == context.isin)
+            if same_symbol or same_isin:
+                return True
+            if ((symbol and context.symbol) or (div["isin"] and context.isin)):
+                continue  # Comparable known securities differ.
+            return True
+    return False
 
 
 def split_import_phases(activities: Sequence[Activity]) -> list[list[Activity]]:

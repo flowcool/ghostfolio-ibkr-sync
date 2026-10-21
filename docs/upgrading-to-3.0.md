@@ -169,6 +169,39 @@ Trade <id> cannot be converted safely; excluded before holdings checks
 
 ## 7. Other changes to know
 
+- **Versioned dividend history.** New dividends use
+  `IBKR#v2#<source-account>:DIVIDEND:<actionID>`, one activity per positive
+  cash action. Dividend and PIL portions of that action share one quantity.
+  Historical resolved-symbol, raw-symbol and ISIN `dividend#<key>#<date>`
+  comments still win in their destination account. This can hide a later
+  distinct event on the same security/day. A historical match does not prove
+  that every event was imported. No automatic backfill or repair occurs.
+- **Partial acceptance needs explicit recovery.** Ghostfolio can accept only
+  part of an import batch. The sync retains proven accepted identities and
+  fails the account. Normal reruns refuse partial action coverage. The error
+  can recur while that group stays inside the configured report window.
+  Look for `partial versioned action coverage` and
+  `explicit reviewed recovery required`. Keep accepted rows. Do not change
+  their comments or add a historical comment to bypass the refusal. Recovery
+  needs complete source and destination evidence, settled requests, stopped
+  competing writers, a reviewed manifest and a separately approved operation.
+  This change does not make a recovery command available yet.
+- **Action conflict needs manual review.** With no exact coverage, the sync
+  checks existing v2 dividends for the same source account, security and day.
+  An unexpected action or unknown overlapping context blocks that group.
+  Look for `versioned action-context conflict or unknown overlap`.
+  A legitimate additional same-day event can also be refused. Trades, safe
+  sales, independent cash and later accounts continue. V2 dividends never
+  supply proximity or historical dividend-report evidence. A changed amount
+  under an existing identity is not corrected. Revisions that also change
+  day or security can evade this guard; review source corrections manually.
+- **Rollback floor after v2 history.** Once any v2 activity exists, retain
+  rc.5 or a newer qualified dual reader. Stop writers and set `DRY_RUN=true`
+  before rollback. Pre-rc.5 code must never run against that history.
+  A reader rollback keeps existing rows and can still refuse partial coverage.
+  Resume writes only after mixed-history review and separate authorization.
+  Existing cleanup tools must not run against v2 history until separately
+  qualified. Writer release and image-backed qualification remain separate.
 - **Longer Flex waits.** A transient IBKR SendRequest error is retried (up to five attempts, 18 minutes of
   scheduled waits) and GetStatement polls up to 60 times (300 seconds). A failing run can take longer.
   No ENV change is needed. See [Flex retry policy](../README.md#flex-retry-policy).
@@ -210,7 +243,9 @@ With `DRY_RUN` true, the candidate writes nothing.
 
 4. Read the log with the [Verify](#verify) list. The first start-up line names the candidate:
    `ghostfolio-ibkr-sync version v3.0.0-rc.N`.
-5. For rollback, select the saved image digest with the retained ENV and mounts, then run
+5. For rollback, respect the rc.5 reader floor after any v2 activity exists
+   (see [Other changes](#7-other-changes-to-know)). Select the saved qualified image
+   digest with the retained ENV and mounts, then run
    `docker compose up -d`. Set `DRY_RUN=true` explicitly for a rollback preview;
    older images can write when the variable is absent. If you changed the Flex query for 3.0, see the order warning in step 2.
 6. The latest candidates run the refactored typed package. The 10-day production soak
@@ -232,7 +267,9 @@ Keep `DRY_RUN=true` if you only test a candidate.
 
 ## Roll back
 
-Pin the previous image digest you recorded and recreate the container with the same ENV
+After any v2 activity exists, stop writers and use rc.5 or a newer qualified dual
+reader with `DRY_RUN=true`. Never restore pre-rc.5 code against v2 history.
+Otherwise, pin the previous image digest you recorded and recreate the container with the same ENV
 and mounts. This restores the runtime only: activities, cash balances and platform updates already
 written stay. The extra Flex fields can remain. Images up to 2.5.0 do not parse the time-zone suffix, so
 also set the Flex query time format back to **HHmmss** (no TimeZone) before running them.

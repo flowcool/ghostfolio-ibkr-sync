@@ -25,6 +25,7 @@ from ghostfolio_ibkr_sync.diagnostics import (
 from ghostfolio_ibkr_sync.ghostfolio import (
     InvalidActivityIdentityError,
     activity_date_is_current,
+    dividend_context,
     format_versioned_activity_identity,
     ghost_exchange_access_token,
     ghost_find_account_id,
@@ -279,7 +280,15 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             continue
         if dedup == "partial":
             log.error("Dividend %s %s: partial versioned action coverage — not imported; "
-                      "account failed", symbol or div.get("symbol") or "unknown", div["date"])
+                      "account failed; automatic reruns will refuse while this group stays "
+                      "in the report window; explicit reviewed recovery required",
+                      symbol or div.get("symbol") or "unknown", div["date"])
+            ok = False
+            continue
+        if dedup == "action_conflict":
+            log.error("Dividend %s %s: versioned action-context conflict or unknown overlap — "
+                      "not imported; account failed; manual review required",
+                      symbol or div.get("symbol") or "unknown", div["date"])
             ok = False
             continue
         if dedup == "proximity":
@@ -351,6 +360,9 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             identity = parse_versioned_activity_identity(comment, activity["type"])
             if identity is not None:
                 positions["versioned_identities"].add((identity[0], comment))
+                if identity[1] == "DIVIDEND":
+                    positions.setdefault("versioned_dividend_context", {}).setdefault(
+                        (identity[0], comment), []).append(dividend_context(activity, activity["date"]))
                 if identity[1] == "TRADE":
                     sign = -1.0 if activity["type"] == "SELL" else 1.0
                     positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]

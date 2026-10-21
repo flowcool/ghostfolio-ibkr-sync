@@ -20,6 +20,7 @@ import requests
 
 from ghostfolio_ibkr_sync.config import validate_ghost_host
 from ghostfolio_ibkr_sync.ibkr import _parse_float, log_lab_evidence
+from ghostfolio_ibkr_sync.models import DividendContext
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +91,26 @@ def parse_versioned_activity_identity(
             or (kind == "DIVIDEND" and activity_type != "DIVIDEND")):
         raise InvalidActivityIdentityError("Invalid reserved activity identity")
     return source_account, kind, source_id
+
+
+def dividend_context(profile: Mapping[str, Any], value: object) -> DividendContext:
+    """Read context without inferring identity from money or destination ownership."""
+    symbol = profile.get("symbol") if profile.get("dataSource") == "YAHOO" else None
+    isin = profile.get("isin")
+    day = None
+    if isinstance(value, str):
+        try:
+            instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            # Match the stored calendar day used by historical import selection.
+            if instant.tzinfo is not None:
+                day = instant.date().isoformat()
+        except ValueError:
+            pass  # Unknown dates must block possible overlap, not hide the row.
+    return DividendContext(
+        symbol if isinstance(symbol, str) and symbol.strip() else None,
+        isin if isinstance(isin, str) and isin.strip() else None,
+        day,
+    )
 
 
 def ghost_exchange_access_token(host: str, access_token: str) -> str:
@@ -217,7 +238,8 @@ def ghost_get_existing_orders(
     dividend_comments = set()
     positions: dict[str, Any] = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
                  "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-                 "dividend_dates": defaultdict(list), "versioned_identities": set()}
+                 "dividend_dates": defaultdict(list), "versioned_identities": set(),
+                 "versioned_dividend_context": defaultdict(list)}
 
     # One request without skip/take: Ghostfolio has no take cap (default
     # MAX_SAFE_INTEGER), so one call returns one consistent list, with no
@@ -293,6 +315,12 @@ def ghost_get_existing_orders(
                     trade_ids.add(tid)
             elif comment.startswith("dividend#"):
                 dividend_comments.add((order.get("accountId") or "", comment))
+
+        if versioned_identity is not None and is_versioned_dividend:
+            # Keep inactive/non-YAHOO rows and duplicate identity contexts too.
+            # Their identities remain occupied even when they cannot prove holdings.
+            positions["versioned_dividend_context"][(versioned_identity[0], comment)].append(
+                dividend_context(profile, order.get("date")))
 
         active = activity_is_active(order)
         if (config.get("dry_run") and order.get("type") == "DIVIDEND"
