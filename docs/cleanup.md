@@ -530,12 +530,94 @@ A row remains `pending` after an uncertain PUT or failed readback; verified earl
 rows remain explicit. Never retry under a new journal to bypass uncertainty.
 An old-comment or absent-row readback cannot settle a delayed request. Keep writers
 stopped and require independent completion/cancellation evidence before any new
-operation, retry or reversal. This apply slice has no resume or rollback command.
+operation, retry or reversal. Use the guarded inspection and rollback path below.
+There is no automatic apply retry or resume.
 
 Reverting the tool's code does not reverse converted comments. Preserve all rows,
 inputs and journals. After v2 history exists, retain an rc.5-or-newer qualified
 reader. Comment reversal requires its separately guarded maintenance path and
 operation approval. Database restore is not the normal rollback; it requires its
 own approval and reconciliation of intervening writes.
+
+
+## Guarded comment rollback and resume inspection
+
+Inspect a complete saved capture without HTTP or credentials:
+
+```sh
+python identity_migration.py inspect --journal migration.yaml \
+  --manifest review/manifest.json --manifest-sha256 "$MANIFEST_SHA256" \
+  --snapshot current.json --snapshot-sha256 "$SNAPSHOT_SHA256"
+```
+
+The command prints one state per journal-owned activity: `original`, `converted`,
+`absent` or `drift`. A pending apply or reverse request adds `uncertain:`.
+Inspection does not modify the journal. Old-comment, absent-row and converted-row
+readbacks never clear uncertainty. The snapshot must contain the complete,
+unredacted activity list and its matching count. Preserve original JSON numbers
+and all fields. Even a changed numeric representation blocks reversal.
+
+Rollback uses the original reviewed manifest and the existing private journal:
+
+```sh
+python identity_migration.py rollback --journal migration.yaml \
+  --manifest review/manifest.json --manifest-sha256 "$MANIFEST_SHA256" \
+  --approval rollback-approval.json --approval-sha256 "$APPROVAL_SHA256" \
+  --host https://ghostfolio.example.test
+```
+
+The separately approved rollback command reads `GHOST_TOKEN` from ENV.
+It uses the same single-request HTTP helper and full whitelisted PUT payload as
+apply. It restores only the original comments of unchanged journal-owned rows.
+It checks IDs, ownership, financial numbers, currency, date, tags, profiles and
+all other captured fields. It retains newly imported v2 rows. It never inserts
+or deletes an activity and never changes cash or platform state.
+
+The separate JSON approval uses schema `ibkr-migration-rollback-approval-v1`.
+It requires `journal_sha256` for the exact current journal bytes and
+`manifest_sha256` for the original reviewed manifest. Supply the same `host`,
+`destination_version` and `destination_image`. Supply the apply approval's
+prerequisite fields: `operation_plan_ref`, `backup_ref`, `writer_exclusion_ref`,
+`settlement_ref`, `preservation_qualification_ref`, `pacing_qualification_ref`,
+`owner_id`, `writers_stopped: true` and `requests_settled: true`. Set `write_count`
+to the exact number of remaining converted rows. Set `batch_size` and
+`pause_seconds` from qualified measurements. There are no default limits.
+
+For each pending request, supply an entry under `settlements`, keyed by activity
+ID. Each entry needs `direction` (`apply` or `rollback`), `outcome` (`completed`
+or `cancelled`), `independent: true` and a nonempty `evidence_ref`. For example:
+
+```json
+{"settlements":{"synthetic-row":{"direction":"apply","outcome":"cancelled",
+  "independent":true,"evidence_ref":"approved-independent-cancellation-proof"}}}
+```
+
+This declaration references evidence from a separately authorized operation.
+It is not proof by itself. Use request-bound completion or cancellation proof
+when available. A deployment-specific cancellation or quiescence proof needs
+its own approved operation. A GET result cannot replace it. Without independent
+proof, retain uncertainty and stop. The command checks that the settled outcome
+agrees with the full current row. It records accepted settlement evidence in the
+journal. It does not retry apply.
+
+Before any reverse PUT, the command checks every journal row and freezes the
+complete current snapshot. It checks that snapshot before and after each PUT,
+including rows absent from the journal. It durably records `rollback_status:
+pending` and the inverse payload before dispatch. Only an exact readback marks
+that row `verified`. A timeout, drift, normalization or failed readback stops the
+command and retains pending state. Earlier verified reversals remain explicit.
+`rolled_back` means that all required comment reversals completed. Further work
+after an interrupted reversal needs fresh independent settlement evidence where
+pending, a new approval bound to the current journal, and the same full checks.
+An already consumed approval cannot replay writes.
+
+These offline tests do not qualify the destination image, background jobs,
+measured pacing or actual rc.5 preservation. G5/G6 and separate operation GO
+remain required before real maintenance. After failure, stop writers, force
+`DRY_RUN=true`, retain every row and journal, and keep rc.5 or a newer qualified
+dual reader. Never run pre-rc.5 code after any imported or converted v2 activity.
+Comment reversal cannot remove newly imported v2 history. Resume writers only
+after exact mixed-history review and separate GO. A database restore remains a
+separate operation with reconciliation of intervening writes.
 
 [Back to the README](../README.md)

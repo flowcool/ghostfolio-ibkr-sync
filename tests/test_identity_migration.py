@@ -807,8 +807,11 @@ def apply_case(case, monkeypatch):
         assert url == permit["host"] + "/api/v1/activities/" + payload["id"]
         assert kwargs["timeout"] == 60 and kwargs["allow_redirects"] is False
         durable = yaml.safe_load(journal.read_bytes())
-        assert durable["rows"][payload["id"]]["status"] == "pending"
-        assert durable["status"] == "in_progress"
+        if durable["status"] == "rollback_in_progress":
+            assert durable["rows"][payload["id"]]["rollback_status"] == "pending"
+        else:
+            assert durable["rows"][payload["id"]]["status"] == "pending"
+            assert durable["status"] == "in_progress"
         state.calls.append("put")
         state.puts.append(deepcopy(payload))
         if state.put_effect:
@@ -1069,3 +1072,292 @@ def test_v2_migration_apply_rollback_unreviewed_hash(apply_case, argument):
     with pytest.raises(RuntimeError, match="Evidence hash changed"):
         run(**{argument: "0" * 64})
     assert not state.calls and not journal.exists()
+
+
+@pytest.fixture
+def rollback_case(apply_case, monkeypatch):
+    state, permit, run, journal, original, case = apply_case
+    root = case[0]
+
+    def reverse(*, cli=False, **overrides):
+        approval = root / "rollback-approval.json"
+        approved = {**permit, "schema": "ibkr-migration-rollback-approval-v1",
+                    "journal_sha256": digest(journal.read_bytes()), "settlements": {}}
+        approved.update(overrides)
+        approval.write_text(json.dumps(approved))
+        if cli:
+            monkeypatch.setenv("GHOST_TOKEN", "synthetic-token")
+            monkeypatch.setattr(sys, "argv", ["identity_migration.py", "rollback", "--journal", str(journal),
+                "--manifest", str(root / "preview/manifest.json"),
+                "--manifest-sha256", permit["manifest_sha256"], "--approval", str(approval),
+                "--approval-sha256", digest(approval.read_bytes()), "--host", permit["host"]])
+            return migration.main()
+        migration.rollback(journal, root / "preview/manifest.json", permit["manifest_sha256"],
+                           approval, digest(approval.read_bytes()), permit["host"], "synthetic-token")
+
+    def inspect_saved():
+        snapshot = root / "resume.json"
+        snapshot.write_text(json.dumps({"count": len(state.rows), "activities": state.rows}))
+        return migration.inspect(journal, root / "preview/manifest.json", permit["manifest_sha256"],
+                                 snapshot, digest(snapshot.read_bytes()))
+
+    return state, run, reverse, inspect_saved, journal, original
+
+
+def test_v2_migration_apply_rollback_only_preserves_new_imports(rollback_case):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    new = migration_row(id="new", comment="IBKR#v2#U1:TRADE:new", userId="owner")
+    state.rows.append(new)
+    assert set(inspect_saved().values()) == {"converted"}
+    reverse()
+    assert state.rows == original + [new]
+    assert [p["comment"] for p in state.puts[2:]] == ["IBKR#123", "IBKR#456"]
+    for forward, backward in zip(state.puts[:2], state.puts[2:]):
+        assert {k: v for k, v in forward.items() if k != "comment"} == {
+            k: v for k, v in backward.items() if k != "comment"}
+    assert yaml.safe_load(journal.read_bytes())["status"] == "rolled_back"
+    assert set(inspect_saved().values()) == {"original"}
+    reverse(write_count=0)
+    assert len(state.puts) == 4
+
+
+@pytest.mark.parametrize("field,value", [
+    ("comment", "edited"), ("quantity", 1.0), ("unitPrice", 8), ("fee", 2),
+    ("date", "2026-01-11T12:00:00Z"), ("accountId", "other"), ("userId", "other"),
+    ("currency", "EUR"), ("type", "SELL"), ("tags", []), ("isDraft", True),
+    ("assetProfile", {"symbol": "CHANGED", "dataSource": "YAHOO"}),
+])
+def test_v2_migration_apply_rollback_only_drift_blocks_all(rollback_case, field, value):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    state.rows[0][field] = value
+    assert inspect_saved()["row-1"] == "drift"
+    with pytest.raises(RuntimeError):
+        reverse()
+    assert len(state.puts) == 2
+
+
+@pytest.mark.parametrize("readback", ["original", "absent", "converted"])
+def test_v2_migration_apply_rollback_only_delayed_request(rollback_case, readback):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    def timeout(payload):
+        raise requests.Timeout()
+    state.put_effect = timeout
+    with pytest.raises(RuntimeError):
+        run()
+    if readback == "absent":
+        state.rows.pop(0)
+    elif readback == "converted":
+        state.rows[0]["comment"] = "IBKR#v2#U1:TRADE:123"
+    before = journal.read_bytes()
+    assert inspect_saved()["row-1"] == "uncertain:" + readback
+    assert journal.read_bytes() == before
+    with pytest.raises(RuntimeError, match="independent settlement"):
+        reverse(write_count=1)
+    assert len(state.puts) == 1
+    # A delayed server completion after negative readback still remains uncertain.
+    if readback == "original":
+        state.rows[0]["comment"] = "IBKR#v2#U1:TRADE:123"
+        assert inspect_saved()["row-1"] == "uncertain:converted"
+
+
+@pytest.mark.parametrize("outcome", ["completed", "cancelled"])
+def test_v2_migration_apply_rollback_only_partial_settlement(rollback_case, outcome):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    def partial(payload):
+        if len(state.puts) == 2:
+            raise requests.Timeout()
+        state.rows[0]["comment"] = payload["comment"]
+    state.put_effect = partial
+    with pytest.raises(RuntimeError):
+        run()
+    if outcome == "completed":
+        state.rows[1]["comment"] = "IBKR#v2#U1:TRADE:456"
+    state.put_effect = None
+    reverse(write_count=2 if outcome == "completed" else 1, settlements={
+        "row-2": {"direction": "apply", "outcome": outcome, "independent": True,
+                  "evidence_ref": "synthetic-request-completion-or-cancellation"}})
+    assert state.rows == original
+    assert inspect_saved()["row-1"] == "original"
+
+
+@pytest.mark.parametrize("effect", ["timeout", "normalization", "profile"])
+def test_v2_migration_apply_rollback_only_reverse_uncertainty(rollback_case, effect):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    def fail(payload):
+        if effect == "timeout":
+            raise requests.Timeout()
+        state.rows[0]["comment"] = payload["comment"]
+        if effect == "normalization":
+            state.rows[0]["quantity"] = 1.0
+        else:
+            state.rows[0]["assetProfile"]["currency"] = "EUR"
+    state.put_effect = fail
+    with pytest.raises(RuntimeError):
+        reverse()
+    assert yaml.safe_load(journal.read_bytes())["rows"]["row-1"]["rollback_status"] == "pending"
+    assert inspect_saved()["row-1"].startswith("uncertain:")
+    with pytest.raises(RuntimeError, match="independent settlement"):
+        reverse()
+    assert len(state.puts) == 3
+
+
+@pytest.mark.parametrize("key,value", [("writers_stopped", False), ("requests_settled", False),
+    ("backup_ref", ""), ("owner_id", "other"), ("write_count", 1), ("batch_size", 0),
+    ("pause_seconds", -1), ("journal_sha256", "0" * 64), ("manifest_sha256", "0" * 64),
+    ("destination_version", "other"), ("destination_image", "other")])
+def test_v2_migration_apply_rollback_only_approval(rollback_case, key, value):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    with pytest.raises(RuntimeError):
+        reverse(**{key: value})
+    assert len(state.puts) == 2
+
+
+def test_v2_migration_apply_rollback_only_actual_cli(rollback_case, monkeypatch, capsys):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    root = journal.parent
+    record = yaml.safe_load(journal.read_bytes())
+    manifest = root / "preview/manifest.json"
+    inspect_saved()
+    snapshot = root / "resume.json"
+    before = len(state.calls)
+    monkeypatch.setattr(sys, "argv", ["identity_migration.py", "inspect", "--journal", str(journal),
+        "--manifest", str(manifest), "--manifest-sha256", record["manifest_sha256"],
+        "--snapshot", str(snapshot), "--snapshot-sha256", digest(snapshot.read_bytes())])
+    assert migration.main() == 0
+    assert json.loads(capsys.readouterr().out) == {"row-1": "converted", "row-2": "converted"}
+    assert len(state.calls) == before
+    # Replay the public rollback CLI against synthetic HTTP and isolated journal.
+    assert reverse(cli=True) == 0
+    assert "Rollback complete: journal-owned comments restored" in capsys.readouterr().out
+    approval = root / "rollback-approval.json"
+    monkeypatch.setenv("GHOST_TOKEN", "synthetic-token")
+    # The already-consumed approval must fail before HTTP and cannot replay writes.
+    monkeypatch.setattr(sys, "argv", ["identity_migration.py", "rollback", "--journal", str(journal),
+        "--manifest", str(manifest), "--manifest-sha256", record["manifest_sha256"],
+        "--approval", str(approval), "--approval-sha256", digest(approval.read_bytes()),
+        "--host", "https://ghostfolio.example.test"])
+    with pytest.raises(SystemExit) as error:
+        migration.main()
+    assert error.value.code == 1
+    assert "Rollback refused" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("outcome", ["completed", "cancelled"])
+def test_v2_migration_apply_rollback_only_resume_reverse(rollback_case, outcome):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    def timeout(payload):
+        raise requests.Timeout()
+    state.put_effect = timeout
+    with pytest.raises(RuntimeError):
+        reverse()
+    if outcome == "completed":
+        state.rows[0]["comment"] = original[0]["comment"]
+    state.put_effect = None
+    reverse(write_count=1 if outcome == "completed" else 2, settlements={
+        "row-1": {"direction": "rollback", "outcome": outcome, "independent": True,
+                  "evidence_ref": "synthetic-independent-reverse-request-proof"}})
+    assert state.rows == original
+    assert set(inspect_saved().values()) == {"original"}
+    assert yaml.safe_load(journal.read_bytes())["status"] == "rolled_back"
+
+
+@pytest.mark.parametrize("mutation", ["preimage", "replacement", "rows", "status"])
+def test_v2_migration_apply_rollback_only_journal_binding(rollback_case, mutation):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    record = yaml.safe_load(journal.read_bytes())
+    if mutation == "preimage":
+        record["rows"]["row-1"]["preimage"]["fee"] = "2"
+    elif mutation == "replacement":
+        record["rows"]["row-1"]["new_comment"] = "IBKR#v2#U1:TRADE:other"
+    elif mutation == "rows":
+        record["rows"].pop("row-2")
+    else:
+        record["rows"]["row-1"]["status"] = "unknown"
+    journal.write_text(yaml.safe_dump(record))
+    with pytest.raises(RuntimeError):
+        reverse()
+    assert len(state.puts) == 2
+
+
+def test_v2_migration_apply_rollback_only_concurrent_and_persistence(rollback_case, monkeypatch):
+    import cleanup_recovery
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    write = cleanup_recovery.write_journal
+    def fail(path, record, create=False):
+        if record["status"] == "rollback_in_progress":
+            raise OSError("synthetic rollback persistence failure")
+        write(path, record, create=create)
+    monkeypatch.setattr(cleanup_recovery, "write_journal", fail)
+    with pytest.raises(OSError):
+        reverse()
+    assert len(state.puts) == 2
+    lock = cleanup_recovery.lock_journal(journal)
+    try:
+        with pytest.raises(RuntimeError, match="already in use"):
+            reverse()
+    finally:
+        os.close(lock)
+
+
+@pytest.mark.parametrize("proof", [
+    {"direction": "rollback", "outcome": "completed", "independent": True, "evidence_ref": "proof"},
+    {"direction": "apply", "outcome": "completed", "independent": False, "evidence_ref": "GET"},
+    {"direction": "apply", "outcome": "completed", "independent": True, "evidence_ref": ""},
+    {"direction": "apply", "outcome": "completed", "independent": True, "evidence_ref": "proof"},
+])
+def test_v2_migration_apply_rollback_only_rejects_weak_or_contradictory_proof(rollback_case, proof):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    def timeout(payload):
+        raise requests.Timeout()
+    state.put_effect = timeout
+    with pytest.raises(RuntimeError):
+        run()
+    before = journal.read_bytes()
+    with pytest.raises(RuntimeError):
+        reverse(write_count=0, settlements={"row-1": proof})
+    assert journal.read_bytes() == before
+    assert len(state.puts) == 1
+
+
+def test_v2_migration_apply_rollback_only_late_drift(rollback_case):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    new = migration_row(id="new", comment="IBKR#v2#U1:TRADE:new", userId="owner")
+    state.rows.append(new)
+    start_gets = state.gets
+    def drift():
+        if state.gets == start_gets + 3:
+            new["fee"] = 8
+    state.before_get = drift
+    with pytest.raises(RuntimeError, match="context changed"):
+        reverse()
+    assert len(state.puts) == 2
+
+
+@pytest.mark.parametrize("value", [None, [], "invalid", 42, True])
+def test_v2_migration_apply_rollback_only_invalid_approval_root(rollback_case, value, monkeypatch, capsys):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    approval = journal.parent / "malformed-approval.json"
+    approval.write_text(json.dumps(value))
+    manifest = journal.parent / "preview/manifest.json"
+    before = journal.read_bytes()
+    monkeypatch.setenv("GHOST_TOKEN", "synthetic-token")
+    monkeypatch.setattr(sys, "argv", ["identity_migration.py", "rollback", "--journal", str(journal),
+        "--manifest", str(manifest), "--manifest-sha256", digest(manifest.read_bytes()),
+        "--approval", str(approval), "--approval-sha256", digest(approval.read_bytes()),
+        "--host", "https://ghostfolio.example.test"])
+    with pytest.raises(SystemExit) as error:
+        migration.main()
+    assert error.value.code == 1
+    assert "Rollback refused (RuntimeError)" in capsys.readouterr().err
+    assert journal.read_bytes() == before
+    assert len(state.puts) == 2
