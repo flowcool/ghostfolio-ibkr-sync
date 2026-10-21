@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from math import ceil, isfinite
 from typing import Any, cast
@@ -180,6 +181,70 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                   query_id, ", ".join(gaps))
         return {}, False
 
+    try:
+        activities, proposed_dividend_context, unmapped, selection_ok = select_account_activities(
+            xml_text, ibkr_account_id, ghost_account_id, mapping, existing_trade_ids,
+            existing_dividend_comments, positions, query_id=query_id,
+            diagnostic_preview=bool(config.get("dry_run")))
+    except InvalidActivityIdentityError:
+        return {}, False
+    ok = ok and selection_ok
+
+    # Create buys/dividends first. A server-skipped BUY cannot back a later SELL,
+    # even in this account's batch. Dry-run uses proposed buys for simulation.
+    phases = split_import_phases(activities)
+    for phase in phases:
+        if not phase:
+            continue
+        if ghost_account_id in config.get("_uncertain_import_accounts", set()):
+            ok = False
+            break
+        if phase[0]["type"] == "SELL":
+            rejected = rejected_sell_symbols(phase, positions, ghost_account_id)
+            if rejected:
+                log.warning("Sells excluded after accepted-buy check: %s", ", ".join(sorted(rejected)))
+                phase = [a for a in phase if a["symbol"] not in rejected]
+                ok = False
+        if not phase:
+            continue
+        imported, import_ok = ghost_import_activities(config, phase)
+        # Only accepted rows (or proposals in isolated simulation state) advance
+        # the run. DIVIDEND identities must never act as trade IDs or holdings.
+        record_accepted_activities(imported, positions, existing_trade_ids,
+                                   existing_dividend_comments, proposed_dividend_context)
+        if not import_ok:
+            ok = False
+
+    # Update cash balance (independent of import success)
+    try:
+        cash_balance = parse_cash_report(xml_text)
+        if cash_balance is not None:
+            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance,
+                                         parse_base_currency(xml_text)):
+                ok = False
+        else:
+            log.warning("No BASE_SUMMARY cash balance found in report")
+    except Exception as exc:
+        log.error("Failed to update cash balance: %s", exc)
+        ok = False
+
+    return unmapped, ok
+
+
+def select_account_activities(
+    xml_text: str, ibkr_account_id: str, ghost_account_id: str,
+    mapping: dict[str, str], existing_trade_ids: set[str],
+    existing_dividend_comments: set[tuple[str, str]], positions: Positions, *,
+    query_id: str = "offline", diagnostic_preview: bool = False,
+    date_is_current: Callable[[Mapping[str, Any]], bool] | None = None,
+    holdings_trace: dict[str, Any] | None = None,
+) -> tuple[list[Activity], dict[str, DividendContext], Unmapped, bool]:
+    """Select without fetching or dispatching; mutate only manual-match state.
+
+    Offline callers supply a captured clock and isolated holdings state.
+    """
+    ok = True
+    date_is_current = date_is_current or activity_date_is_current
     # Parse trades and dividends
     trades: list[dict[str, Any]] = parse_trades(xml_text)
     dividends = parse_cash_dividends(xml_text)
@@ -205,7 +270,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             format_versioned_activity_identity(ibkr_account_id, "TRADE", trade.get("tradeID", ""))
     except InvalidActivityIdentityError as exc:
         log.error("Flex Query %s: %s; account failed before any financial write", query_id, exc)
-        return {}, False
+        raise
 
     # Prepare actual import candidates before calculating their position impact.
     unmapped: Unmapped = {}
@@ -238,7 +303,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
         trade_unmapped: Unmapped = {}
         activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
-        if activity is None or not activity_date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+        if activity is None or not date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
             ok = False
@@ -261,7 +326,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     # Establish identity and deduplicate before checking quantity or schema.
     report_counts = None
-    if config.get("dry_run"):
+    if diagnostic_preview:
         findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
                                                  historical_dividend_report_window(xml_text),
                                                  existing_dividend_comments)
@@ -310,7 +375,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                     ibkr_account_id, "DIVIDEND", row.get("actionID", ""))
     except InvalidActivityIdentityError as exc:
         log.error("Flex Query %s: %s; account failed before any financial write", query_id, exc)
-        return {}, False
+        raise
 
     # A schema mismatch blocks only account dividends, not trades or cash.
     if dividend_input_compatible(candidates):
@@ -320,7 +385,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             if not partition_ok:
                 ok = False
                 continue
-            if any(not activity_date_is_current(activity) for activity in proposed):
+            if any(not date_is_current(activity) for activity in proposed):
                 log.error("Future or invalid dividend date; deferred until a later run")
                 ok = False
                 continue
@@ -339,62 +404,38 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                  report_counts["informational"], report_counts["noise"])
 
     activities.extend(div_activities)
+    if holdings_trace is not None:
+        holdings_trace.update({
+            "prepared": [t["_activity"] for t in prepared_trades],
+            "kept": [t["_activity"] for t in trades],
+            "manual_trade_ids": sorted(positions.get("manual_trade_ids", set())),
+        })
+    return activities, proposed_dividend_context, unmapped, ok
 
-    # Create buys/dividends first. A server-skipped BUY cannot back a later SELL,
-    # even in this account's batch. Dry-run uses proposed buys for simulation.
-    phases = split_import_phases(activities)
-    for phase in phases:
-        if not phase:
-            continue
-        if ghost_account_id in config.get("_uncertain_import_accounts", set()):
-            ok = False
-            break
-        if phase[0]["type"] == "SELL":
-            rejected = rejected_sell_symbols(phase, positions, ghost_account_id)
-            if rejected:
-                log.warning("Sells excluded after accepted-buy check: %s", ", ".join(sorted(rejected)))
-                phase = [a for a in phase if a["symbol"] not in rejected]
-                ok = False
-        if not phase:
-            continue
-        imported, import_ok = ghost_import_activities(config, phase)
-        # Only accepted rows (or proposals in isolated simulation state) advance
-        # the run. DIVIDEND identities must never act as trade IDs or holdings.
-        for activity in imported:
-            comment = activity["comment"]
-            identity = parse_versioned_activity_identity(comment, activity["type"])
-            if identity is not None:
-                positions["versioned_identities"].add((identity[0], comment))
-                if identity[1] == "DIVIDEND":
-                    positions.setdefault("versioned_dividend_context", {}).setdefault(
-                        (identity[0], comment), []).append(proposed_dividend_context[comment])
-                if identity[1] == "TRADE":
-                    sign = -1.0 if activity["type"] == "SELL" else 1.0
-                    positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
-            elif comment.startswith("IBKR#"):
-                existing_trade_ids.add(comment.split("#", 1)[1])
+
+def record_accepted_activities(
+    imported: list[Activity], positions: Positions, existing_trade_ids: set[str],
+    existing_dividend_comments: set[tuple[str, str]],
+    proposed_dividend_context: dict[str, DividendContext],
+) -> None:
+    """Advance only supplied accepted (or isolated simulated) payload state."""
+    for activity in imported:
+        comment = activity["comment"]
+        identity = parse_versioned_activity_identity(comment, activity["type"])
+        if identity is not None:
+            positions["versioned_identities"].add((identity[0], comment))
+            if identity[1] == "DIVIDEND":
+                positions.setdefault("versioned_dividend_context", {}).setdefault(
+                    (identity[0], comment), []).append(proposed_dividend_context[comment])
+            if identity[1] == "TRADE":
                 sign = -1.0 if activity["type"] == "SELL" else 1.0
                 positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
-            elif comment.startswith("dividend#"):
-                existing_dividend_comments.add((activity["accountId"], comment))
-        if not import_ok:
-            ok = False
-
-    # Update cash balance (independent of import success)
-    try:
-        cash_balance = parse_cash_report(xml_text)
-        if cash_balance is not None:
-            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance,
-                                         parse_base_currency(xml_text)):
-                ok = False
-        else:
-            log.warning("No BASE_SUMMARY cash balance found in report")
-    except Exception as exc:
-        log.error("Failed to update cash balance: %s", exc)
-        ok = False
-
-    return unmapped, ok
-
+        elif comment.startswith("IBKR#"):
+            existing_trade_ids.add(comment.split("#", 1)[1])
+            sign = -1.0 if activity["type"] == "SELL" else 1.0
+            positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
+        elif comment.startswith("dividend#"):
+            existing_dividend_comments.add((activity["accountId"], comment))
 
 
 def finalize_run(outcome: RunOutcome, code: int) -> None:

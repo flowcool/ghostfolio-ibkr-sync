@@ -34,6 +34,7 @@ def case(tmp_path, monkeypatch):
         "schema": "ibkr-migration-inputs-v1", "tool_commit": "a" * 40,
         "timezone": "Europe/Zurich", "window": ["2026-01-01", "2026-01-31"],
         "inventory_complete": True, "accounts": {"U1": "dest"}, "symbol_mapping": {},
+        "replay_order": ["report-1"],
         "reports": {"report-1": {"path": source.name, "sha256": digest(source.read_bytes()),
                                    "source_account": "U1"}},
         "snapshot": {"path": snapshot.name, "sha256": digest(snapshot.read_bytes()),
@@ -72,7 +73,8 @@ def test_v2_migration_offline_private_exact_deterministic(case):
     manifest = exact_json((root / "first/manifest.json").read_bytes())
     assert manifest["rows"][0]["fields"]["quantity"] == "1.0000000000000000001"
     assert manifest["actionable"] is False and manifest["replacements"] == []
-    assert manifest["pending"] == ["complete-import-selection-proof"]
+    assert manifest["pending"] == []
+    assert manifest["selection_proof"]["equal"] is True
     assert all(p.read_bytes() == data for p, data in before.items())
     assert (root / "first").stat().st_mode & 0o777 == 0o700
     assert all(p.stat().st_mode & 0o777 == 0o600 for p in (root / "first").iterdir())
@@ -271,6 +273,7 @@ def migration_run(case, rows=None, trades=None, cash=(), accruals=(), extra=None
             path = root / (name + ".xml")
             path.write_text(xml)
             config["accounts"].setdefault(account, "dest2")
+            config["replay_order"].append(name)
             config["reports"][name] = {"path": path.name, "sha256": digest(path.read_bytes()),
                                       "source_account": account}
     rows = rows if rows is not None else [migration_row()]
@@ -570,3 +573,190 @@ def test_v2_migration_preview_exact_cli_replay(case):
     assert {e["status"] for e in result["events"]} == {"eligible-replacement", "absent-new-candidate", "unsupported"}
     # Reuse the fresh-process socket and credential guard with populated inputs.
     test_v2_migration_offline_actual_cli(case)
+
+
+def test_v2_migration_selection_complete_payloads_and_holdings(case):
+    result = migration_run(case, rows=[migration_row()], trades=[
+        migration_trade(), migration_trade(tradeID="new-buy", quantity="3"),
+        migration_trade(tradeID="safe-sell", buySell="SELL", quantity="-2"),
+        migration_trade(tradeID="unbacked-sell", buySell="SELL", quantity="-4",
+                        symbol="EMPTY", isin="US-EMPTY")],
+        cash=[migration_cash()], accruals=[migration_accrual()])
+    proof = result["selection_proof"]
+    assert proof["equal"] is True and result["pending"] == []
+    assert proof["before"] == proof["after"]
+    query, = proof["before"]["queries"]
+    assert [a["comment"] for a in query["selected"]] == [
+        "IBKR#v2#U1:TRADE:new-buy", "IBKR#v2#U1:DIVIDEND:A", "IBKR#v2#U1:TRADE:safe-sell"]
+    assert len(query["holdings"]["prepared"]) == 3
+    assert len(query["holdings"]["kept"]) == 2
+    assert query["holdings_after"] == [{"account": "dest", "symbol": "TEST", "quantity": 2.0}]
+    assert proof["before_sha256"] == proof["after_sha256"]
+
+
+def test_v2_migration_selection_legacy_global_release_is_rejected(case):
+    # The eligibility guard already excludes this collision. Exercise the
+    # independent replay guard with that unsafe replacement deliberately supplied.
+    root, config, *_ = case
+    config["accounts"]["U2"] = "dest2"
+    config["replay_order"] = ["first", "second"]
+    reports = {"first": ("U1", migration_xml([migration_trade()])),
+               "second": ("U2", migration_xml([migration_trade(accountId="U2")], account="U2"))}
+    rows = exact_json(json.dumps([migration_row()]).encode())
+    planned = [{"id": "row-1", "new_comment": "IBKR#v2#U1:TRADE:123"}]
+    proof = migration.prove_selection(reports, rows, config, planned)
+    assert proof["equal"] is False and proof["reason"] == "selection-changed"
+    assert proof["before"]["queries"][1]["selected"] == []
+    selected, = proof["after"]["queries"][1]["selected"]
+    assert selected["comment"] == "IBKR#v2#U2:TRADE:123"
+    manifest = {"replacements": planned, "events": [{"status": "eligible-replacement"}],
+                "rows": [{"id": "row-1", "status": "eligible-replacement"}]}
+    migration.bind_selection(manifest, reports, rows, config)
+    assert manifest["replacements"] == []
+    assert manifest["pending"] == ["selection-changed"]
+    assert manifest["counts"]["historical_rows"] == {"selection-changed": 1}
+    assert manifest["ordered_row_fingerprints"][0]["before"] == manifest["ordered_row_fingerprints"][0]["after"]
+
+
+@pytest.mark.parametrize("start,end", [("20260102", "20260131"), ("20260101", "20260130"),
+                                       ("20260110", "20260120")])
+def test_v2_migration_selection_short_windows_block_conversion(case, start, end):
+    xml = migration_xml(account="U2").replace('fromDate="20260101"', f'fromDate="{start}"').replace(
+        'toDate="20260131"', f'toDate="{end}"')
+    result = migration_run(case, extra=[("other", "U2", xml)])
+    assert not result["replacements"]
+    assert result["selection_proof"]["missing_windows"] == ["U2"]
+    assert result["pending"] == ["incomplete-window"]
+    assert result["events"][0]["status"] == "incomplete-window"
+    assert result["rows"][0]["status"] == "incomplete-window"
+
+
+@pytest.mark.parametrize("second_start,complete", [("20260116", True), ("20260115", True),
+                                                    ("20260117", False)])
+def test_v2_migration_selection_adjacent_and_gapped_windows(case, second_start, complete):
+    first = migration_xml(account="U2").replace('toDate="20260131"', 'toDate="20260115"')
+    second = migration_xml(account="U2").replace('fromDate="20260101"', f'fromDate="{second_start}"')
+    result = migration_run(case, extra=[("a", "U2", first), ("b", "U2", second)])
+    assert result["selection_proof"]["equal"] is complete
+    assert bool(result["replacements"]) is complete
+
+
+def test_v2_migration_selection_empty_report_is_window_evidence(case):
+    result = migration_run(case, extra=[("empty", "U2", migration_xml(account="U2"))])
+    assert result["selection_proof"]["equal"] is True
+    assert len(result["selection_proof"]["before"]["queries"]) == 2
+    assert len(result["replacements"]) == 1
+
+
+def test_v2_migration_selection_manual_and_partial_decisions(case):
+    result = migration_run(case, rows=[migration_row(),
+        migration_row(id="manual", comment=None, quantity=2),
+        migration_row(id="partial", comment="IBKR#v2#U1:DIVIDEND:A", type="DIVIDEND")],
+        trades=[migration_trade(), migration_trade(tradeID="manual-buy", quantity="2")],
+        cash=[migration_cash(), migration_cash("B")],
+        accruals=[migration_accrual(), migration_accrual("B")])
+    proof = result["selection_proof"]
+    assert proof["equal"] is True
+    query, = proof["before"]["queries"]
+    assert query["selected"] == [] and query["ok"] is False
+    assert query["holdings"]["manual_trade_ids"] == [["U1", "manual-buy"]]
+    assert query["holdings"]["prepared"] and not query["holdings"]["kept"]
+
+
+def test_v2_migration_selection_query_order_and_simulated_acceptance(case):
+    # Same destination, different source IDs: the second query must see the
+    # first query's proposed BUY before its SELL passes the holdings gate.
+    case[1]["accounts"]["U2"] = "dest"
+    result = migration_run(case, rows=[], trades=[migration_trade(quantity="2")], extra=[(
+        "second", "U2", migration_xml([migration_trade(accountId="U2", tradeID="sell",
+                                  buySell="SELL", quantity="-2")], account="U2"))])
+    queries = result["selection_proof"]["before"]["queries"]
+    assert [q["source_account"] for q in queries] == ["U1", "U2"]
+    assert [a["type"] for q in queries for a in q["selected"]] == ["BUY", "SELL"]
+    assert queries[1]["holdings_before"][0]["quantity"] == 2
+    assert queries[1]["holdings_after"][0]["quantity"] == 0
+    root, config, save, inputs, *_ = case
+    config["replay_order"].reverse()
+    save()
+    migration.preview(inputs, root / "reverse")
+    reverse = json.loads((root / "reverse/manifest.json").read_text())
+    first, second = reverse["selection_proof"]["before"]["queries"]
+    assert first["selected"] == []
+    assert second["selected"][0]["type"] == "BUY"
+    assert reverse["bindings"]["inputs"] != result["bindings"]["inputs"]
+
+
+@pytest.mark.parametrize("order", [None, [], ["unknown"], ["report-1", "report-1"], {"report-1": 1}])
+def test_v2_migration_selection_invalid_query_order(case, order):
+    root, config, save, inputs, *_ = case
+    config["replay_order"] = order
+    save()
+    with pytest.raises(RuntimeError, match="Replay order"):
+        migration.preview(inputs, root / "bad-order")
+    assert not (root / "bad-order").exists()
+
+
+def test_v2_migration_selection_binds_ordered_rows_and_implementation(case):
+    result = migration_run(case, rows=[migration_row(id="z"),
+        migration_row(id="a", comment=None, type="DIVIDEND")])
+    assert [r["id"] for r in result["ordered_row_fingerprints"]] == ["z", "a"]
+    replaced, untouched = result["ordered_row_fingerprints"]
+    assert replaced["before"] != replaced["after"]
+    assert untouched["before"] == untouched["after"]
+    assert result["snapshot"]["destination_version"] == "3.86.0"
+    assert result["snapshot"]["destination_image"].startswith("sha256:")
+    assert result["bindings"]["inventory"] and result["bindings"]["mapping"]
+    for path, sha in result["implementation"].items():
+        assert digest((Path(migration.__file__).parent / path).read_bytes()) == sha
+
+
+@pytest.mark.parametrize("field", ["quantity", "fee", "symbol", "holdings"])
+def test_v2_migration_selection_rejects_equal_counts_with_changed_values(case, monkeypatch, field):
+    config = case[1]
+    calls = []
+
+    def replay(*args):
+        payload = {"quantity": 1, "fee": 0, "symbol": "TEST", "holdings": 1}
+        if calls:
+            payload[field] = 2 if field != "symbol" else "OTHER"
+        calls.append(True)
+        return {"selected": [payload]}
+
+    monkeypatch.setattr(migration, "replay_selection", replay)
+    proof = migration.prove_selection({"report-1": ("U1", migration_xml())}, [], config, [])
+    assert proof["equal"] is False
+    assert len(proof["before"]["selected"]) == len(proof["after"]["selected"])
+    assert proof["before_sha256"] != proof["after_sha256"]
+
+
+def test_v2_migration_selection_clock_is_capture_bound(case):
+    result = migration_run(case, trades=[migration_trade(), migration_trade(
+        tradeID="after-capture", dateTime="20260120;120000")])
+    proof = result["selection_proof"]
+    assert proof["equal"] is True
+    assert proof["clock"] == "2026-01-11T00:00:00Z"
+    query, = proof["before"]["queries"]
+    assert query["selected"] == [] and query["ok"] is False
+
+
+@pytest.mark.parametrize("change", ["mapping", "inventory", "timezone", "tool", "image", "version", "clock"])
+def test_v2_migration_selection_configuration_invalidates_manifest(case, change):
+    migration_run(case)
+    root, config, save, inputs, *_ = case
+    previous = (root / "preview/manifest.sha256").read_text().strip()
+    if change == "mapping":
+        config["symbol_mapping"]["US-TEST"] = "OTHER"
+    elif change == "inventory":
+        config["accounts"]["U1"] = "other-destination"
+    elif change == "timezone":
+        config["timezone"] = "UTC"
+    elif change == "tool":
+        config["tool_commit"] = "c" * 40
+    elif change == "image":
+        config["snapshot"]["destination_image"] = "sha256:" + "c" * 64
+    elif change == "version":
+        config["snapshot"]["destination_version"] = "3.87.0"
+    else:
+        config["snapshot"]["captured_at"] = "2026-01-12T00:00:00Z"
+    save()
+    assert migration.preview(inputs, root / "changed-selection") != previous

@@ -19,15 +19,22 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from ghostfolio_ibkr_sync.app import (
+    record_accepted_activities,
+    select_account_activities,
+)
 from ghostfolio_ibkr_sync.ghostfolio import (
     activity_is_active,
     format_versioned_activity_identity,
+    index_existing_activities,
     parse_versioned_activity_identity,
 )
 from ghostfolio_ibkr_sync.ibkr import (
     DIVIDEND_CASH_TYPES,
     WITHHOLDING_CASH_TYPE,
     _dividend_cash_sum,
+    dividend_field_prerequisites,
+    flex_provenance_failures,
     historical_dividend_report_window,
     parse_cash_dividends,
     parse_ibkr_datetime,
@@ -42,7 +49,9 @@ from ghostfolio_ibkr_sync.sync import (
     dividend_positive_actions,
     minor_unit_conversion,
     partition_dividend_actions,
+    rejected_sell_symbols,
     resolve_symbol,
+    split_import_phases,
 )
 from identity_maintenance import (
     canonical_json,
@@ -412,6 +421,139 @@ def classify_history(reports: dict[str, tuple[str, str]], rows: list[dict[str, A
             "replacements": sorted(replacements, key=lambda r: r["id"])}
 
 
+def coverage_gaps(reports: dict[str, tuple[str, str]], config: dict[str, Any]) -> list[str]:
+    """Require continuous saved statement bounds for every declared account."""
+    gaps = []
+    start, end = [date.fromisoformat(day).toordinal() for day in config["window"]]
+    for account in sorted(config["accounts"]):
+        windows = [historical_dividend_report_window(xml) for source, xml in reports.values()
+                   if source == account]
+        require(all(bounds is not None for bounds in windows), "Missing statement bounds")
+        covered_until = start - 1
+        for low, high in sorted(bounds for bounds in windows if bounds is not None):
+            first, last = date.fromisoformat(low).toordinal(), date.fromisoformat(high).toordinal()
+            if first > covered_until + 1:
+                break
+            covered_until = max(covered_until, last)
+        if covered_until < end:
+            gaps.append(account)
+    return gaps
+
+
+def replay_selection(reports: dict[str, tuple[str, str]], rows: list[dict[str, Any]],
+                     config: dict[str, Any]) -> dict[str, Any]:
+    """Replay runtime selection and accepted-proposal holdings without I/O.
+
+    Use the snapshot clock instead of wall time. The declared report order is
+    the intended runtime query order. Each phase is fully accepted in isolated
+    simulation state, as in the normal dry run.
+    """
+    trade_ids, dividends, positions = index_existing_activities({"count": len(rows), "activities": rows})
+    captured = instant(config["snapshot"]["captured_at"])
+
+    def current(activity: Any) -> bool:
+        try:
+            return instant(activity["date"]) <= captured
+        except (RuntimeError, ValueError, KeyError, TypeError):
+            return False
+
+    def holdings() -> list[dict[str, Any]]:
+        return [{"account": account, "symbol": symbol, "quantity": quantity}
+                for (account, symbol), quantity in sorted(positions["qty"].items())]
+
+    result: dict[str, Any] = {"initial_holdings": holdings(), "queries": []}
+    for name in config["replay_order"]:
+        account, xml = reports[name]
+        destination = config["accounts"][account]
+        trace: dict[str, Any] = {}
+        item: dict[str, Any] = {"report": name, "source_account": account,
+                                "destination_account": destination, "holdings_before": holdings()}
+        prerequisites = dividend_field_prerequisites(xml)
+        provenance = flex_provenance_failures(xml)
+        if prerequisites or provenance:
+            item.update({"prerequisite_failures": prerequisites, "provenance_failures": provenance,
+                         "ok": False, "selected": [], "holdings": trace})
+        else:
+            activities, contexts, unmapped, ok = select_account_activities(
+                xml, account, destination, config["symbol_mapping"], trade_ids, dividends,
+                positions, date_is_current=current, holdings_trace=trace)
+            phases = []
+            for phase in split_import_phases(activities):
+                rejected = rejected_sell_symbols(phase, positions, destination) if (
+                    phase and phase[0]["type"] == "SELL") else set()
+                accepted = [a for a in phase if a["symbol"] not in rejected]
+                phases.append({"proposed": phase, "rejected_sell_symbols": sorted(rejected),
+                               "selected": accepted})
+                record_accepted_activities(accepted, positions, trade_ids, dividends, contexts)
+            item.update({"ok": ok and not any(p["rejected_sell_symbols"] for p in phases),
+                         "selected": [a for phase in phases for a in phase["selected"]],
+                         "phases": phases, "holdings": trace, "unmapped": unmapped})
+        item["holdings_after"] = holdings()
+        result["queries"].append(item)
+    result["final_holdings"] = holdings()
+    return result
+
+
+def prove_selection(reports: dict[str, tuple[str, str]], rows: list[dict[str, Any]],
+                    config: dict[str, Any], replacements: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compare complete payload and holdings decisions, never only counts."""
+    gaps = coverage_gaps(reports, config)
+    proof: dict[str, Any] = {"schema": "ibkr-selection-proof-v1", "equal": False,
+                             "missing_windows": gaps, "replay_order": config["replay_order"],
+                             "clock": config["snapshot"]["captured_at"]}
+    if gaps:
+        proof["reason"] = "incomplete-window"
+        return proof
+    changes = {replacement["id"]: replacement["new_comment"] for replacement in replacements}
+    after = [{**row, "comment": changes.get(row["id"], row["comment"])} for row in rows]
+    try:
+        before_selection = replay_selection(reports, rows, config)
+        after_selection = replay_selection(reports, after, config)
+        proof.update({"before": before_selection, "after": after_selection,
+                      "before_sha256": digest(canonical_json(before_selection)),
+                      "after_sha256": digest(canonical_json(after_selection)),
+                      "equal": canonical_json(before_selection) == canonical_json(after_selection)})
+        proof["reason"] = None if proof["equal"] else "selection-changed"
+    except (RuntimeError, ValueError, KeyError, TypeError, ArithmeticError) as error:
+        proof.update({"reason": "selection-unavailable", "error_type": type(error).__name__})
+    return proof
+
+
+def bind_selection(manifest: dict[str, Any], reports: dict[str, tuple[str, str]],
+                   rows: list[dict[str, Any]], config: dict[str, Any]) -> None:
+    planned = manifest["replacements"]
+    proof = prove_selection(reports, rows, config, planned)
+    proof["planned_replacements"] = planned
+    manifest["selection_proof"] = proof
+    if not proof["equal"]:
+        blocked = {r["id"] for r in planned}
+        for decision in [*manifest["events"], *manifest["rows"]]:
+            if decision["status"] == "eligible-replacement":
+                decision.update(status=proof["reason"], reason=proof["reason"], evidence_status="excluded")
+        manifest["replacements"] = []
+        manifest["pending"] = [proof["reason"]]
+        require(all(r["status"] != "eligible-replacement" for r in manifest["rows"]
+                    if r["id"] in blocked), "Incomplete blocked decisions")
+    else:
+        manifest["pending"] = []
+    manifest["counts"] = {
+        "source_events": dict(sorted(Counter(e["status"] for e in manifest["events"]).items())),
+        "historical_rows": dict(sorted(Counter(r["status"] for r in manifest["rows"]).items()))}
+    # Bind the actual implementation bytes as well as the declared checkout
+    # revision. No Git process or credential-bearing environment is needed.
+    root = Path(__file__).resolve().parent
+    paths = ["identity_migration.py", "identity_maintenance.py",
+             *[f"ghostfolio_ibkr_sync/{name}.py" for name in
+               ("app", "sync", "ghostfolio", "ibkr", "models")]]
+    manifest["implementation"] = {path: digest((root / path).read_bytes()) for path in paths}
+    approved = {replacement["id"]: replacement["new_comment"]
+                for replacement in manifest["replacements"]}
+    manifest["ordered_row_fingerprints"] = [
+        {"id": row["id"], "before": digest(canonical_json(row)),
+         "after": digest(canonical_json({**row, "comment": approved.get(row["id"], row["comment"])}))}
+        for row in rows]
+
+
 def preview(inputs: Path, output: Path) -> str:
     config_path = safe_path(inputs)
     config_bytes = config_path.read_bytes()
@@ -465,6 +607,10 @@ def preview(inputs: Path, output: Path) -> str:
         saved_reports[name] = account, xml
         covered.add(account)
     require(covered == accounts.keys(), "Inventory accounts lack saved reports")
+    order = config.get("replay_order")
+    require(isinstance(order, list) and all(isinstance(name, str) for name in order)
+            and len(order) == len(records) and set(order) == set(records),
+            "Replay order must contain each saved report exactly once")
     snapshot_ref = config.get("snapshot")
     snapshot = exact_json(read(snapshot_ref))
     validate_snapshot(snapshot, snapshot_ref)
@@ -472,7 +618,7 @@ def preview(inputs: Path, output: Path) -> str:
                      "mapping": digest(canonical_json(mapping)),
                      "inventory": digest(canonical_json(accounts))})
     manifest = {
-        "schema": "ibkr-migration-preview-v1", "stage": "exact-historical-eligibility",
+        "schema": "ibkr-migration-preview-v1", "stage": "complete-import-selection-proof",
         "actionable": False, "replacements": [],
         "pending": ["complete-import-selection-proof"],
         "bindings": bindings, "tool_commit": config["tool_commit"],
@@ -483,6 +629,10 @@ def preview(inputs: Path, output: Path) -> str:
                         "This evidence preview cannot authorize apply or rollback."],
     }
     manifest.update(classify_history(saved_reports, snapshot["activities"], config))
+    bind_selection(manifest, saved_reports, snapshot["activities"], config)
+    manifest["limitations"].append(
+        "Proof is invalid after configuration, inventory, window, tool, image or snapshot changes; "
+        "undeclared future accounts are outside this proof.")
     manifest["limitations"].append(
         "Historical deduplication does not certify event completeness or exact migration eligibility.")
     for path, data in captured.items():
