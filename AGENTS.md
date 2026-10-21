@@ -74,21 +74,17 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Git:** one branch and one PR per item. Merge only when CI is green AND
   CodeRabbit has finished its review of the head commit, or on the operator's
   explicit go. A PR that changes only `openspec/`, `docs/` or `*.md` needs CI
-  green only. Wait with `~/.agents/bin/pr-gate <n> --repo
-  flowcool/ghostfolio-ibkr-sync` (in Codex, inside one exec cell, see the global
-  runbook), never a `sleep` loop. Fix or answer each actionable comment;
-  a pushed fix needs a finished review again. Still open after a second round, or
-  timeout: leave the PR open, stop and report.
+  green only. Open the PR yourself, then run `~/.agents/bin/pr-ship <n> --repo
+  flowcool/ghostfolio-ibkr-sync --request-review-after 0` in one call (Claude: Bash
+  `timeout: 600000`; Codex: one exec cell, see the global runbook), never a
+  `sleep` loop. It waits, merges on `ready` and hands back any other verdict;
+  exit 2 means re-run. Fix or answer each actionable comment, then re-run;
+  a pushed fix needs a finished review again. Still open after a second round:
+  leave the PR open, stop and report.
 - **Docs:** README and user docs required by the spec only. No new plan, review
   or contract files.
-- **Subagents:** only on the operator's explicit request, except the PR lifecycle:
-  after the code is proven and pushed, one cheaper subagent without history
-  creates the PR, waits with `pr-gate`, answers minor comments, resolves threads,
-  writes the bead close note and merges when allowed. It never edits code and
-  returns only the verdict and the threads that need a code change (global
-  Delegation rule).
-  In Claude Code the implementing agent runs this lifecycle itself, without a
-  subagent: a nested PR subagent stops right after creating the PR.
+- **Subagents:** only on the operator's explicit request. The PR lifecycle uses
+  no subagent: the implementing agent runs `pr-ship` (global Delegation rule).
 - **Ask the operator only for:** an IBKR or Ghostfolio fact missing from the spec,
   a run against real services, a Ghostfolio write, a scope change. One question at
   a time, in plain French, with your recommended answer.
