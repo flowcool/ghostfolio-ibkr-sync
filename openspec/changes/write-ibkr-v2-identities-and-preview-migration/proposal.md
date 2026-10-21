@@ -2,20 +2,20 @@
 
 ## Why
 
-Legacy comments can collide across source accounts. A security/day dividend can also contain several events. The released rc.5 reader supports v2; writing and historical conversion need a separate approved contract.
+Legacy comments can collide across source accounts. A security/day dividend can also contain several events. The released rc.5 reader supports v2; writing and conversion need approval.
 
 ## What Changes
 
 - Write `IBKR#v2#<source-account>:TRADE:<tradeID>` for BUY/SELL and `IBKR#v2#<source-account>:DIVIDEND:<actionID>` for dividends.
-- **BREAKING:** Emit one dividend per proven action. Combine dividend and PIL portions of that action. Assign withholding from cash evidence, never by amount inference.
-- Keep every historical generation readable, with existing legacy precedence and partial-coverage protection.
-- Add an offline migration preview. Propose comment replacement only for exact, unique historical 1→1 matches. Keep aggregated, ambiguous, changed and unsupported rows untouched.
-- Specify separate explicit maintenance apply/rollback commands. Preview comes first. Actual conversion requires a reviewed manifest, proven API preservation and a separately authorized operation.
+- **BREAKING:** Require candidate Trade accountId to match the verified report account. Emit one dividend per proven action. Combine dividend and PIL portions of that action. Assign withholding from cash evidence, never by amount inference.
+- Keep every historical generation readable, with legacy precedence and partial-coverage protection. Require bounded operator recovery after partial acceptance and block detectable action-ID replacement conflicts.
+- Add an offline migration preview. Replace comments only for exact historical 1→1 matches. Keep aggregated, ambiguous, changed and unsupported rows untouched. Prove unchanged import selection across the complete configured source-account inventory.
+- Extend maintenance tooling outside the runtime image. Specify separate explicit maintenance apply/rollback commands. Preview comes first. Actual conversion requires a reviewed manifest, proven API preservation and a separately authorized operation.
 - Require evidence gates for source stability, destination limits, rollback and sibling compatibility before enabling writes.
 
 ### Flex scope
 
-Counts come from three saved captures; the delta spec identifies their hashes. Rebuild this inventory if inputs change.
+Three captures establish this inventory. Hashes are in the delta. Rebuild when inputs change.
 
 | Record / subtype | Observed rows | Scope |
 |---|---:|---|
@@ -36,8 +36,8 @@ Counts come from three saved captures; the delta spec identifies their hashes. R
 
 ## Impact
 
-Change `ibkr.py`, `sync.py`, `app.py`, identity/request helpers and offline tests during later implementation. Amend ADR 0002, README and upgrade guidance. Flag DEGIRO shared-helper propagation; keep its pin. Bourse Direct targets BD v3; its inspected runtime still uses v1/v2. No new common grammar or ADR is needed.
+Later implementation changes runtime helpers and offline tests. Amend ADR 0002, README and upgrade guidance. Flag DEGIRO shared-helper propagation; keep its pin. Bourse Direct targets BD v3; its inspected runtime still uses v1/v2. Retain the common grammar.
 
 ## Non-goals
 
-No automatic historical edits, row splitting, financial correction, deletion, account move, cash migration or sibling implementation. This proposal authorizes no runtime change, service call, migration, release or deployment. Implementation tasks await proposal approval. Writer release numbering is rc.6 or later, subject to availability.
+No automatic historical edits, row splitting, financial correction, deletion, account move, cash migration or sibling implementation. This scope authorizes artifacts only. Tasks follow approval. Target an unused rc.6 or later.
