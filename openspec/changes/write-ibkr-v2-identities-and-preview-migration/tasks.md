@@ -51,7 +51,7 @@ The release owner also requires a complete saved migration-input replay and all 
 
 ## 4. Offline historical migration preview
 
-- [ ] 4.1 Add an isolated deterministic migration preview. Provide the outside-image preview CLI using the shared pure rules and offline readers. Validate keyed YAML, exact JSON decimals, complete snapshot metadata and inventory/mapping/TZ inputs. Deny network and credential loading even with DRY_RUN=false. Reject existing outputs, overlaps and symlinks; write only a new 0700 directory with 0600 files. Document the runnable interface. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_migration_offline'`.
+- [x] 4.1 Add an isolated deterministic migration preview. Provide the outside-image preview CLI using the shared pure rules and offline readers. Validate keyed YAML, exact JSON decimals, complete snapshot metadata and inventory/mapping/TZ inputs. Deny network and credential loading even with DRY_RUN=false. Reject existing outputs, overlaps and symlinks; write only a new 0700 directory with 0600 files. Document the runnable interface. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_migration_offline'`.
   - Requirements: Offline historical identity migration preview.
   - Scenarios: Offline and deterministic boundary.
   - Files: `identity_migration.py (new); identity_maintenance.py; tests/test_identity_migration.py (new); docs/cleanup.md`.

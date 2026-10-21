@@ -269,4 +269,80 @@ reviewed preview and a new operation approval before further recovery. Reverting
 the tool does not undo imported activities. Never delete accepted actions as an
 automatic rollback. Retain an rc.5-or-newer reader after v2 history exists.
 
+
+## Offline historical identity evidence preview
+
+Run from the versioned checkout, outside the runtime image:
+
+```sh
+python identity_migration.py preview --inputs inputs.yaml --output new-review
+```
+
+This stage validates saved evidence and publishes a deterministic manifest. It
+has no network client and does not load runtime configuration or credentials.
+Inherited `DRY_RUN=false` does not enable writes. It never edits an activity or
+an input. Exact historical eligibility and the complete before/after import
+selection proof are pending separate implementation stages. The manifest has
+`actionable: false`, an empty replacement list and explicit pending gates. Do not
+use it to authorize conversion, apply or rollback.
+
+Use keyed YAML with unique string keys. Quote dates and numeric identifiers.
+Paths are relative to the YAML file. Absolute paths are also accepted. Hash each
+saved file with SHA-256. Use the exact checkout commit as `tool_commit`.
+The following example uses synthetic identifiers and placeholder hashes:
+
+```yaml
+schema: ibkr-migration-inputs-v1
+tool_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+timezone: Europe/Zurich
+window: ["2026-01-01", "2026-01-31"]
+inventory_complete: true
+accounts:
+  U1: destination-account
+symbol_mapping: {}
+reports:
+  january-U1:
+    path: report.xml
+    sha256: "<64 lowercase hexadecimal characters>"
+    source_account: U1
+snapshot:
+  path: snapshot.json
+  sha256: "<64 lowercase hexadecimal characters>"
+  count: 1
+  complete: true
+  unredacted: true
+  captured_at: "2026-02-01T00:00:00Z"
+  capture_ref: saved-full-capture
+  destination_version: "3.86.0"
+  destination_image: "sha256:<64 lowercase hexadecimal characters>"
+```
+
+Declare every configured source account that can import into this portfolio.
+Map each source account to its destination account. Supply at least one saved
+report per account. Each report must identify that account through
+`AccountInformation` and carry valid statement bounds. Bounds and the inventory
+declaration establish input scope; they do not prove complete event coverage.
+Use an IANA timezone and the same explicit symbol mapping as the intended replay.
+Changed mappings or any changed input bytes change the manifest hash.
+
+The complete snapshot is a JSON object with `activities` and `count`. Its count
+must equal both the activity list length and the declared snapshot count. Supply
+the saved original JSON numbers, not rounded floats or numeric strings. The tool
+reads quantity, unit price and fee as exact decimals. Each row needs a unique
+`id`, `comment`, `quantity`, `unitPrice`, `fee`, timezone-aware `date`, `type`,
+`accountId`, `currency`, boolean `isDraft`, `tags`, and `assetProfile` or
+`SymbolProfile`. Legitimate null comments, account assignments, currencies and
+profiles remain visible for later eligibility checks. Null financial numbers,
+missing context, duplicate JSON keys and non-finite numbers are refused. Preserve
+all original fields, including fields outside this minimum.
+
+The output parent must exist. The output path must be new. Inputs and outputs
+must have no symlink component and must not overlap. YAML aliases and duplicate
+keys are refused. The tool checks every captured input again before publication.
+It publishes `manifest.json` and `manifest.sha256` in a new directory with mode
+0700. Files have mode 0600. The manifest preserves row evidence and fingerprints;
+its exact decimals are strings. Equal input bytes produce equal output bytes and
+hashes. Existing outputs are never replaced. Keep these private outputs outside
+version control. A refused command exits nonzero and publishes no review.
+
 [Back to the README](../README.md)
