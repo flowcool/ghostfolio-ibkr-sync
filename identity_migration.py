@@ -127,7 +127,10 @@ def validate_snapshot(snapshot: Any, metadata: Any) -> None:
         for key in ("quantity", "unitPrice", "fee"):
             require(isinstance(row.get(key), Decimal) and row[key].is_finite(),
                     "Missing or redacted financial number")
-        require(text(row.get("type")) and type(row.get("isDraft")) is bool
+        # Ghostfolio 3.86.0 returns draft status in tags, without isDraft.
+        # Preserve native rows; validate an explicit flag if one is supplied.
+        require(text(row.get("type"))
+                and ("isDraft" not in row or type(row["isDraft"]) is bool)
                 and isinstance(row.get("tags"), list), "Incomplete activity context")
         # Null assignment/currency can be legitimate. Preserve it for exclusion
         # by the exact eligibility stage; never invent account or asset evidence.

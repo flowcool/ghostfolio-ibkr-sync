@@ -28,7 +28,7 @@ def case(tmp_path, monkeypatch):
     snapshot.write_text('{"count":1,"activities":[{"id":"row-1","comment":"IBKR#123",'
                         '"quantity":1.0000000000000000001,"unitPrice":2.3,"fee":0.01,'
                         '"date":"2026-01-10T12:00:00Z","type":"BUY","accountId":"dest",'
-                        '"currency":"USD","isDraft":false,"tags":[],"assetProfile":'
+                        '"currency":"USD","tags":[],"assetProfile":'
                         '{"symbol":"TEST","dataSource":"YAHOO","currency":"USD"}}]}')
     config = {
         "schema": "ibkr-migration-inputs-v1", "tool_commit": "a" * 40,
@@ -107,6 +107,7 @@ def test_v2_migration_offline_invalid_inputs(case, mutation):
 @pytest.mark.parametrize("field,value", [
     ("quantity", None), ("quantity", "1"), ("unitPrice", None), ("fee", None),
     ("comment", 1), ("id", ""), ("date", "2026-01-01"), ("isDraft", None),
+    ("isDraft", 0), ("isDraft", "false"),
     ("tags", None), ("assetProfile", "redacted"), ("currency", 42),
 ])
 def test_v2_migration_offline_redacted_snapshot(case, field, value):
@@ -259,7 +260,7 @@ def migration_xml(trades=(), cash=(), accruals=(), account="U1"):
 def migration_row(**changes):
     return {"id": "row-1", "comment": "IBKR#123", "quantity": 1, "unitPrice": 2.3,
             "fee": 0.01, "date": "2026-01-10T12:00:00Z", "type": "BUY", "accountId": "dest",
-            "currency": "USD", "isDraft": False, "tags": [],
+            "currency": "USD", "tags": [],
             "assetProfile": {"symbol": "TEST", "dataSource": "YAHOO", "currency": "USD"},
             **changes}
 
@@ -306,6 +307,20 @@ def test_v2_migration_preview_exact_trade(case):
     assert result["rows"][0]["fields"]["date"] == row["date"]
 
 
+@pytest.mark.parametrize("context", [{}, {"isDraft": False}])
+def test_v2_migration_offline_native_draft_context_preserves_rows(case, context):
+    # Native 3.86.0 GET rows have tags and no isDraft. No field is synthesized.
+    row = migration_row(**context)
+    result = migration_run(case, rows=[row])
+    assert len(result["replacements"]) == 1
+    assert result["selection_proof"]["equal"] is True
+    saved_row = exact_json(case[-1].read_bytes())["activities"][0]
+    manifest_row, = result["rows"]
+    assert ("isDraft" in manifest_row["fields"]) == ("isDraft" in context)
+    assert manifest_row["fingerprint"] == digest(migration.canonical_json(saved_row))
+    assert result["replacements"][0]["before_fingerprint"] == manifest_row["fingerprint"]
+
+
 def test_v2_release_compatibility_migration_keeps_sibling_and_new_v2_rows(case):
     rows = [migration_row(),
             migration_row(id="new-v2", comment="IBKR#v2#U1:TRADE:456"),
@@ -345,6 +360,8 @@ def test_v2_migration_preview_exact_differences(case, field, value, difference):
     {"isDraft": True}, {"isExcluded": True}, {"account": {"id": "dest", "isExcluded": True}},
     {"tags": [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}]},
     {"tags": [{"id": "f2e868af-8333-459f-b161-cbc6544c24bd"}]},
+    {"account": {"id": "dest", "tags": [{"id": "0c077abd-eca2-4cbb-818c-6cefbf2d169a"}]}},
+    {"account": {"id": "dest", "tags": [{"id": "f2e868af-8333-459f-b161-cbc6544c24bd"}]}},
     {"tags": ["malformed"]}, {"account": "malformed"},
 ])
 def test_v2_migration_preview_inactive(case, context):
