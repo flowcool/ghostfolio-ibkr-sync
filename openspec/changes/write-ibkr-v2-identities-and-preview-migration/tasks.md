@@ -25,7 +25,7 @@ The release owner also requires a complete saved migration-input replay and all 
 
 ## 2. Dividend quantities and cash partition
 
-- [ ] 2.1 Validate quantity separately for each cash action. Extract per-action quantity validation from the group-wide scalar validator. Keep cash as payment authority, exact Decimal associations, one unique matching Re and positive finite numeric conversion. Permit unequal quantities across distinct actions without summing quantities inside an action. Preserve zero/negative action and currency protections. Verify: `.venv/bin/python -m pytest -q tests -k 'dividend_structured_quantity or dividend_structured_numeric or v2_action_quantity'`.
+- [x] 2.1 Validate quantity separately for each cash action. Extract per-action quantity validation from the group-wide scalar validator. Keep cash as payment authority, exact Decimal associations, one unique matching Re and positive finite numeric conversion. Permit unequal quantities across distinct actions without summing quantities inside an action. Preserve zero/negative action and currency protections. Verify: `.venv/bin/python -m pytest -q tests -k 'dividend_structured_quantity or dividend_structured_numeric or v2_action_quantity'`.
   - Requirements: Flex selection and conversion.
   - Scenarios: Quantity association; Final numeric limits; Components and money.
   - Files: `ghostfolio_ibkr_sync/{sync,ibkr,models}.py; tests/{test_conversion,test_parsing}.py`.

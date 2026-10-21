@@ -424,6 +424,93 @@ def test_dividend_structured_numeric_decimal_conflict_between_components():
     assert sync.dividend_structured_quantity(dividend) is None
 
 
+@pytest.mark.parametrize("bonus_quantity", ["100", "37.125", "100.000000000000000000000001"])
+def test_v2_action_quantity_distinct_actions_and_split_pil(bonus_quantity):
+    payments = [structured_cash("20"), structured_cash("5", type_="Payment In Lieu Of Dividends"),
+                structured_cash("10", action="bonus"),
+                structured_cash("-4", type_="Withholding Tax", action="")]
+    evidence = [structured_accrual("100", grossAmount="999", tax="-999", rate="999"),
+                structured_accrual(bonus_quantity, action="bonus"),
+                structured_accrual("100.00", code="Po", date="20260701")]
+    for cash in permutations(payments):
+        for accruals in permutations(evidence):
+            [dividend] = structured_dividend(cash, accruals)
+            assert sync.dividend_action_quantities(dividend) == {
+                ("broker-account", "A1"): Decimal("100"),
+                ("broker-account", "bonus"): Decimal(bonus_quantity)}
+            assert dividend["gross"] == Decimal("35")
+            assert dividend["tax"] == -4
+
+
+@pytest.mark.parametrize("quantity", ["1e-400", "1e400", "0", "-1", "NaN", "Infinity", "invalid", ""])
+def test_v2_action_quantity_invalid_action_rejects_whole_group(quantity):
+    [dividend] = structured_dividend(
+        [structured_cash(), structured_cash("10", action="bonus")],
+        [structured_accrual(), structured_accrual(quantity, action="bonus")])
+    assert sync.dividend_action_quantities(dividend) is None
+
+
+@pytest.mark.parametrize("source", ["cash", "accrual"])
+@pytest.mark.parametrize("field", ["accountId", "conid", "currency", "actionID", "exDate"])
+def test_v2_action_quantity_missing_keys_reject(source, field):
+    payment = structured_cash(**{field: ""}) if source == "cash" else structured_cash()
+    accrual = structured_accrual(**{field: ""}) if source == "accrual" else structured_accrual()
+    [dividend] = structured_dividend([payment], [accrual])
+    assert sync.dividend_action_quantities(dividend) is None
+
+
+@pytest.mark.parametrize("override", [
+    {"accountId": "other"}, {"conid": "other"}, {"currency": "EUR"}, {"actionID": "other"},
+    {"exDate": "20260702"}, {"payDate": "20260716"},
+    {"date": "20260701", "reportDate": "20260720"}, {"code": "Po"},
+])
+def test_v2_action_quantity_wrong_association_or_reversal_rejects(override):
+    [dividend] = structured_dividend([structured_cash()], [structured_accrual(**override)])
+    assert sync.dividend_action_quantities(dividend) is None
+
+
+@pytest.mark.parametrize("extra", [
+    structured_accrual(), structured_accrual("100.000000000000000000000001", code="Po"),
+])
+def test_v2_action_quantity_multiple_re_or_exact_conflict_rejects(extra):
+    [dividend] = structured_dividend([structured_cash()], [structured_accrual(), extra])
+    assert sync.dividend_action_quantities(dividend) is None
+
+
+@pytest.mark.parametrize("field,value", [("conid", "2"), ("exDate", "20260702")])
+def test_v2_action_quantity_conflicting_payment_keys_reject(field, value):
+    [dividend] = structured_dividend([structured_cash(), structured_cash(**{field: value})],
+                                    [structured_accrual()])
+    assert sync.dividend_action_quantities(dividend) is None
+
+
+@pytest.mark.parametrize("negative", [False, True])
+def test_v2_action_quantity_zero_and_negative_actions(negative):
+    payments = [structured_cash(), structured_cash("5", action="cancelled"),
+                structured_cash("-6" if negative else "-5", action="cancelled")]
+    evidence = [structured_accrual(), structured_accrual("invalid", action="cancelled")]
+    for cash in permutations(payments):
+        [dividend] = structured_dividend(cash, evidence)
+        expected = None if negative else {("broker-account", "A1"): Decimal("100")}
+        assert sync.dividend_action_quantities(dividend) == expected
+    [cancelled] = structured_dividend(payments[1:], evidence[1:])
+    assert sync.dividend_action_quantities(cancelled) is None
+
+
+@pytest.mark.parametrize("type_", ["Dividends", "Withholding Tax"])
+def test_v2_action_quantity_mixed_currencies_reject(type_):
+    [dividend] = structured_dividend([structured_cash(), structured_cash("1", type_=type_, currency="EUR")],
+                                    [structured_accrual()])
+    assert sync.dividend_action_quantities(dividend) is None
+
+
+def test_v2_action_quantity_equal_action_ids_are_account_scoped():
+    [dividend] = structured_dividend([structured_cash(), structured_cash("5", accountId="second-account")],
+                                    [structured_accrual(), structured_accrual("3", accountId="second-account")])
+    assert sync.dividend_action_quantities(dividend) == {
+        ("broker-account", "A1"): Decimal("100"), ("second-account", "A1"): Decimal("3")}
+
+
 # --- parse_base_currency --------------------------------------------------
 
 def _info_xml(info):

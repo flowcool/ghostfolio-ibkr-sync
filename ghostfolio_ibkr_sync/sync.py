@@ -102,14 +102,16 @@ def resolve_symbol(isin: str | None, ibkr_symbol: str | None,
     return None
 
 
-def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -> Decimal | None:
-    """Return the common exact quantity for net-positive cash actions, or None.
+def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False
+                               ) -> dict[tuple[str, str], Decimal] | None:
+    """Return exact quantities keyed by source account/action for positive cash.
 
-    Match account/contract/currency/action/ex-date, then require one payment
-    reversal and agreement across all associated revisions and components.
-    Cash totals stay authoritative. Validation is separate from cash parsing.
+    Match account/contract/currency/action/ex-date and one payment reversal.
+    Revisions of each action must agree; distinct actions can differ. Never
+    sum quantities of payment/PIL portions. Cash remains payment authority.
+    Zero-net actions contribute no quantity. Any invalid action rejects all.
     """
-    def reject(reason: str) -> Decimal | None:
+    def reject(reason: str) -> dict[tuple[str, str], Decimal] | None:
         if not quiet:
             log.warning("Dividend %s %s: %s — not imported",
                         dividend["symbol"], dividend["date"], reason)
@@ -130,7 +132,7 @@ def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -
         if previous != key:
             return reject("conflicting payment association keys")
         actions[key].append(row)
-    common_quantity = None
+    action_quantities: dict[tuple[str, str], Decimal] = {}
     for key, payments in actions.items():
         net = _dividend_cash_sum(payments)
         if net is None:
@@ -158,11 +160,32 @@ def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -
         quantity = quantities[0]
         if any(other != quantity for other in quantities[1:]):
             return reject("contradictory structured quantities")
-        if common_quantity is not None and common_quantity != quantity:
-            return reject("contradictory component quantities")
-        common_quantity = quantity
-    if common_quantity is None:
+        # Keep exact agreement checks above the lossy numeric conversion.
+        assert quantity is not None
+        numeric_quantity = float(quantity)
+        if not isfinite(numeric_quantity) or numeric_quantity <= 0:
+            return reject("incompatible numeric quantity")
+        action_quantities[key[0], key[3]] = quantity
+    if not action_quantities:
         return reject("missing net-positive quantity evidence")
+    return action_quantities
+
+
+def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -> Decimal | None:
+    """Return the common quantity required by the historical group converter.
+
+    Keep the scalar compatibility boundary until conversion emits one activity
+    per action. Call dividend_action_quantities for independent action evidence.
+    """
+    quantities = dividend_action_quantities(dividend, quiet=quiet)
+    if quantities is None:
+        return None
+    common_quantity = next(iter(quantities.values()))
+    if any(quantity != common_quantity for quantity in quantities.values()):
+        if not quiet:
+            log.warning("Dividend %s %s: contradictory component quantities — not imported",
+                        dividend["symbol"], dividend["date"])
+        return None
     return common_quantity
 
 
