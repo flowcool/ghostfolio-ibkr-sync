@@ -18,7 +18,7 @@ The release owner also requires a complete saved migration-input replay and all 
   - Requirements: Versioned activity identity reader; Destination comment compatibility gates.
   - Scenarios: Write account-scoped identities; Comment boundaries.
   - Files: `ghostfolio_ibkr_sync/{ghostfolio,sync,ibkr,models,app}.py; tests/{test_ghostfolio,test_conversion,test_orchestration}.py; README.md; docs/ibkr-setup.md`.
-- [ ] 1.2 Keep accepted and manual state account-scoped. Update accepted state by parsed identity kind. Dividends never change holdings or the legacy-global trade set. Scope ephemeral manual matches by source account and show v2 manual-tag advice. Preserve accepted-subset and simulated-state boundaries, including omitted buys before sales. Amend ADR 0002 for this state behavior. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_accepted_state'`.
+- [x] 1.2 Keep accepted and manual state account-scoped. Update accepted state by parsed identity kind. Dividends never change holdings or the legacy-global trade set. Scope ephemeral manual matches by source account and show v2 manual-tag advice. Preserve accepted-subset and simulated-state boundaries, including omitted buys before sales. Amend ADR 0002 for this state behavior. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_accepted_state'`.
   - Requirements: Versioned activity identity reader.
   - Scenarios: Same-run accepted state.
   - Files: `ghostfolio_ibkr_sync/{app,sync,ghostfolio,models}.py; tests/{test_orchestration,test_filters,test_ghostfolio}.py; docs/adr/0002-comment-and-proximity-deduplication.md`.

@@ -24,8 +24,9 @@ def tr(tid, qty, date="20260801;100000", symbol="KO", isin=ISIN):
     return {"tradeID": tid, "symbol": symbol, "isin": isin, "quantity": str(qty), "dateTime": date}
 
 
-def gate(trades, pos, mapping=None, existing=()):
-    return sync.filter_trades_by_holdings(trades, pos, ACC, mapping or {}, set(existing))
+def gate(trades, pos, mapping=None, existing=(), source_account="U1"):
+    return sync.filter_trades_by_holdings(trades, pos, ACC, mapping or {}, set(existing),
+                                         source_account=source_account)
 
 
 def ids(trades):
@@ -178,7 +179,7 @@ def test_manual_buy_same_day_same_qty_is_not_reimported_and_warns(caplog):
     pos = positions(manual_buys={(ACC, "KO"): [["2026-08-01", 10.0]]})
     assert gate([tr("B1", 10)], pos) == []
     msg = " ".join(r.message for r in caplog.records if r.levelname == "WARNING")
-    assert "B1" in msg and "2026-08-01" in msg and "IBKR#B1" in msg
+    assert "B1" in msg and "2026-08-01" in msg and "IBKR#v2#U1:TRADE:B1" in msg
     assert pos["manual_buys"][(ACC, "KO")] == []         # entry consumed
 
 
@@ -334,3 +335,19 @@ def test_versioned_identity_reader_coverage_is_global_across_destination_account
     assert sync.dividend_dedup_decision(
         source, "different-destination-account", {}, index, set(),
     )[0] == "existing"
+
+
+@pytest.mark.parametrize("side", [1, -1])
+def test_v2_accepted_state_split_manual_fills_remain_source_scoped(side):
+    pos = positions(qty={(ACC, "KO"): 100},
+                    manual_buys={(ACC, "KO"): [["2026-08-01", 50.0]]} if side == 1 else {},
+                    manual_sells={(ACC, "KO"): [["2026-08-01", 50.0]]} if side == -1 else {})
+    trades = [tr("T1", side * 20), tr("T2", side * 30)]
+    legacy = {"OLD"}
+    assert sync.filter_trades_by_holdings(trades, pos, ACC, {}, legacy, source_account="U1") == []
+    assert legacy == {"OLD"}
+    assert pos["manual_trade_ids"] == {("U1", "T1"), ("U1", "T2")}
+    assert pos["versioned_identities"] == set()
+    assert gate(trades, pos, source_account="U1") == []
+    assert ids(gate(trades, pos, source_account="U2")) == ["T1", "T2"]
+    assert pos["qty"][(ACC, "KO")] == 100
