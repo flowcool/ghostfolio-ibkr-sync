@@ -234,13 +234,6 @@ def ghost_get_existing_orders(
     """
     url = f"{config['ghost_host']}/api/v1/activities"
     headers = ghost_headers(config["ghost_token"])
-    trade_ids = set()
-    dividend_comments = set()
-    positions: dict[str, Any] = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
-                 "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-                 "dividend_dates": defaultdict(list), "versioned_identities": set(),
-                 "versioned_dividend_context": defaultdict(list)}
-
     # One request without skip/take: Ghostfolio has no take cap (default
     # MAX_SAFE_INTEGER), so one call returns one consistent list, with no
     # offset drift if activities are added or deleted between pages.
@@ -259,7 +252,21 @@ def ghost_get_existing_orders(
                 exact_data = json.loads(wire, parse_float=Decimal, parse_int=Decimal)
             except (ValueError, UnicodeError, DecimalException):
                 pass  # The existing decoder below owns technical failures.
-    data = resp.json()
+    return index_existing_activities(resp.json(), dry_run=bool(config.get("dry_run")),
+                                     exact_data=exact_data)
+
+
+def index_existing_activities(data: dict[str, Any], *, dry_run: bool = False,
+                              exact_data: Any = None
+                              ) -> tuple[set[str], set[tuple[str, str]], dict[str, Any]]:
+    """Build runtime identity and holdings state without performing HTTP."""
+    trade_ids = set()
+    dividend_comments = set()
+    positions: dict[str, Any] = {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
+                 "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
+                 "dividend_dates": defaultdict(list), "versioned_identities": set(),
+                 "versioned_dividend_context": defaultdict(list)}
+
     activities = data.get("activities", [])
     total = data.get("count")
     if total != len(activities):
@@ -276,7 +283,7 @@ def ghost_get_existing_orders(
             "with the portfolio:read:values scope; refusing to sync without "
             "existing IBKR# IDs (duplicates risk)")
 
-    if config.get("dry_run"):
+    if dry_run:
         exact_rows: Any = exact_data.get("activities") if isinstance(exact_data, dict) else None
         exact_available = isinstance(exact_rows, list) and len(exact_rows) == len(activities)
         positions["dividend_evidence"] = []
@@ -323,7 +330,7 @@ def ghost_get_existing_orders(
                 dividend_context(profile, order.get("date")))
 
         active = activity_is_active(order)
-        if (config.get("dry_run") and order.get("type") == "DIVIDEND"
+        if (dry_run and order.get("type") == "DIVIDEND"
                 and not is_versioned_dividend):
             raw = exact_rows[index] if exact_available else None
             exact = (isinstance(raw, dict)

@@ -282,9 +282,9 @@ This stage validates saved evidence and publishes a deterministic manifest. It
 has no network client and does not load runtime configuration or credentials.
 Inherited `DRY_RUN=false` does not enable writes. It never edits an activity or
 an input. It classifies exact historical eligibility and lists proposed comment
-replacements. The complete before/after import selection proof remains pending.
-The manifest keeps `actionable: false` and the pending gate. Do not use it to
-authorize conversion, apply or rollback.
+replacements. It replays complete import selection before and after the proposed
+comment changes. The manifest keeps `actionable: false`: this offline proof does
+not authorize conversion, apply or rollback.
 
 Use keyed YAML with unique string keys. Quote dates and numeric identifiers.
 Paths are relative to the YAML file. Absolute paths are also accepted. Hash each
@@ -300,6 +300,7 @@ inventory_complete: true
 accounts:
   U1: destination-account
 symbol_mapping: {}
+replay_order: [january-U1]
 reports:
   january-U1:
     path: report.xml
@@ -322,6 +323,15 @@ Map each source account to its destination account. Supply at least one saved
 report per account. Each report must identify that account through
 `AccountInformation` and carry valid statement bounds. Bounds and the inventory
 declaration establish input scope; they do not prove complete event coverage.
+The union of saved statement bounds must cover every day of `window` for every
+configured source account. Adjacent and overlapping reports are allowed. A gap
+or short window blocks all proposed replacements. An account with no events still
+needs a saved report with complete window bounds. The inventory declaration alone
+cannot replace that report evidence.
+
+Set `replay_order` to the intended query order. List each saved report key exactly
+once. Shared simulated state advances across queries in this order, including
+queries that map to the same destination account.
 Use an IANA timezone and the same explicit symbol mapping as the intended replay.
 Changed mappings or any changed input bytes change the manifest hash.
 
@@ -389,8 +399,32 @@ with ordered IDs and before/after row fingerprints.
 
 Historical deduplication remains more permissive than migration eligibility.
 An exact historical comment can suppress an import without proving complete
-events or exact financial values. These eligibility results are provisional
-until complete import selection is replayed across the declared inventory and
-windows. No financial correction, split, insertion or deletion is proposed.
+events or exact financial values. The preview compares the full ordered payloads
+and holdings decisions across the declared inventory and windows. It uses the runtime identity reader, selection,
+manual matching, dividend coverage, holdings gates and accepted-state rules.
+Buys and dividends advance isolated simulation state before sales. The snapshot
+capture time supplies the replay clock. Input rows remain unchanged.
+
+`selection_proof` records both replays, their hashes, query order and capture
+clock. It compares payload fields and holdings decisions, not counts. A changed
+payload, newly exposed trade, changed sale decision or unavailable replay blocks
+all proposed replacements. This includes release of a legacy-global trade marker
+that previously suppressed another configured source account. Exclusions remain
+visible with `selection-changed`, `selection-unavailable` or `incomplete-window`.
+An equal replay clears the selection gate. It does not certify source event
+completeness, destination API preservation or authorization for maintenance.
+
+The manifest binds input hashes, source and destination account mapping, symbol
+mapping, windows, timezone, query order, tool commit, actual implementation file
+hashes and destination image/version. `ordered_row_fingerprints` preserves snapshot
+row order and before/after fingerprints, including unchanged rows. The existing
+`replacements` list stays ordered by activity ID.
+
+Any configuration, query order, account inventory, mapping, window, timezone,
+source file, snapshot, tool revision or destination image/version change
+invalidates this proof. Generate and review a new preview. Undeclared future
+accounts are outside the proof. A future account could reuse a historical trade
+ID; no lifetime or global uniqueness claim follows from this bounded replay.
+No financial correction, split, insertion or deletion is proposed.
 
 [Back to the README](../README.md)
