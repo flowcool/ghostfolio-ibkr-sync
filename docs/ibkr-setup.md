@@ -58,7 +58,7 @@
 
 **Trades (Execution):**
 
-Select these fields for a predictable report. The parser ignores additional attributes, but missing required values can cause trades to be skipped:
+Select these fields for a predictable report. **ClientAccountID** (`accountId`) and **TradeID** (`tradeID`) are mandatory for every selected trade. Its account must equal the configured account and Account Information evidence. A missing or mismatched account, unsafe identity or comment over 2000 ASCII characters fails the account before financial writes. CASH/OPT rows stay excluded. The parser ignores additional attributes:
 
 - ClientAccountID
 - CurrencyPrimary
@@ -80,6 +80,8 @@ Select these fields for a predictable report. The parser ignores additional attr
 - Quantity
 - TradeMoney
 - TradePrice
+
+New trade comments are `IBKR#v2#<source-account>:TRADE:<tradeID>`. The shared dividend format is `IBKR#v2#<source-account>:DIVIDEND:<actionID>`; action writing follows separately. Each segment permits only `[A-Za-z0-9._-]+`, without transformation or fallback. Historical comments remain readable. See the [conversion rules](../README.md#how-activities-are-converted) for limits and rollback requirements.
 
 **Cash Transactions:**
 

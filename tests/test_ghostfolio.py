@@ -625,3 +625,43 @@ def test_created_response_invalid_current_profile_cannot_use_legacy(monkeypatch,
     cfg = {**CFG, "_uncertain_import_accounts": set()}
     assert ghostfolio.ghost_import_activities(cfg, [candidate]) == ([], False)
     assert cfg["_uncertain_import_accounts"] == {"synthetic"}
+
+
+@pytest.mark.parametrize("kind", ["TRADE", "DIVIDEND"])
+@pytest.mark.parametrize("length", [1999, 2000, 2001])
+def test_v2_comment_limits_exact_ascii_boundary(kind, length):
+    source_id = "a" * (length - len(f"IBKR#v2#U1:{kind}:"))
+    comment = f"IBKR#v2#U1:{kind}:{source_id}"
+    activity_type = "BUY" if kind == "TRADE" else "DIVIDEND"
+    # Historical readers deliberately retain acceptance beyond the writer cap.
+    assert ghostfolio.parse_versioned_activity_identity(comment, activity_type) == ("U1", kind, source_id)
+    if length > 2000:
+        with pytest.raises(ghostfolio.InvalidActivityIdentityError):
+            ghostfolio.format_versioned_activity_identity("U1", kind, source_id)
+    else:
+        assert ghostfolio.format_versioned_activity_identity("U1", kind, source_id) == comment
+        assert len(comment.encode("ascii")) == length
+
+
+@pytest.mark.parametrize("kind", ["TRADE", "DIVIDEND"])
+@pytest.mark.parametrize("segment", ["", " a", "a ", "a b", "a\n", "a\t", "é", "a:b", "a#b", "a/b", "a+b"])
+@pytest.mark.parametrize("field", ["account", "id"])
+def test_v2_comment_limits_reject_unsafe_segments(kind, segment, field):
+    account, source_id = (segment, "ID") if field == "account" else ("U1", segment)
+    with pytest.raises(ghostfolio.InvalidActivityIdentityError):
+        ghostfolio.format_versioned_activity_identity(account, kind, source_id)
+
+
+@pytest.mark.parametrize("kind", ["TRADE", "DIVIDEND"])
+def test_v2_identity_writer_shared_format_is_account_scoped(kind):
+    a = ghostfolio.format_versioned_activity_identity("U1._-", kind, "ID._-09")
+    b = ghostfolio.format_versioned_activity_identity("U2", kind, "ID._-09")
+    assert a == f"IBKR#v2#U1._-:{kind}:ID._-09"
+    assert b == f"IBKR#v2#U2:{kind}:ID._-09"
+    assert a != b
+
+
+@pytest.mark.parametrize("kind", ["", "BUY", "trade", "DIVIDEND:ID"])
+def test_v2_identity_writer_rejects_unknown_kind(kind):
+    with pytest.raises(ghostfolio.InvalidActivityIdentityError):
+        ghostfolio.format_versioned_activity_identity("U1", kind, "ID")

@@ -24,11 +24,13 @@ from ghostfolio_ibkr_sync.diagnostics import (
 from ghostfolio_ibkr_sync.ghostfolio import (
     InvalidActivityIdentityError,
     activity_date_is_current,
+    format_versioned_activity_identity,
     ghost_exchange_access_token,
     ghost_find_account_id,
     ghost_get_existing_orders,
     ghost_import_activities,
     ghost_update_cash_balance,
+    parse_versioned_activity_identity,
 )
 from ghostfolio_ibkr_sync.ibkr import (
     SKIP_ASSET_CATEGORIES,
@@ -189,6 +191,18 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
     # CASH (FX conversions) and OPT are never imported; drop them before any gate
     trades = [t for t in trades if t.get("assetCategory", "") not in SKIP_ASSET_CATEGORIES]
 
+    # Validate the complete trade set before deduplication, holdings or any write.
+    # A bad later row must not allow earlier valid imports or independent cash.
+    try:
+        format_versioned_activity_identity(ibkr_account_id, "TRADE", "0")
+        for trade in trades:
+            if trade.get("accountId", "") != ibkr_account_id:
+                raise InvalidActivityIdentityError("Trade account differs from verified report account")
+            format_versioned_activity_identity(ibkr_account_id, "TRADE", trade.get("tradeID", ""))
+    except InvalidActivityIdentityError as exc:
+        log.error("Flex Query %s: %s; account failed before any financial write", query_id, exc)
+        return {}, False
+
     # Prepare actual import candidates before calculating their position impact.
     unmapped: Unmapped = {}
     prepared_trades: list[dict[str, Any]] = []
@@ -314,7 +328,13 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         imported, import_ok = ghost_import_activities(config, phase)
         for activity in imported:
             comment = activity["comment"]
-            if comment.startswith("IBKR#"):
+            identity = parse_versioned_activity_identity(comment, activity["type"])
+            if identity is not None:
+                positions["versioned_identities"].add((identity[0], comment))
+                if identity[1] == "TRADE":
+                    sign = -1.0 if activity["type"] == "SELL" else 1.0
+                    positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]
+            elif comment.startswith("IBKR#"):
                 existing_trade_ids.add(comment.split("#", 1)[1])
                 sign = -1.0 if activity["type"] == "SELL" else 1.0
                 positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]

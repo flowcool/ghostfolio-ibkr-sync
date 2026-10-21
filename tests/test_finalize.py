@@ -33,7 +33,7 @@ def env(monkeypatch):
 def positions():
     return {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
             "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-            "dividend_dates": defaultdict(list)}
+            "dividend_dates": defaultdict(list), "versioned_identities": set()}
 
 
 def spy_send(monkeypatch, status="sent"):
@@ -71,8 +71,7 @@ def bind_flex_report_to_query_account(monkeypatch, xml):
 
     def fetch(token, query_id):
         account_id = accounts_by_query[query_id]
-        return xml.replace('<AccountInformation accountId="U1"',
-                           f'<AccountInformation accountId="{account_id}"')
+        return xml.replace('accountId="U1"', f'accountId="{account_id}"')
 
     monkeypatch.setattr(app, "fetch_flex_report", fetch)
 

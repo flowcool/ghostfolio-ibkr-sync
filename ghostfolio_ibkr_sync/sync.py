@@ -16,6 +16,10 @@ from typing import Any, Literal, cast
 
 import yaml
 
+from ghostfolio_ibkr_sync.ghostfolio import (
+    InvalidActivityIdentityError,
+    format_versioned_activity_identity,
+)
 from ghostfolio_ibkr_sync.ibkr import (
     DIVIDEND_PAYMENT_KEYS,
     SKIP_ASSET_CATEGORIES,
@@ -214,6 +218,13 @@ def convert_trade_to_activity(trade: Mapping[str, str], ghost_account_id: str,
         log.debug("Skipping %s trade: %s", asset_category, trade.get("symbol", ""))
         return None
 
+    try:
+        comment = format_versioned_activity_identity(
+            trade.get("accountId", ""), "TRADE", trade.get("tradeID", ""))
+    except InvalidActivityIdentityError:
+        log.error("Unsafe trade identity; trade rejected")
+        return None
+
     isin = trade.get("isin", "")
     ibkr_symbol = trade.get("symbol", "")
     description = trade.get("description", "")
@@ -282,7 +293,7 @@ def convert_trade_to_activity(trade: Mapping[str, str], ghost_account_id: str,
 
     return {
         "accountId": ghost_account_id,
-        "comment": f"IBKR#{trade_id}",
+        "comment": comment,
         "currency": currency,
         "dataSource": "YAHOO",
         "date": iso_date,

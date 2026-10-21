@@ -7,7 +7,7 @@ ISIN = "US1912161007"
 
 
 def trade(**kw):
-    t = {"assetCategory": "STK", "isin": ISIN, "symbol": "KO", "tradeID": "T1", "currency": "USD",
+    t = {"accountId": "U1", "assetCategory": "STK", "isin": ISIN, "symbol": "KO", "tradeID": "T1", "currency": "USD",
          "buySell": "BUY", "quantity": "10", "tradePrice": "60.5", "ibCommission": "-1.2",
          "dateTime": "20260801;100000"}
     t.update(kw)
@@ -35,7 +35,7 @@ def div(**kw):
 def test_buy_trade_converts():
     unmapped = {}
     a = sync.convert_trade_to_activity(trade(), "acc", {ISIN: "KO"}, unmapped)
-    assert a == {"accountId": "acc", "comment": "IBKR#T1", "currency": "USD", "dataSource": "YAHOO",
+    assert a == {"accountId": "acc", "comment": "IBKR#v2#U1:TRADE:T1", "currency": "USD", "dataSource": "YAHOO",
                  "date": "2026-08-01T10:00:00+00:00", "fee": pytest.approx(1.2), "quantity": 10.0,
                  "symbol": "KO", "type": "BUY", "unitPrice": 60.5}
     assert unmapped == {}
@@ -227,3 +227,31 @@ def test_unknown_trade_side_conversion_keeps_buy_and_sell():
     buy = sync.convert_trade_to_activity(trade(buySell="BUY"), "acc", {}, {})
     sell = sync.convert_trade_to_activity(trade(buySell="SELL", quantity="-4"), "acc", {}, {})
     assert (buy["type"], sell["type"], sell["quantity"]) == ("BUY", "SELL", 4.0)
+
+
+@pytest.mark.parametrize("side,quantity", [("BUY", "10"), ("SELL", "-10")])
+def test_v2_identity_writer_trade_ignores_destination_remapping(side, quantity):
+    rows = [sync.convert_trade_to_activity(trade(accountId=source, buySell=side, quantity=quantity),
+                                           target, {}, {})
+            for source in ("U1", "U2") for target in ("destination-name", "different-uuid")]
+    assert [row["comment"] for row in rows] == [
+        "IBKR#v2#U1:TRADE:T1", "IBKR#v2#U1:TRADE:T1",
+        "IBKR#v2#U2:TRADE:T1", "IBKR#v2#U2:TRADE:T1"]
+    assert all(row["type"] == side and row["quantity"] == 10 and row["unitPrice"] == 60.5
+               and row["fee"] == 1.2 for row in rows)
+
+
+@pytest.mark.parametrize("length", [1999, 2000, 2001])
+def test_v2_comment_limits_trade_payload(length):
+    source_id = "a" * (length - len("IBKR#v2#U1:TRADE:"))
+    row = sync.convert_trade_to_activity(trade(tradeID=source_id), "target", {}, {})
+    if length > 2000:
+        assert row is None
+    else:
+        assert row["comment"] == f"IBKR#v2#U1:TRADE:{source_id}"
+
+
+@pytest.mark.parametrize("override", [{"accountId": ""}, {"accountId": " U1"},
+                                      {"tradeID": "a:b"}, {"tradeID": "é"}])
+def test_v2_identity_writer_conversion_never_falls_back(override):
+    assert sync.convert_trade_to_activity(trade(**override), "target", {}, {}) is None
