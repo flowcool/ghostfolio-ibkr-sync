@@ -964,7 +964,7 @@ def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch
     assert ok is True and ids == set() and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
 
 
-def test_v2_identity_writer_main_keeps_equal_ids_independent_across_accounts(env, monkeypatch):
+def test_v2_identity_writer_v2_accepted_state_main_keeps_equal_ids_independent_across_accounts(env, monkeypatch):
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
     imported = []
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
@@ -1044,14 +1044,15 @@ def test_conflicting_report_id_is_excluded_instead_of_arbitrarily_chosen(monkeyp
     assert w.activities == []
 
 
-def test_manual_match_trade_id_remembered_across_sequential_queries(monkeypatch):
+def test_v2_accepted_state_manual_match_remembered_across_sequential_queries(monkeypatch):
     pos = positions({(ACC, "KO"): 10})
     pos["manual_buys"][(ACC, "KO")].append(["2026-08-01", 10])
     w = World(monkeypatch, report(trade_xml("B")))
     w.run(pos=pos)
     w.run(ids=w.ids, pos=pos)
     assert w.activities == []
-    assert w.ids == {"B"}
+    assert w.ids == set()
+    assert pos["manual_trade_ids"] == {("U1", "B")}
     assert pos["qty"][(ACC, "KO")] == 10
 
 
@@ -1062,7 +1063,7 @@ def test_invalid_commission_buy_cannot_authorize_sell(monkeypatch, commission):
     assert w.activities == []
 
 
-def test_server_skipped_buy_cannot_authorize_sell_in_same_batch(monkeypatch):
+def test_v2_accepted_state_server_skipped_buy_cannot_authorize_sell_in_same_batch(monkeypatch):
     from types import SimpleNamespace
     w = World(monkeypatch, report(trade_xml("B") + trade_xml("S", "SELL", 15)))
     monkeypatch.setattr(app, "ghost_import_activities", original_import)
@@ -1074,6 +1075,7 @@ def test_server_skipped_buy_cannot_authorize_sell_in_same_batch(monkeypatch):
     assert [[a["comment"] for a in batch] for batch in sent] == [["IBKR#v2#U1:TRADE:B"]]
     assert w.ids == set()
     assert w.pos["qty"][(ACC, "KO")] == 10
+    assert w.pos["versioned_identities"] == set()
 
 
 def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
@@ -1092,7 +1094,7 @@ def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
     assert w.pos["qty"][(ACC, "KO")] == 10
 
 
-def test_short_import_acceptance_keeps_proven_buys_and_continues_safely(
+def test_v2_accepted_state_short_import_acceptance_keeps_proven_buys_and_continues_safely(
         env, caplog):
     from types import SimpleNamespace
 
@@ -1140,6 +1142,9 @@ def test_short_import_acceptance_keeps_proven_buys_and_continues_safely(
     ]
     assert shared_positions["qty"][("gf-A", "KO")] == 10
     assert shared_positions["qty"][("gf-B", "PEP")] == 10
+    assert shared_positions["versioned_identities"] == {
+        ("U1", "IBKR#v2#U1:TRADE:B1"), ("U2", "IBKR#v2#U2:TRADE:LATER"),
+    }
     assert cash == ["gf-A", "gf-B"]
     assert "IBKR#v2#U1:TRADE:B2" in caplog.text
     assert "inspect Ghostfolio before rerun" in caplog.text
@@ -1709,3 +1714,154 @@ def test_v2_identity_writer_repeated_source_report_does_not_reimport(monkeypatch
     assert w.run(ids=w.ids, comments=w.comments, pos=w.pos)[1] is True
     assert w.activities == []
     assert w.pos["qty"][(ACC, "KO")] == 10
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_v2_accepted_state_manual_match_does_not_suppress_another_source(
+        monkeypatch, caplog, side):
+    pos = positions({(ACC, "KO"): 30})
+    pos["manual_buys" if side == "BUY" else "manual_sells"][(ACC, "KO")].append(
+        ["2026-08-01", 10])
+    ids = set()
+    w = World(monkeypatch, report(trade_xml("T1", side)))
+    assert w.run(ids=ids, pos=pos)[1] is True
+    assert w.run(ids=ids, pos=pos)[1] is True
+    assert w.activities == []
+    assert pos["manual_trade_ids"] == {("U1", "T1")}
+    assert pos["versioned_identities"] == set() and ids == set()
+    assert pos["qty"][(ACC, "KO")] == 30
+    if side == "BUY":
+        assert "set that entry's comment to IBKR#v2#U1:TRADE:T1" in caplog.text
+    monkeypatch.setattr(app, "fetch_flex_report", w._fetch(
+        report(trade_xml("T1", side), source_account="U2")))
+    assert w.run(ids=ids, pos=pos, source_account="U2")[1] is True
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U2:TRADE:T1"]
+    assert pos["qty"][(ACC, "KO")] == (40 if side == "BUY" else 20)
+    assert pos["versioned_identities"] == {("U2", "IBKR#v2#U2:TRADE:T1")}
+    assert ids == set()
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_v2_accepted_state_dividend_never_backs_a_sale_or_marks_a_trade(
+        monkeypatch, accepted):
+    from types import SimpleNamespace
+
+    dividend = div_xml().replace('accountId="broker-account"', 'accountId="U1"')
+    dividend = dividend.replace('actionID="A1"', 'actionID="T1"')
+    w = World(monkeypatch, report(divs=dividend))
+    convert = app.convert_dividend_to_activity
+
+    def versioned_dividend(*args):
+        # Exercise future v2 payloads without implementing the action writer.
+        activity = convert(*args)
+        return {**activity, "comment": "IBKR#v2#U1:DIVIDEND:T1"}
+
+    monkeypatch.setattr(app, "convert_dividend_to_activity", versioned_dividend)
+    monkeypatch.setattr(app, "ghost_import_activities", original_import)
+    sent = []
+
+    def post(*args, **kwargs):
+        batch = kwargs["json"]["activities"]
+        sent.append(batch)
+        rows = [{**a, "id": "created-" + a["comment"],
+                 "assetProfile": {"symbol": a["symbol"], "dataSource": a["dataSource"]}}
+                for a in batch] if accepted else []
+        return SimpleNamespace(status_code=201, text="", json=lambda: {"activities": rows})
+
+    monkeypatch.setattr(requests, "post", post)
+    assert w.run()[1] is accepted
+    pos, ids, comments = w.pos, w.ids, w.comments
+    assert dict(pos["qty"]) == {} and ids == set() and comments == set()
+    assert pos["versioned_identities"] == (
+        {("U1", "IBKR#v2#U1:DIVIDEND:T1")} if accepted else set())
+    assert dict(pos["dividend_dates"]) == {}
+
+    if accepted:
+        assert w.run(ids=ids, comments=comments, pos=pos)[1] is True
+        assert len(sent) == 1  # accepted v2 dividend suppresses the repeated query
+
+    # A dividend quantity cannot fund a sale, even with the same source ID.
+    monkeypatch.setattr(app, "fetch_flex_report", w._fetch(report(trade_xml("S", "SELL"))))
+    assert w.run(ids=ids, comments=comments, pos=pos)[1] is True
+    assert len(sent) == 1
+    # Nor can a dividend suppress a BUY with that source ID.
+    monkeypatch.setattr(app, "fetch_flex_report", w._fetch(report(trade_xml("T1"))))
+    assert w.run(ids=ids, comments=comments, pos=pos)[1] is accepted
+    assert sent[-1][0]["comment"] == "IBKR#v2#U1:TRADE:T1"
+    assert ids == set()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_v2_accepted_state_repeated_queries_and_simulation_boundary(env, dry_run):
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    env.setenv("DRY_RUN", str(dry_run).lower())
+    env.setenv("IBKR_ACCOUNT_IDS", "U1,U1,U2")
+    env.setenv("IBKR_QUERY_IDS", "q1,q1,q2")
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,A-repeat,B")
+    env.setattr(app, "load_mapping", lambda path: {})
+    ids, comments, pos = set(), set(), positions()
+    snapshot = deepcopy((ids, comments, pos))
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
+    env.setattr(app, "ghost_find_account_id", lambda *args: ACC)
+    env.setattr(app, "fetch_flex_report", lambda token, qid:
+                report(trade_xml("B") + trade_xml("S", "SELL", 4),
+                       source_account="U1" if qid == "q1" else "U2"))
+    env.setattr(app, "ghost_update_cash_balance", lambda *args: True)
+    posted = []
+
+    def post(*args, **kwargs):
+        assert not dry_run
+        batch = kwargs["json"]["activities"]
+        posted.append(batch)
+        rows = [{**a, "id": "created-" + a["comment"],
+                 "assetProfile": {"symbol": a["symbol"], "dataSource": a["dataSource"]}}
+                for a in batch]
+        return SimpleNamespace(status_code=201, text="", json=lambda: {"activities": rows})
+
+    env.setattr(requests, "post", post)
+    simulated = []
+    process = app.process_account
+
+    def track(*args):
+        result = process(*args)
+        simulated.append(deepcopy(args[-1]))
+        return result
+
+    env.setattr(app, "process_account", track)
+    assert app.main() == 0
+    expected = {(source, f"IBKR#v2#{source}:TRADE:{tid}")
+                for source in ("U1", "U2") for tid in ("B", "S")}
+    assert simulated[-1]["versioned_identities"] == expected
+    assert simulated[-1]["qty"][(ACC, "KO")] == 12
+    assert simulated[0] == simulated[1]  # repeated source query changes nothing
+    assert ids == set() and comments == set()
+    if dry_run:
+        assert posted == []
+        assert (ids, comments, pos) == snapshot
+    else:
+        assert pos["versioned_identities"] == expected
+        assert [[a["comment"] for a in batch] for batch in posted] == [
+            [f"IBKR#v2#{source}:TRADE:{tid}"] for source in ("U1", "U2") for tid in ("B", "S")]
+
+
+
+def test_v2_accepted_state_simulated_manual_match_preserves_snapshot(env, caplog):
+    from copy import deepcopy
+
+    env.setenv("DRY_RUN", "true")
+    env.setenv("IBKR_ACCOUNT_IDS", "U1")
+    env.setenv("IBKR_QUERY_IDS", "q1")
+    ids, comments, pos = set(), set(), positions({(ACC, "KO"): 10})
+    pos["manual_buys"][(ACC, "KO")].append(["2026-08-01", 10])
+    snapshot = deepcopy((ids, comments, pos))
+    env.setattr(app, "load_mapping", lambda path: {})
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
+    env.setattr(app, "ghost_find_account_id", lambda *args: ACC)
+    env.setattr(app, "fetch_flex_report", lambda *args: report(trade_xml("B")))
+    env.setattr(app, "ghost_update_cash_balance", lambda *args: True)
+    env.setattr(requests, "post", lambda *args, **kwargs: pytest.fail("simulation sent POST"))
+    assert app.main() == 0
+    assert "IBKR#v2#U1:TRADE:B" in caplog.text
+    assert (ids, comments, pos) == snapshot

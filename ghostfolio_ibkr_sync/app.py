@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from copy import deepcopy
 from math import ceil, isfinite
 from typing import Any, cast
 
@@ -246,7 +247,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                                 "_activity": activity, "_unmapped": trade_unmapped})
 
     trades = filter_trades_by_holdings(prepared_trades, positions, ghost_account_id, mapping,
-                                      existing_trade_ids)
+                                      existing_trade_ids, source_account=ibkr_account_id)
     activities: list[Activity] = []
     for kept in trades:
         activities.append(kept["_activity"])
@@ -326,6 +327,8 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         if not phase:
             continue
         imported, import_ok = ghost_import_activities(config, phase)
+        # Only accepted rows (or proposals in isolated simulation state) advance
+        # the run. DIVIDEND identities must never act as trade IDs or holdings.
         for activity in imported:
             comment = activity["comment"]
             identity = parse_versioned_activity_identity(comment, activity["type"])
@@ -476,6 +479,12 @@ def run_sync(outcome: RunOutcome) -> int:
     all_unmapped = {}
     failed_accounts = []
     outcome["accounts_total"] = len(account_ids)
+
+    if config.get("dry_run"):
+        # Share proposals across simulated queries without changing the snapshot.
+        existing_trade_ids = existing_trade_ids.copy()
+        existing_dividend_comments = existing_dividend_comments.copy()
+        positions = deepcopy(positions)
 
     for ordinal, (ibkr_id, qid, gf_name) in enumerate(zip(account_ids, query_ids, account_names), 1):  # noqa: B905
         # process_account handles the failures it expects; an unforeseen error in one

@@ -448,7 +448,7 @@ def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]]
 
 def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions,
                               ghost_account_id: str, mapping: Mapping[str, str],
-                              existing_trade_ids: set[str]) -> list[dict[str, Any]]:
+                              existing_trade_ids: set[str], *, source_account: str) -> list[dict[str, Any]]:
     """Drop trades whose import would duplicate a manual entry or drive a
     Ghostfolio position negative.
 
@@ -459,12 +459,14 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
 
     Trades already entered by hand (same side and qty, +/-2 days, no IBKR#
     comment) are dropped first: silently for sells, with a WARNING for buys
-    (the user can add IBKR#<tradeID> to the manual comment to silence it).
+    (the user can set the manual comment to the proposed v2 identity).
+    Manual matches remain ephemeral and scoped to the verified source account.
     Grouping is by the ticker the trade will be imported under;
     a position held under another symbol with the same ISIN is not guessed at
     (the sell would land on the wrong symbol) — a mapping entry fixes it.
     """
     qty_by_symbol = positions["qty"]
+    manual_trade_ids: set[tuple[str, str]] = positions.setdefault("manual_trade_ids", set())
     manual_recorded: set[str] = set()   # sells already entered by hand
     manual_buys: set[str] = set()       # buys already entered by hand (always warned about)
     ambiguous = set()
@@ -490,7 +492,8 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
     # Chronological order so each IBKR trade claims its own manual entry first
     for trade in sorted(trades, key=lambda t: t.get("dateTime", "")):
         trade_id = trade.get("tradeID", "")
-        if not trade_id or trade_id in existing_trade_ids:
+        if (not trade_id or trade_id in existing_trade_ids
+                or (source_account, trade_id) in manual_trade_ids):
             continue
         isin = trade.get("isin", "")
         symbol = trade.get("symbol", "")
@@ -507,9 +510,10 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
                           trade_id, ticker)
             else:
                 log.warning("Not importing buy %s of %s (qty %.4g, %s): matches a manual Ghostfolio "
-                            "buy of %.4g on %s — set that entry's comment to IBKR#%s to silence "
+                            "buy of %.4g on %s — set that entry's comment to %s to silence "
                             "this", trade_id, ticker, abs(qty), trade.get("dateTime", ""),
-                            entry[1], entry[0], trade_id)
+                            entry[1], entry[0],
+                            format_versioned_activity_identity(source_account, "TRADE", trade_id))
             continue
         if result == "ambiguous":
             # Maybe one order split into several fills: retried as a daily sum below
@@ -573,9 +577,10 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
         log.info("Sells not imported: %d security(ies) with no Ghostfolio position, %d sell(s) "
                  "already entered manually — LOG_LEVEL=DEBUG for the list",
                  closed_elsewhere, len(manual_recorded))
-    existing_trade_ids.update(manual_recorded | manual_buys)
+    manual_trade_ids.update((source_account, tid) for tid in manual_recorded | manual_buys)
     return [t for t in trades
-            if t.get("tradeID", "") not in manual_recorded | manual_buys | ambiguous
+            if (source_account, t.get("tradeID", "")) not in manual_trade_ids
+            and t.get("tradeID", "") not in ambiguous
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 
@@ -705,6 +710,8 @@ def trade_id_decision(trade_id: str, source_account: str, conflicts: set[str],
     if trade_id in conflicts:
         return "conflict"
     if trade_id in existing_trade_ids:
+        return "existing"
+    if (source_account, trade_id) in positions.get("manual_trade_ids", set()):
         return "existing"
     versioned_comment = f"IBKR#v2#{source_account}:TRADE:{trade_id}"
     if (source_account, versioned_comment) in positions.get("versioned_identities", set()):

@@ -2,9 +2,10 @@
 
 Date: 2026-10-12. Status: accepted.
 
-The sync reads existing Ghostfolio activities once and skips trades whose
-`IBKR#<tradeID>` comment is already present; the trade-ID set is shared across
-accounts, not account-scoped. Trades without an ID are refused. Dividend
+The sync reads existing Ghostfolio activities once. Historical
+`IBKR#<tradeID>` comments suppress trades globally across accounts.
+New trades use `IBKR#v2#<source-account>:TRADE:<tradeID>` with the verified
+report account. Trades without an ID are refused. Dividend
 comments use `dividend#<ISIN>#<date>` (raw IBKR symbol when ISIN is absent), with
 account-scoped matching and support for older resolved-symbol comments.
 
@@ -20,7 +21,20 @@ globally by source account and exact comment, independent of the destination
 Ghostfolio account. A v2 trade identity suppresses only the matching source
 account and trade ID; the same trade ID from another source account remains a
 candidate. Legacy trade comments retain their global behavior. The reader does
-not write v2 identities.
+not change historical comments automatically.
+
+During a run, only proven accepted rows update import state. Accepted v2
+BUY/SELL rows update their identity index and destination holdings. Accepted v2
+DIVIDEND rows update only the v2 index. They never add holdings or legacy-global
+trade IDs. Omitted buys cannot authorize later sales. Accepted subsets remain
+recorded even when the account fails.
+
+Manual trade matches stay in a separate ephemeral `(source-account, tradeID)`
+set. Repeated queries for that source account skip the matched trade. Another
+source account with the same tradeID remains eligible. Manual matches never
+add legacy-global trade IDs or v2 accepted identities. Advice for a manual BUY
+shows its exact proposed v2 comment. Dry runs copy the loaded snapshot and
+share simulated state across queries; they do not change the loaded real state.
 
 To avoid duplicating manual or legacy dividends, an active YAHOO dividend of
 the same resolved symbol in the same destination account within inclusive
