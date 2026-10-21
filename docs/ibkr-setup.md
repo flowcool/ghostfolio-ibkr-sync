@@ -81,7 +81,7 @@ Select these fields for a predictable report. **ClientAccountID** (`accountId`) 
 - TradeMoney
 - TradePrice
 
-New trade comments are `IBKR#v2#<source-account>:TRADE:<tradeID>`. The shared dividend format is `IBKR#v2#<source-account>:DIVIDEND:<actionID>`; action writing follows separately. Each segment permits only `[A-Za-z0-9._-]+`, without transformation or fallback. Historical comments remain readable. See the [conversion rules](../README.md#how-activities-are-converted) for limits and rollback requirements.
+New trade comments are `IBKR#v2#<source-account>:TRADE:<tradeID>`. New dividend comments are `IBKR#v2#<source-account>:DIVIDEND:<actionID>`, one per proven action. Each segment permits only `[A-Za-z0-9._-]+`, without transformation or fallback. Historical comments remain readable. See the [conversion rules](../README.md#how-activities-are-converted) for limits and rollback requirements.
 
 **Cash Transactions:**
 
@@ -173,15 +173,18 @@ Required payment keys: a report where a payment attribute appears on no relevant
 - `actionID`: ActionID
 - `exDate`: Ex Date
 
-When the report has a relevant payment, dividend or withholding cash row, the `ChangeInDividendAccruals` section is also required. If it is absent, the account fails the same way. If it has rows, each of these attributes must appear on at least one of them: `accountId`, `conid`, `currency`, `actionID`, `exDate`, `quantity` (Quantity), `code` (Code), `date` (Date), `payDate` (Pay Date) and `reportDate` (Report Date). A present but empty section stays valid. Withholding rows keep their cash fields; they do not need accrual association keys.
+When the report has a relevant payment, dividend or withholding cash row, the `ChangeInDividendAccruals` section is also required. If it is absent, the account fails the same way. If it has rows, each of these attributes must appear on at least one of them: `accountId`, `conid`, `currency`, `actionID`, `exDate`, `quantity` (Quantity), `code` (Code), `date` (Date), `payDate` (Pay Date) and `reportDate` (Report Date). A present but empty section stays valid. Withholding rows do not need accrual fields such as quantity or code. For a new action write, every withholding/refund row must have nonempty `accountId`, `actionID`, `conid`, `currency` and a payment-day `dateTime` that match exactly one payment action. Its `exDate` may be absent or empty; a nonempty value must match. Do not allocate tax by description or amount. Withholding-only groups remain not payable and do not fail solely because tax is present.
 
-A single empty or malformed value does not fail the account. It rejects only the affected payment: present but empty values, missing evidence in a short report window, and conflicting quantities. Rejected payments are not marked imported and can retry after the query or report window is corrected. Empty sections without payments are valid. Unrelated rows do not block valid payments. Existing dividends are deduplicated before evidence checks and remain untouched and unverified.
+Missing quantity evidence in a short report window and invalid or conflicting accrual quantities reject the affected group with the existing local outcome. New action partition errors fail the account: incomplete or conflicting payment keys, negative-net actions, mixed currencies, or tax rows without a unique cash association. Every dividend action in that security/day group is withheld; trades, safe sales, independent cash and later accounts continue. Candidate payment account IDs must match the verified report account. Missing or unsafe account/action identities and oversized comments stop that account before any financial write. Rejected payments are not marked imported and can retry after the query or report window is corrected. Empty sections without payments are valid. Unrelated rows do not block valid payments. Existing dividends are deduplicated before evidence checks and remain untouched and unverified.
+
+Dividend and payment-in-lieu portions of one action use one proven quantity. Distinct ordinary/bonus actions can have different quantities and produce separate activities. Cash gross and signed tax are conserved before the fee is clamped per action. A refund on one action does not reduce the fee of another action. A zero-net action creates no activity; a remaining signed tax logs its action and amount for manual review. All actions in a security/day group are validated before dispatch. The server can still accept only a subset; the next run refuses partial coverage and requires separately approved recovery.
 
 Before upgrading, back up Ghostfolio with your deployment's backup procedure and
 record the previous image digest as described in [Releasing](releasing.md).
 Keep the existing ENV, credentials and mounted configuration files. Upgrade the
 image only after saving the enriched query. For runtime rollback, restore the
-previous image digest with the same ENV and mounts and recreate the connector.
+previous qualified image digest with the same ENV and mounts and recreate the connector.
+After any v2 activity exists, retain rc.5 or a newer qualified dual reader.
 The extra Flex fields can remain because the previous runtime ignores them;
 check its timestamp format requirements as described below.
 Runtime rollback does not restore financial data or undo written activities.

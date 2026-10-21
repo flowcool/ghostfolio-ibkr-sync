@@ -56,6 +56,7 @@ def report(trades="", divs="", cash="100.5", cash_section=True, base_currency="U
         if "accountId" not in row.attrib:
             row.set("accountId", source_account)
     trades = "".join(ET.tostring(row, encoding="unicode") for row in parsed_trades)
+    divs = divs.replace('accountId="broker-account"', f'accountId="{source_account}"')
     ct = f"<CashTransactions>{divs}</CashTransactions>" if cash_section else ""
     # Enrich existing fixtures; input compatibility scenarios belong to task 2.1.
     accruals = []
@@ -219,10 +220,11 @@ def test_successful_run_imports_and_records_trades_and_dividends(monkeypatch):
     w = World(monkeypatch, xml)
     unmapped, ok = w.run(pos=positions({(ACC, "PEP"): 10}))
     assert ok is True
-    assert sorted(a["comment"] for a in w.activities) == ["IBKR#v2#U1:TRADE:T1", "IBKR#v2#U1:TRADE:T2", f"dividend#{ISIN_KO}#2026-07-15"]
+    assert sorted(a["comment"] for a in w.activities) == ["IBKR#v2#U1:DIVIDEND:A1", "IBKR#v2#U1:TRADE:T1", "IBKR#v2#U1:TRADE:T2"]
     assert len(w.imported) == 2                                     # buys/dividends before sells
     assert w.ids == set()
-    assert w.comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}   # keyed by accountId
+    assert w.comments == set()
+    assert ("U1", "IBKR#v2#U1:DIVIDEND:A1") in w.pos["versioned_identities"]
     assert w.pos["qty"][(ACC, "KO")] == pytest.approx(10.0)
     assert w.pos["qty"][(ACC, "PEP")] == pytest.approx(6.0)         # 10 - 4
     assert w.pos["dividend_dates"][(ACC, "KO")] == []          # imported connector row stays out of the index
@@ -239,7 +241,8 @@ def test_v2_identity_writer_second_source_account_imports_same_trade_id(monkeypa
                         lambda *args: report(trade_xml("T1"), div_xml(), source_account="U2"))
     app.process_account(CFG, "U2", "q2", "IBKR", {}, w.ids, w.comments, w.pos)
     assert first == 2
-    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U2:TRADE:T1"]
+    assert [a["comment"] for a in w.activities] == [
+        "IBKR#v2#U2:TRADE:T1", "IBKR#v2#U2:DIVIDEND:A1"]
 
 
 def test_versioned_identity_reader_trade_dedup_is_applied_by_source_account(monkeypatch):
@@ -591,12 +594,12 @@ def test_versioned_identity_reader_partial_dividend_coverage_is_account_local(
     assert "1 of 2 account(s): U1" in caplog.text
 
 
-def test_versioned_identity_reader_invalid_actions_keep_local_rejection(monkeypatch, caplog):
+def test_v2_partition_isolation_invalid_actions_fail_account(monkeypatch, caplog):
     rows = (div_xml(amount="30")
             + div_xml(amount="-5").replace('actionID="A1"', 'actionID="A2"'))
     w = World(monkeypatch, report(trade_xml("SAFE-T"), rows))
-    a1 = ("broker-account", "IBKR#v2#broker-account:DIVIDEND:A1")
-    assert w.run(pos=positions(versioned_identities={a1}))[1] is True
+    a1 = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
+    assert w.run(pos=positions(versioned_identities={a1}))[1] is False
     assert [activity["type"] for activity in w.activities] == ["BUY"]
     assert w.cash_calls == [(ACC, 100.5)]
     assert "contradictory negative-net cash action" in caplog.text
@@ -961,7 +964,8 @@ def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch
     monkeypatch.setattr(ghostfolio, "requests", ReadOnlyHttp())
     ids, comments, pos = set(), set(), positions()
     _, ok = app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
-    assert ok is True and ids == set() and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
+    assert ok is True and ids == set() and comments == set()
+    assert ("U1", "IBKR#v2#U1:DIVIDEND:A1") in pos["versioned_identities"]
 
 
 def test_v2_identity_writer_v2_accepted_state_main_keeps_equal_ids_independent_across_accounts(env, monkeypatch):
@@ -1253,6 +1257,8 @@ def structured_input_xml(mode="valid", field="quantity"):
     # Distinct securities must have distinct broker contract/action identities.
     root.findall(".//CashTransaction")[1].set("conid", "2")
     section[1].set("conid", "2")
+    root.findall(".//CashTransaction")[1].set("actionID", "A2")
+    section[1].set("actionID", "A2")
     first = section[0]
     if mode == "old":
         root.find(".//FlexStatement").remove(section)
@@ -1282,11 +1288,9 @@ def structured_input_xml(mode="valid", field="quantity"):
 
 @pytest.mark.parametrize("mode,reason", [
     ("missing", "missing relevant accrual attributes"),
-    ("payment_missing", "missing payment attributes"),
 ])
 def test_dividend_structured_input_schema_blocks_account_only(monkeypatch, caplog, mode, reason):
-    field = "actionID" if mode == "payment_missing" else "quantity"
-    w = World(monkeypatch, structured_input_xml(mode, field))
+    w = World(monkeypatch, structured_input_xml(mode, "quantity"))
     assert w.run()[1] is True
     assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:INPUT-T"]
     assert w.comments == set() and dict(w.pos["dividend_dates"]) == {}
@@ -1305,7 +1309,6 @@ def test_dividend_structured_input_all_relevant_attributes_required(monkeypatch,
 @pytest.mark.parametrize("mode,field,reason", [
     ("blank", "quantity", "incompatible structured quantity"),
     ("blank", "actionID", "missing accrual association keys"),
-    ("payment_blank", "actionID", "missing payment association keys"),
     ("conflict", "quantity", "contradictory structured quantities"),
     ("short", "quantity", "missing or contradictory payment reversal evidence"),
 ])
@@ -1313,7 +1316,8 @@ def test_dividend_structured_input_local_rejection(monkeypatch, caplog, mode, fi
     w = World(monkeypatch, structured_input_xml(mode, field))
     assert w.run()[1] is True
     assert [a["type"] for a in w.activities] == ["BUY", "DIVIDEND"]
-    assert w.comments == {(ACC, f"dividend#{ISIN_PEP}#2026-07-15")}
+    assert w.comments == set()
+    assert ("U1", "IBKR#v2#U1:DIVIDEND:A2") in w.pos["versioned_identities"]
     assert w.cash_calls == [(ACC, 100.5)] and reason in caplog.text
 
 
@@ -1353,7 +1357,8 @@ def test_dividend_structured_input_empty_evidence_and_retry(monkeypatch, caplog)
     w.imported.clear()
     assert w.run(ids=ids, comments=comments, pos=pos)[1] is True
     assert [a["type"] for a in w.activities] == ["DIVIDEND", "DIVIDEND"]
-    assert len(w.comments) == 2
+    assert w.comments == set()
+    assert len(w.pos["versioned_identities"]) == 3
 
 
 @pytest.mark.parametrize("section", [True, False])
@@ -1370,7 +1375,8 @@ def test_dividend_structured_input_withholding_needs_no_accrual_keys(monkeypatch
     root = ET.fromstring(report(divs=div_xml()))
     ET.SubElement(root.find(".//CashTransactions"), "CashTransaction", {
         "type": "Withholding Tax", "amount": "-5", "dateTime": "20260715;120000 EST",
-        "isin": ISIN_KO, "symbol": "KO", "currency": "USD"})
+        "isin": ISIN_KO, "symbol": "KO", "currency": "USD",
+        "accountId": "U1", "conid": "1", "actionID": "A1"})
     w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
     assert w.run()[1] is True
     assert w.activities[0]["fee"] == 5
@@ -1593,13 +1599,17 @@ def test_dividend_field_prerequisites_complete_empty_and_no_cash_rows_pass(monke
     assert "required dividend fields missing" not in caplog.text
 
 
-def test_dividend_field_prerequisites_isolated_bad_row_keeps_local_rejection(monkeypatch, caplog):
+def test_v2_partition_isolation_missing_payment_key_keeps_prerequisite_check_local(monkeypatch, caplog):
     def mutate(root):
         root.findall(".//CashTransaction")[0].set("conid", "")
+        root.findall(".//CashTransaction")[1].set("actionID", "A2")
+        root.findall(".//ChangeInDividendAccrual")[1].set("actionID", "A2")
     xml = _prerequisite_xml(mutate, divs=div_xml() + div_xml(isin=ISIN_PEP, symbol="PEP"))
     assert ibkr.dividend_field_prerequisites(xml) == []
     w = World(monkeypatch, xml)
-    assert w.run()[1] is True
+    assert w.run()[1] is False
+    assert [a["type"] for a in w.activities] == ["BUY", "DIVIDEND"]
+    assert w.activities[-1]["symbol"] == "PEP" and w.cash_calls == [(ACC, 100.5)]
     assert "required dividend fields missing" not in caplog.text
 
 
@@ -1749,14 +1759,6 @@ def test_v2_accepted_state_dividend_never_backs_a_sale_or_marks_a_trade(
     dividend = div_xml().replace('accountId="broker-account"', 'accountId="U1"')
     dividend = dividend.replace('actionID="A1"', 'actionID="T1"')
     w = World(monkeypatch, report(divs=dividend))
-    convert = app.convert_dividend_to_activity
-
-    def versioned_dividend(*args):
-        # Exercise future v2 payloads without implementing the action writer.
-        activity = convert(*args)
-        return {**activity, "comment": "IBKR#v2#U1:DIVIDEND:T1"}
-
-    monkeypatch.setattr(app, "convert_dividend_to_activity", versioned_dividend)
     monkeypatch.setattr(app, "ghost_import_activities", original_import)
     sent = []
 
@@ -1865,3 +1867,100 @@ def test_v2_accepted_state_simulated_manual_match_preserves_snapshot(env, caplog
     assert app.main() == 0
     assert "IBKR#v2#U1:TRADE:B" in caplog.text
     assert (ids, comments, pos) == snapshot
+
+
+@pytest.mark.parametrize("mode", ["payment_blank", "payment_missing", "wrong_account", "unsafe", "too_long"])
+def test_v2_event_partition_identity_failure_precedes_every_financial_write(monkeypatch, mode):
+    root = ET.fromstring(structured_input_xml())
+    row = root.find(".//CashTransaction")
+    if mode == "payment_blank":
+        row.set("actionID", "")
+    elif mode == "payment_missing":
+        del row.attrib["actionID"]
+    elif mode == "wrong_account":
+        row.set("accountId", "U2")
+    else:
+        row.set("actionID", "bad:id" if mode == "unsafe" else "a" * 2000)
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    assert w.run()[1] is False
+    assert w.activities == [] and w.cash_calls == []
+    assert w.pos["versioned_identities"] == set()
+
+
+@pytest.mark.parametrize("failure", ["tax", "payment", "negative", "day", "security_key", "tax_security_key", "tax_day"])
+def test_v2_partition_isolation_safe_sales_cash_and_later_accounts_continue(env, caplog, failure):
+    env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
+    root = ET.fromstring(report(trade_xml("BUY") + trade_xml("SELL", "SELL", 4), div_xml()))
+    cash_section = root.find(".//CashTransactions")
+    if failure == "tax":
+        attrs = dict(cash_section[0].attrib, type="Withholding Tax", amount="-3")
+        del attrs["actionID"]
+    elif failure == "negative":
+        attrs = dict(cash_section[0].attrib, actionID="negative", amount="-1")
+    elif failure == "day":
+        attrs = dict(cash_section[0].attrib, dateTime="20260716;120000 EST")
+    elif failure == "security_key":
+        attrs = dict(cash_section[0].attrib, isin="")
+    elif failure == "tax_security_key":
+        attrs = dict(cash_section[0].attrib, type="Withholding Tax", amount="-3", isin="")
+    elif failure == "tax_day":
+        attrs = dict(cash_section[0].attrib, type="Withholding Tax", amount="-3",
+                     dateTime="20260716;120000 EST")
+    else:
+        attrs = dict(cash_section[0].attrib, conid="conflict")
+    ET.SubElement(cash_section, "CashTransaction", attrs)
+    reports = {"q1": ET.tostring(root, encoding="unicode"),
+               "q2": report(trade_xml("BUY"), div_xml(), source_account="U2")}
+    pos = positions({("gf-A", "KO"): 10})
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), pos))
+    env.setattr(app, "fetch_flex_report", lambda token, qid: reports[qid])
+    env.setattr(app, "ghost_find_account_id", lambda cfg, name: f"gf-{name}")
+    imported, cash = [], []
+    env.setattr(app, "ghost_import_activities",
+                lambda cfg, rows: imported.extend(rows) or (list(rows), True))
+    env.setattr(app, "ghost_update_cash_balance",
+                lambda cfg, account, balance, currency: cash.append(account) or True)
+    # Any accidental real service call fails locally.
+    env.setattr(requests, "get", lambda *a, **k: pytest.fail("unexpected HTTP GET"))
+    env.setattr(requests, "post", lambda *a, **k: pytest.fail("unexpected HTTP POST"))
+    env.setattr(requests, "put", lambda *a, **k: pytest.fail("unexpected HTTP PUT"))
+    assert app.main() == 1
+    assert [(a["accountId"], a["type"]) for a in imported] == [
+        ("gf-A", "BUY"), ("gf-A", "SELL"), ("gf-B", "BUY"), ("gf-B", "DIVIDEND")]
+    assert cash == ["gf-A", "gf-B"]
+    assert ("U1", "IBKR#v2#U1:DIVIDEND:A1") not in pos["versioned_identities"]
+    assert "1 of 2 account(s): U1" in caplog.text
+
+
+def test_v2_event_partition_prevalidates_all_actions_before_group_dispatch(monkeypatch):
+    root = ET.fromstring(report(divs=div_xml() + div_xml().replace('actionID="A1"', 'actionID="A2"')))
+    root.findall(".//ChangeInDividendAccrual")[1].set("quantity", "invalid")
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    assert w.run()[1] is True  # Existing quantity rejection keeps its local outcome.
+    assert w.activities == [] and w.pos["versioned_identities"] == set()
+    assert w.cash_calls == [(ACC, 100.5)]
+
+
+def test_v2_partition_isolation_tax_only_retains_not_payable_outcome(monkeypatch, caplog):
+    root = ET.fromstring(report(trade_xml("SAFE"), div_xml()))
+    row = root.find(".//CashTransaction")
+    row.set("type", "Withholding Tax")
+    row.set("amount", "-3")
+    row.set("actionID", "")
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    assert w.run()[1] is True
+    assert [a["type"] for a in w.activities] == ["BUY"]
+    assert w.cash_calls == [(ACC, 100.5)]
+    assert "without a dividend" in caplog.text
+
+
+def test_v2_event_partition_equal_actions_remain_independent_across_source_accounts(monkeypatch):
+    w = World(monkeypatch, report(divs=div_xml()))
+    assert w.run()[1] is True
+    first = dict(w.activities[0])
+    monkeypatch.setattr(app, "fetch_flex_report", w._fetch(report(divs=div_xml(), source_account="U2")))
+    assert w.run(ids=w.ids, comments=w.comments, pos=w.pos, source_account="U2")[1] is True
+    assert [a["comment"] for a in w.activities] == [
+        "IBKR#v2#U1:DIVIDEND:A1", "IBKR#v2#U2:DIVIDEND:A1"]
+    assert w.activities[0] == first and w.comments == set()
+    assert w.pos["qty"] == {} and len(w.pos["versioned_identities"]) == 2

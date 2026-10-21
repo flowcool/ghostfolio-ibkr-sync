@@ -172,10 +172,10 @@ def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False
 
 
 def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -> Decimal | None:
-    """Return the common quantity required by the historical group converter.
+    """Return the common quantity of the historical aggregate projection.
 
-    Keep the scalar compatibility boundary until conversion emits one activity
-    per action. Call dividend_action_quantities for independent action evidence.
+    The action writer calls this only after partitioning each action. Keep the
+    scalar helper for historical comparisons, never to combine new actions.
     """
     quantities = dividend_action_quantities(dividend, quiet=quiet)
     if quantities is None:
@@ -326,6 +326,113 @@ def convert_trade_to_activity(trade: Mapping[str, str], ghost_account_id: str,
         "type": activity_type,
         "unitPrice": unit_price,
     }
+
+
+def partition_dividend_actions(dividend: DividendGroup,
+                               report_dividends: Sequence[DividendGroup] = ()
+                               ) -> list[DividendGroup] | None:
+    """Partition cash exactly before quantity validation or fee clamping.
+
+    None means invalid cash ownership. Quantity/schema rejections remain a
+    separate boundary. Keep zero-net actions for cash accounting, not dispatch.
+    """
+    def reject(reason: str) -> list[DividendGroup] | None:
+        log.error("Dividend %s %s: %s — no action imported; account failed",
+                  dividend["symbol"], dividend["date"], reason)
+        return None
+
+    by_action: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    associations: dict[tuple[str, str], tuple[str, ...]] = {}
+    for row in dividend["payments"]:
+        key = tuple(row.get(field, "") for field in DIVIDEND_PAYMENT_KEYS)
+        if not all(key):
+            return reject("missing payment association keys")
+        action = key[0], key[3]
+        if associations.setdefault(action, key) != key:
+            return reject("conflicting payment association keys")
+        if _dividend_day(row.get("dateTime")) != dividend["date"]:
+            return reject("conflicting payment day")
+        by_action[action].append(row)
+
+    # Each action belongs to exactly one parsed security/day group.
+    # report_dividends retains the original parser objects, including dividend.
+    for group in report_dividends:
+        if group is dividend:
+            continue
+        if any((row.get("accountId", ""), row.get("actionID", "")) in associations
+               for row in group["cash_rows"]):
+            return reject("source action split across cash groups")
+
+    if len({row.get("currency", "") for row in dividend["cash_rows"]}) > 1:
+        return reject("contradictory cash currencies")
+    taxes: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    for row in dividend["cash_rows"]:
+        if row.get("type") != WITHHOLDING_CASH_TYPE:
+            continue
+        action = row.get("accountId", ""), row.get("actionID", "")
+        tax_key = associations.get(action)
+        if (tax_key is None or not all(row.get(field) for field in DIVIDEND_PAYMENT_KEYS[:-1])
+                or tuple(row.get(field, "") for field in DIVIDEND_PAYMENT_KEYS[:-1]) != tax_key[:-1]
+                or _dividend_day(row.get("dateTime")) != dividend["date"]
+                or (row.get("exDate") and row["exDate"] != tax_key[-1])):
+            return reject("missing or conflicting withholding association")
+        taxes[action].append(row)
+
+    parts: list[DividendGroup] = []
+    for action, payments in sorted(by_action.items()):
+        gross = _dividend_cash_sum(payments)
+        tax = _dividend_cash_sum(taxes[action])
+        if gross is None or tax is None:
+            return reject("incompatible numeric cash totals")
+        if gross < 0:
+            return reject("contradictory negative-net cash action")
+        parts.append({**dividend, "payments": payments,
+                      "cash_rows": payments + taxes[action], "gross": gross,
+                      "amount": float(gross), "tax": float(tax)})
+
+    # Exact source totals include zero-net actions and signed refunds.
+    for rows, projected_rows in (
+            (dividend["payments"], [row for part in parts for row in part["payments"]]),
+            (dividend["cash_rows"], [row for part in parts for row in part["cash_rows"]])):
+        source = _dividend_cash_sum(rows)
+        projected = _dividend_cash_sum(projected_rows)
+        if source is None or projected is None or source != projected:
+            return reject("cash partition does not conserve source totals")
+    return parts
+
+
+def convert_dividend_actions(dividend: DividendGroup, ghost_account_id: str,
+                             mapping: Mapping[str, str], unmapped: Unmapped,
+                             report_dividends: Sequence[DividendGroup] = ()
+                             ) -> tuple[list[Activity], bool]:
+    """Prepare the complete historical group; never expose a partial proposal.
+
+    The bool reports cash-partition validity only. Existing quantity/numeric
+    rejections keep their local outcome. The scalar converter below remains
+    the historical projection used to compare old financial values.
+    """
+    parts = partition_dividend_actions(dividend, report_dividends)
+    if parts is None:
+        return [], False
+    activities = []
+    for part in parts:
+        if part["gross"] == 0:
+            tax = _dividend_cash_sum([row for row in part["cash_rows"]
+                                      if row.get("type") == WITHHOLDING_CASH_TYPE])
+            if tax:
+                log.warning("Dividend %s %s: action %s nets to zero but carries signed "
+                            "withholding %s %s — not imported, check by hand",
+                            dividend["symbol"], dividend["date"],
+                            part["payments"][0]["actionID"], tax, dividend["currency"])
+            continue
+        activity = convert_dividend_to_activity(part, ghost_account_id, mapping, unmapped)
+        if activity is None:
+            return [], True
+        row = part["payments"][0]
+        activity["comment"] = format_versioned_activity_identity(
+            row["accountId"], "DIVIDEND", row["actionID"])
+        activities.append(activity)
+    return activities, True
 
 
 def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,

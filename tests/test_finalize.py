@@ -275,7 +275,9 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
         assert dividends == []
     else:
         # Local rejections keep the other security's valid payment importable.
-        assert len(dividends) == 1 and dividends[0]["symbol"] == "PEP"
+        assert len(dividends) == 3 and all(a["symbol"] == "PEP" for a in dividends)
+        assert {a["comment"] for a in dividends} == {
+            f"IBKR#v2#{account}:DIVIDEND:A2" for account in ("U111", "U222", "U333")}
 
 
 def test_dividend_structured_input_other_failures_still_notify(env):
