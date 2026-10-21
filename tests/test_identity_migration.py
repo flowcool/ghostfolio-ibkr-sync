@@ -760,3 +760,312 @@ def test_v2_migration_selection_configuration_invalidates_manifest(case, change)
         config["snapshot"]["captured_at"] = "2026-01-12T00:00:00Z"
     save()
     assert migration.preview(inputs, root / "changed-selection") != previous
+
+
+@pytest.fixture
+def apply_case(case, monkeypatch):
+    """A complete synthetic review, approval and stateful HTTP double."""
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    root, config, save, inputs, source, snapshot = case
+    rows = [migration_row(userId="owner", tags=[{"id": "tag-1", "name": "Keep"}]),
+            migration_row(id="row-2", comment="IBKR#456", userId="owner")]
+    migration_run(case, rows=rows, trades=[migration_trade(), migration_trade(tradeID="456")])
+    manifest = root / "preview/manifest.json"
+    manifest_hash = digest(manifest.read_bytes())
+    permit = {
+        "schema": "ibkr-migration-approval-v1", "host": "https://ghostfolio.example.test",
+        "manifest_sha256": manifest_hash, "destination_version": "3.86.0",
+        "destination_image": config["snapshot"]["destination_image"],
+        "operation_plan_ref": "synthetic-approved-plan", "backup_ref": "synthetic-backup",
+        "writer_exclusion_ref": "synthetic-exclusion", "settlement_ref": "synthetic-settlement",
+        "preservation_qualification_ref": "synthetic-G5-not-image-proof",
+        "pacing_qualification_ref": "synthetic-measurement-not-live-proof",
+        "owner_id": "owner", "writers_stopped": True, "requests_settled": True,
+        "write_count": 2, "batch_size": 1, "pause_seconds": 0.25,
+    }
+    approval = root / "approval.json"
+    journal = root / "apply.yaml"
+    state = SimpleNamespace(rows=deepcopy(rows), calls=[], puts=[], delays=[], gets=0,
+                            before_get=None, put_effect=None, status=200)
+
+    def get(url, **kwargs):
+        assert url == permit["host"] + "/api/v1/activities"
+        assert kwargs == {"headers": {"Authorization": "Bearer synthetic-token",
+                                     "Content-Type": "application/json"},
+                          "timeout": 60, "allow_redirects": False}
+        state.gets += 1
+        state.calls.append("get")
+        if state.before_get:
+            state.before_get()
+        return SimpleNamespace(status_code=200, content=json.dumps(
+            {"activities": state.rows, "count": len(state.rows)}).encode())
+
+    def put(url, **kwargs):
+        payload = kwargs["json"]
+        assert url == permit["host"] + "/api/v1/activities/" + payload["id"]
+        assert kwargs["timeout"] == 60 and kwargs["allow_redirects"] is False
+        durable = yaml.safe_load(journal.read_bytes())
+        assert durable["rows"][payload["id"]]["status"] == "pending"
+        assert durable["status"] == "in_progress"
+        state.calls.append("put")
+        state.puts.append(deepcopy(payload))
+        if state.put_effect:
+            state.put_effect(payload)
+        else:
+            next(r for r in state.rows if r["id"] == payload["id"])["comment"] = payload["comment"]
+        return SimpleNamespace(status_code=state.status)
+
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "put", put)
+    monkeypatch.setattr(migration.time, "sleep", state.delays.append)
+
+    def run(**overrides):
+        approval.write_text(json.dumps(permit))
+        arguments = dict(inputs=inputs, manifest=manifest, manifest_sha256=manifest_hash,
+                         approval=approval, approval_sha256=digest(approval.read_bytes()),
+                         journal=journal, host=permit["host"], token="synthetic-token")
+        arguments.update(overrides)
+        migration.apply(**arguments)
+
+    return state, permit, run, journal, rows, case
+
+
+def test_v2_migration_apply_rollback_exact_preservation(apply_case):
+    state, permit, run, journal, original, case = apply_case
+    run()
+    assert state.calls == ["get", "get", "put", "get", "get", "put", "get"]
+    assert state.delays == [0.25]
+    assert state.rows == [{**r, "comment": "IBKR#v2#U1:TRADE:" +
+                           ("123" if r["id"] == "row-1" else "456")} for r in original]
+    for payload, row in zip(state.puts, original):
+        assert set(payload) == {"id", "accountId", "comment", "currency", "date", "fee", "quantity",
+                                "symbol", "type", "unitPrice", "dataSource", "tags"}
+        assert payload == {**{k: row[k] for k in ("id", "accountId", "currency", "date", "fee",
+                                                 "quantity", "type", "unitPrice")},
+                           "comment": "IBKR#v2#U1:TRADE:" +
+                           ("123" if row["id"] == "row-1" else "456"),
+                           "symbol": "TEST", "dataSource": "YAHOO",
+                           "tags": [tag["id"] for tag in row["tags"]]}
+    record = yaml.safe_load(journal.read_bytes())
+    assert record["status"] == "complete"
+    assert all(r["status"] == "verified" for r in record["rows"].values())
+    assert record["rows"]["row-1"]["preimage"]["fee"] == "0.01"
+    assert journal.stat().st_mode & 0o777 == 0o600
+    assert Path(str(journal) + ".lock").stat().st_mode & 0o777 == 0o600
+    with pytest.raises(RuntimeError, match="Existing migration journal"):
+        run()
+    assert len(state.puts) == 2
+
+
+@pytest.mark.parametrize("key,value", [
+    ("backup_ref", ""), ("operation_plan_ref", ""), ("writer_exclusion_ref", None),
+    ("settlement_ref", ""), ("preservation_qualification_ref", ""),
+    ("pacing_qualification_ref", ""), ("writers_stopped", False), ("requests_settled", False),
+    ("owner_id", "other-owner"), ("manifest_sha256", "0" * 64),
+    ("destination_version", "other"), ("destination_image", "sha256:" + "c" * 64),
+    ("write_count", 1), ("batch_size", None), ("batch_size", 0), ("batch_size", 1.5),
+    ("pause_seconds", None), ("pause_seconds", -1),
+])
+def test_v2_migration_apply_rollback_prerequisites(apply_case, key, value):
+    state, permit, run, journal, original, case = apply_case
+    permit[key] = value
+    with pytest.raises(RuntimeError):
+        run()
+    assert not state.calls and not journal.exists()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("comment", "manual"), ("quantity", 2), ("unitPrice", 3), ("fee", 1),
+    ("date", "2026-01-10T13:00:00Z"), ("accountId", "other"), ("userId", "other"),
+    ("currency", "EUR"), ("type", "SELL"), ("tags", []), ("isDraft", True),
+    ("assetProfile", {"symbol": "OTHER", "dataSource": "YAHOO", "currency": "USD"}),
+])
+def test_v2_migration_apply_rollback_stale_context(apply_case, field, value):
+    state, permit, run, journal, original, case = apply_case
+    state.rows[0][field] = value
+    with pytest.raises(RuntimeError):
+        run()
+    assert not state.puts
+    assert yaml.safe_load(journal.read_bytes())["status"] == "prepared"
+
+
+@pytest.mark.parametrize("change", ["occupied", "absent", "duplicate", "incomplete", "late-writer"])
+def test_v2_migration_apply_rollback_occupancy(apply_case, change):
+    state, permit, run, journal, original, case = apply_case
+    if change == "occupied":
+        state.rows.append(migration_row(id="occupied", comment="IBKR#v2#U1:TRADE:123"))
+    elif change == "absent":
+        state.rows.pop()
+    elif change == "duplicate":
+        state.rows[1]["id"] = "row-1"
+    elif change == "incomplete":
+        state.rows[0]["fee"] = None
+    else:
+        def drift():
+            if state.gets == 2:
+                state.rows[1]["comment"] = "concurrent edit"
+        state.before_get = drift
+    with pytest.raises(RuntimeError):
+        run()
+    assert not state.puts
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "redirect", "server-error", "old-comment",
+                                     "profile", "tags", "quantity", "unrelated", "failed-get"])
+def test_v2_migration_apply_rollback_pending_on_uncertainty(apply_case, outcome):
+    state, permit, run, journal, original, case = apply_case
+
+    def effect(payload):
+        if outcome == "timeout":
+            raise requests.Timeout("synthetic delayed response")
+        if outcome in ("redirect", "server-error"):
+            state.status = 302 if outcome == "redirect" else 500
+        elif outcome != "old-comment":
+            state.rows[0]["comment"] = payload["comment"]
+            if outcome == "profile":
+                state.rows[0]["assetProfile"]["currency"] = "EUR"
+            elif outcome == "tags":
+                state.rows[0]["tags"] = []
+            elif outcome == "quantity":
+                state.rows[0]["quantity"] = 1.0001
+            elif outcome == "unrelated":
+                state.rows[1]["fee"] = 2
+            elif outcome == "failed-get":
+                def fail():
+                    raise requests.Timeout("readback timeout")
+                state.before_get = fail
+    state.put_effect = effect
+    with pytest.raises(RuntimeError):
+        run()
+    record = yaml.safe_load(journal.read_bytes())
+    assert record["rows"]["row-1"]["status"] == "pending"
+    assert record["rows"]["row-2"]["status"] == "prepared"
+    assert len(state.puts) == 1
+    with pytest.raises(RuntimeError, match="Existing migration journal"):
+        run()
+    assert len(state.puts) == 1
+
+
+def test_v2_migration_apply_rollback_partial_subset(apply_case):
+    state, permit, run, journal, original, case = apply_case
+
+    def effect(payload):
+        if len(state.puts) == 2:
+            raise requests.Timeout()
+        state.rows[0]["comment"] = payload["comment"]
+    state.put_effect = effect
+    with pytest.raises(RuntimeError):
+        run()
+    record = yaml.safe_load(journal.read_bytes())
+    assert record["rows"]["row-1"]["status"] == "verified"
+    assert record["rows"]["row-2"]["status"] == "pending"
+    assert state.rows[1] == original[1]
+
+
+@pytest.mark.parametrize("target", ["manifest", "approval", "source", "inputs"])
+def test_v2_migration_apply_rollback_changed_input(apply_case, target):
+    state, permit, run, journal, original, case = apply_case
+    root, config, save, inputs, source, snapshot = case
+    path = {"manifest": root / "preview/manifest.json", "approval": root / "approval.json",
+            "source": source, "inputs": inputs}[target]
+
+    def drift():
+        if state.gets == 2:
+            path.write_bytes(path.read_bytes() + b" ")
+    state.before_get = drift
+    with pytest.raises(RuntimeError, match="Reviewed input changed"):
+        run()
+    assert not state.puts
+
+
+@pytest.mark.parametrize("target", ["source", "snapshot", "inputs", "manifest", "approval", "lock-alias"])
+def test_v2_migration_apply_rollback_journal_input_collision(apply_case, target):
+    state, permit, run, journal, original, case = apply_case
+    root, config, save, inputs, source, snapshot = case
+    paths = {"source": source, "snapshot": snapshot, "inputs": inputs,
+             "manifest": root / "preview/manifest.json", "approval": root / "approval.json"}
+    if target == "lock-alias":
+        Path(str(journal) + ".lock").hardlink_to(source)
+        destination = journal
+    else:
+        destination = paths[target]
+    before = {p: p.read_bytes() for p in (inputs, source, snapshot, root / "preview/manifest.json")}
+    with pytest.raises(RuntimeError, match="Journal overlaps evidence"):
+        run(journal=destination)
+    assert not state.calls
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def test_v2_migration_apply_rollback_cli_replay(apply_case, monkeypatch, capsys):
+    state, permit, run, journal, original, case = apply_case
+    root, config, save, inputs, source, snapshot = case
+    approval = root / "approval.json"
+    approval.write_text(json.dumps(permit))
+    monkeypatch.setenv("GHOST_TOKEN", "synthetic-token")
+    monkeypatch.setattr(sys, "argv", ["identity_migration.py", "apply", "--inputs", str(inputs),
+        "--manifest", str(root / "preview/manifest.json"), "--manifest-sha256", permit["manifest_sha256"],
+        "--approval", str(approval), "--approval-sha256", digest(approval.read_bytes()),
+        "--journal", str(journal), "--host", permit["host"]])
+    assert migration.main() == 0
+    assert "Migration complete: reviewed comments verified" in capsys.readouterr().out
+    assert yaml.safe_load(journal.read_bytes())["status"] == "complete"
+
+
+def test_v2_migration_apply_rollback_pending_persistence_failure(apply_case, monkeypatch):
+    import cleanup_recovery
+    state, permit, run, journal, original, case = apply_case
+    write = cleanup_recovery.write_journal
+
+    def fail(path, record, create=False):
+        if record["rows"]["row-1"]["status"] == "pending":
+            raise OSError("synthetic fsync failure")
+        write(path, record, create=create)
+    monkeypatch.setattr(cleanup_recovery, "write_journal", fail)
+    with pytest.raises(OSError):
+        run()
+    assert not state.puts
+    assert yaml.safe_load(journal.read_bytes())["rows"]["row-1"]["status"] == "prepared"
+
+
+def test_v2_migration_apply_rollback_numeric_representation_drift(apply_case):
+    state, permit, run, journal, original, case = apply_case
+
+    def normalized(payload):
+        state.rows[0]["comment"] = payload["comment"]
+        state.rows[0]["quantity"] = 1.0
+    state.put_effect = normalized
+    with pytest.raises(RuntimeError, match="context changed"):
+        run()
+    assert len(state.puts) == 1
+    assert yaml.safe_load(journal.read_bytes())["rows"]["row-1"]["status"] == "pending"
+
+
+def test_v2_migration_apply_rollback_lock_excludes_writer(apply_case):
+    from cleanup_recovery import lock_journal
+    state, permit, run, journal, original, case = apply_case
+    lock = lock_journal(journal)
+    try:
+        with pytest.raises(RuntimeError, match="already in use"):
+            run()
+    finally:
+        os.close(lock)
+    assert not state.calls and not journal.exists()
+
+
+@pytest.mark.parametrize("field,value", [("quantity", Decimal("1.0000000000000000001")),
+                                         ("fee", Decimal("1e1000"))])
+def test_v2_migration_apply_rollback_transport_precision(field, value):
+    row = exact_json(json.dumps(migration_row()).encode())
+    row[field] = value
+    with pytest.raises(RuntimeError, match="number cannot be preserved"):
+        migration.comment_payload(row, "IBKR#v2#U1:TRADE:123")
+
+
+@pytest.mark.parametrize("argument", ["manifest_sha256", "approval_sha256"])
+def test_v2_migration_apply_rollback_unreviewed_hash(apply_case, argument):
+    state, permit, run, journal, original, case = apply_case
+    with pytest.raises(RuntimeError, match="Evidence hash changed"):
+        run(**{argument: "0" * 64})
+    assert not state.calls and not journal.exists()
