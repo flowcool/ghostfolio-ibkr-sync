@@ -1,5 +1,6 @@
 """Offline tests: orchestration (process_account, main, load_config) and the IBKR Flex fetch."""
 import logging
+from copy import deepcopy
 from collections import defaultdict
 import xml.etree.ElementTree as ET
 import time
@@ -2018,3 +2019,120 @@ def test_v2_event_partition_equal_actions_remain_independent_across_source_accou
         "IBKR#v2#U1:DIVIDEND:A1", "IBKR#v2#U2:DIVIDEND:A1"]
     assert w.activities[0] == first and w.comments == set()
     assert w.pos["qty"] == {} and len(w.pos["versioned_identities"]) == 2
+
+
+# Synthetic qualification does not certify vendor lifetime or an image.
+@pytest.mark.parametrize("trade_generation", ["absent", "legacy", "v2-own", "v2-other", "BD-v1", "BD-v2", "BD-v3", "DEGIRO"])
+@pytest.mark.parametrize("dividend_generation", ["absent", "isin", "raw", "resolved", "complete", "partial"])
+@pytest.mark.parametrize("placement", ["same", "moved", "inactive"])
+def test_v2_release_compatibility_mixed_history_matrix(
+        monkeypatch, trade_generation, dividend_generation, placement):
+    destination = ACC if placement != "moved" else "previous-destination"
+
+    def stored(comment, kind):
+        return {"comment": comment, "type": kind, "quantity": 100 if kind == "DIVIDEND" else 10,
+                "unitPrice": 0.25 if kind == "DIVIDEND" else 60, "fee": 0,
+                "accountId": destination, "isDraft": placement == "inactive",
+                "date": "2026-07-15T00:00:00Z" if kind == "DIVIDEND" else "2026-08-01T10:00:00Z",
+                "assetProfile": {"symbol": "KO.N", "isin": ISIN_KO, "dataSource": "YAHOO"}}
+
+    trade_comments = {"legacy": "IBKR#T1", "v2-own": "IBKR#v2#U1:TRADE:T1",
+                      "v2-other": "IBKR#v2#U2:TRADE:T1", "BD-v1": "BD#v1#account#" + "a" * 64,
+                      "BD-v2": "BD#v2#account#" + "b" * 64,
+                      "BD-v3": "BD#v3#U1:TRADE:T1", "DEGIRO": "DEGIRO#123:TRADE:1"}
+    rows = [] if trade_generation == "absent" else [stored(trade_comments[trade_generation], "BUY")]
+    if dividend_generation in ("isin", "raw", "resolved"):
+        key = {"isin": ISIN_KO, "raw": "KO", "resolved": "KO.N"}[dividend_generation]
+        rows.append(stored(f"dividend#{key}#2026-07-15", "DIVIDEND"))
+    elif dividend_generation in ("complete", "partial"):
+        for action in (["A1", "A2"] if dividend_generation == "complete" else ["A1"]):
+            rows.append(stored(f"IBKR#v2#U1:DIVIDEND:{action}", "DIVIDEND"))
+    original = deepcopy(rows)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: type("Response", (), {
+        "status_code": 200, "json": lambda self: {"count": len(rows), "activities": rows},
+        "raise_for_status": lambda self: None})())
+    monkeypatch.setattr(requests.sessions.Session, "request",
+                        lambda *a, **k: pytest.fail("unexpected network"))
+    ids, comments, pos = ghostfolio.ghost_get_existing_orders(CFG)
+    world = World(monkeypatch, report(trade_xml("T1"), div_xml(amount="15")
+                  + div_xml(amount="10").replace('actionID="A1"', 'actionID="A2"')))
+    mapping = {ISIN_KO: "KO.N"}
+    assert world.run(ids=ids, comments=comments, pos=pos, mapping=mapping)[1] is (
+        dividend_generation != "partial")
+    manual_match = trade_generation in ("BD-v1", "BD-v2", "BD-v3", "DEGIRO") and placement == "same"
+    expected = [] if trade_generation in ("legacy", "v2-own") or manual_match else ["IBKR#v2#U1:TRADE:T1"]
+    historical_match = dividend_generation in ("isin", "raw", "resolved") and placement != "moved"
+    if dividend_generation not in ("complete", "partial") and not historical_match:
+        expected += ["IBKR#v2#U1:DIVIDEND:A1", "IBKR#v2#U1:DIVIDEND:A2"]
+    assert sorted(a["comment"] for a in world.activities) == sorted(expected)
+    assert rows == original
+    world.imported.clear()
+    assert world.run(ids=world.ids, comments=world.comments, pos=world.pos, mapping=mapping)[1] is (
+        dividend_generation != "partial")
+    assert world.activities == []
+    assert len(world.cash_calls) == 2
+
+
+@pytest.mark.parametrize("fault,expected_ok,reason", [
+    ("replacement", False, "action-context conflict"),
+    ("reuse-multiple-days", False, "source action split across cash groups"),
+    ("missing-account", False, "Trade account differs"),
+    ("incomplete-window", True, "quantity"),
+    ("conflicting-quantity", True, "contradictory payment reversal evidence"),
+    ("missing-tax-action", False, "withholding association"),
+])
+def test_v2_source_qualification_counterexamples(monkeypatch, caplog, fault, expected_ok, reason):
+    root = ET.fromstring(report(trade_xml("SAFE"), div_xml()))
+    if fault == "reuse-multiple-days":
+        root = ET.fromstring(report(trade_xml("SAFE"), div_xml() + div_xml(date="20260716")))
+    elif fault == "missing-account":
+        root.find(".//Trade").attrib.pop("accountId")
+    elif fault == "incomplete-window":
+        root.find(".//ChangeInDividendAccruals").clear()
+    elif fault == "conflicting-quantity":
+        extra = deepcopy(root.find(".//ChangeInDividendAccrual"))
+        extra.set("quantity", "101")
+        root.find(".//ChangeInDividendAccruals").append(extra)
+    elif fault == "missing-tax-action":
+        tax = deepcopy(root.find(".//CashTransaction"))
+        tax.set("type", "Withholding Tax")
+        tax.set("amount", "-1")
+        tax.attrib.pop("actionID")
+        root.find(".//CashTransactions").append(tax)
+    world = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    pos = positions()
+    if fault == "replacement":
+        pos["versioned_identities"].add(("U1", "IBKR#v2#U1:DIVIDEND:OLD"))
+    assert world.run(pos=pos)[1] is expected_ok
+    assert all(a["type"] == "BUY" for a in world.activities)
+    assert len(world.activities) == (0 if fault == "missing-account" else 1)
+    assert len(world.cash_calls) == (0 if fault == "missing-account" else 1)
+    assert reason in caplog.text
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_v2_source_qualification_repeated_and_conflicting_trade_ids(monkeypatch, changed):
+    world = World(monkeypatch, report(trade_xml("T1") + trade_xml("T1", qty=11 if changed else 10)))
+    assert world.run()[1] is (not changed)
+    assert [a["comment"] for a in world.activities] == ([] if changed else ["IBKR#v2#U1:TRADE:T1"])
+
+
+@pytest.mark.parametrize("account", ["U1", "U2"])
+def test_v2_source_qualification_equal_ids_remain_account_scoped(monkeypatch, account):
+    world = World(monkeypatch, report(trade_xml("T1"), div_xml(), source_account=account))
+    pos = positions(versioned_identities={("U1", "IBKR#v2#U1:TRADE:T1"),
+                                         ("U1", "IBKR#v2#U1:DIVIDEND:A1")})
+    assert world.run(pos=pos, source_account=account)[1] is True
+    assert sorted(a["comment"] for a in world.activities) == (
+        [] if account == "U1" else ["IBKR#v2#U2:DIVIDEND:A1", "IBKR#v2#U2:TRADE:T1"])
+
+
+@pytest.mark.parametrize("amount", ["25", "30"])
+def test_v2_source_qualification_retained_identity_is_not_financial_reconciliation(monkeypatch, amount):
+    world = World(monkeypatch, report(divs=div_xml()))
+    assert world.run()[1] is True
+    world.imported.clear()
+    monkeypatch.setattr(app, "fetch_flex_report", lambda *a: report(divs=div_xml(amount=amount)))
+    assert world.run(pos=world.pos)[1] is True
+    assert world.activities == []  # Exact stored identities remain trusted.
+    # This limit cannot certify that an unobserved vendor revision is safe.

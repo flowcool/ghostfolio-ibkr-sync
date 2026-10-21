@@ -185,7 +185,8 @@ Trade <id> cannot be converted safely; excluded before holdings checks
   their comments or add a historical comment to bypass the refusal. Recovery
   needs complete source and destination evidence, settled requests, stopped
   competing writers, a reviewed manifest and a separately approved operation.
-  This change does not make a recovery command available yet.
+  Use the separate [bounded recovery procedure](cleanup.md#offline-preview-of-missing-v2-dividend-actions).
+  Its offline preview grants no permission to submit activities.
 - **Action conflict needs manual review.** With no exact coverage, the sync
   checks existing v2 dividends for the same source account, security and day.
   An unexpected action or unknown overlapping context blocks that group.
@@ -209,6 +210,9 @@ Trade <id> cannot be converted safely; excluded before holdings checks
   uncertainty. Database restore requires its own operation and reconciliation.
   Existing cleanup tools must not run against v2 history until separately
   qualified. Writer release and image-backed qualification remain separate.
+  Follow the [G1–G7 evidence and release order](releasing.md#v2-writer-qualification-and-release-order).
+  Synthetic success does not qualify vendor stability, the destination image,
+  maintenance preservation or the actual rc.5 rollback image.
 - **Longer Flex waits.** A transient IBKR SendRequest error is retried (up to five attempts, 18 minutes of
   scheduled waits) and GetStatement polls up to 60 times (300 seconds). A failing run can take longer.
   No ENV change is needed. See [Flex retry policy](../README.md#flex-retry-policy).

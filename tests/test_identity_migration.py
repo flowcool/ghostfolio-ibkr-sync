@@ -306,6 +306,21 @@ def test_v2_migration_preview_exact_trade(case):
     assert result["rows"][0]["fields"]["date"] == row["date"]
 
 
+def test_v2_release_compatibility_migration_keeps_sibling_and_new_v2_rows(case):
+    rows = [migration_row(),
+            migration_row(id="new-v2", comment="IBKR#v2#U1:TRADE:456"),
+            migration_row(id="bd", comment="BD#v3#account:TRADE:1", accountId="bd-target"),
+            migration_row(id="degiro", comment="DEGIRO#123:TRADE:1", accountId="dg-target")]
+    result = migration_run(case, rows=rows,
+                           trades=[migration_trade(), migration_trade(tradeID="456")])
+    assert [(r["id"], r["new_comment"]) for r in result["replacements"]] == [
+        ("row-1", "IBKR#v2#U1:TRADE:123")]
+    assert result["selection_proof"]["equal"] is True
+    assert {r["id"]: r["status"] for r in result["rows"]} == {
+        "row-1": "eligible-replacement", "new-v2": "already-v2",
+        "bd": "unsupported", "degiro": "unsupported"}
+
+
 @pytest.mark.parametrize("field,value,difference", [
     ("quantity", 1.000000001, "quantity"), ("unitPrice", 2.300000001, "gross"),
     ("fee", 0.010000001, "fee"), ("type", "SELL", "type"),
@@ -800,7 +815,9 @@ def apply_case(case, monkeypatch):
         if state.before_get:
             state.before_get()
         return SimpleNamespace(status_code=200, content=json.dumps(
-            {"activities": state.rows, "count": len(state.rows)}).encode())
+            {"activities": state.rows, "count": len(state.rows)}).encode(),
+            json=lambda: {"activities": state.rows, "count": len(state.rows)},
+            raise_for_status=lambda: None)
 
     def put(url, **kwargs):
         payload = kwargs["json"]
@@ -1120,6 +1137,30 @@ def test_v2_migration_apply_rollback_only_preserves_new_imports(rollback_case):
     assert set(inspect_saved().values()) == {"original"}
     reverse(write_count=0)
     assert len(state.puts) == 4
+
+
+def test_v2_release_compatibility_comment_reversal_keeps_dual_reader_floor(rollback_case):
+    from ghostfolio_ibkr_sync import ghostfolio
+
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    new = migration_row(id="new", comment="IBKR#v2#U1:TRADE:new", userId="owner")
+    sibling = migration_row(id="sibling", comment="DEGIRO#123:TRADE:1", accountId="other")
+    state.rows.extend([new, sibling])
+    cfg = {"ghost_host": "https://ghostfolio.example.test", "ghost_token": "synthetic-token"}
+    ids, comments, pos = ghostfolio.ghost_get_existing_orders(cfg)
+    assert ids == set() and comments == set()
+    assert pos["versioned_identities"] == {
+        ("U1", "IBKR#v2#U1:TRADE:123"), ("U1", "IBKR#v2#U1:TRADE:456"),
+        ("U1", "IBKR#v2#U1:TRADE:new")}
+    reverse()
+    ids, comments, pos = ghostfolio.ghost_get_existing_orders(cfg)
+    assert ids == {"123", "456"} and comments == set()
+    assert pos["versioned_identities"] == {("U1", "IBKR#v2#U1:TRADE:new")}
+    assert state.rows == original + [new, sibling]
+    assert {row["id"] for row in state.puts} == {"row-1", "row-2"}
+    # Reversal does not remove the newly imported v2 row. Actual rc.5 image
+    # preservation remains a separate G6 proof; this runs the current reader.
 
 
 @pytest.mark.parametrize("field,value", [
