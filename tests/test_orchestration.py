@@ -555,10 +555,11 @@ def test_versioned_identity_reader_invalid_identity_stops_before_financial_write
     assert "PRIVATE-ACCOUNT" not in caplog.text
 
 
+@pytest.mark.parametrize("mode", ["partial", "conflict"])
 def test_versioned_identity_reader_partial_dividend_coverage_is_account_local(
-        env, caplog):
+        env, caplog, mode):
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
-    a1 = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
+    a1 = ("U1", f"IBKR#v2#U1:DIVIDEND:{'A1' if mode == 'partial' else 'OLD'}")
     env.setattr(app, "ghost_get_existing_orders",
                 lambda cfg: (set(), set(), positions(versioned_identities={a1})))
 
@@ -571,7 +572,7 @@ def test_versioned_identity_reader_partial_dividend_coverage_is_account_local(
                    .replace('accountId="broker-account"', 'accountId="U2"')
                    .replace('actionID="A1"', 'actionID="B1"'))
     reports = {
-        "q1": report(trade_xml("T1"), u1_dividends),
+        "q1": report(trade_xml("T1") + trade_xml("SAFE-SELL", side="SELL", qty=1), u1_dividends),
         "q2": report(trade_xml("T2", symbol="PEP", isin=ISIN_PEP), u2_dividend,
                      source_account="U2"),
     }
@@ -588,10 +589,63 @@ def test_versioned_identity_reader_partial_dividend_coverage_is_account_local(
     by_account = defaultdict(list)
     for activity in [activity for batch in imported for activity in batch]:
         by_account[activity["accountId"]].append(activity["type"])
-    assert by_account == {"gf-A": ["BUY"], "gf-B": ["BUY", "DIVIDEND"]}
+    assert by_account == {"gf-A": ["BUY", "SELL"], "gf-B": ["BUY", "DIVIDEND"]}
     assert cash == ["gf-A", "gf-B"]
-    assert "partial versioned action coverage" in caplog.text
+    assert ("partial versioned action coverage" if mode == "partial" else "action-context conflict") in caplog.text
     assert "1 of 2 account(s): U1" in caplog.text
+
+
+def test_v2_generation_dedup_partial_acceptance_repeated_window_refuses_missing_actions(monkeypatch, caplog):
+    xml = report(trade_xml("SAFE"),
+                 div_xml(amount="15") + div_xml(amount="10").replace('actionID="A1"', 'actionID="A2"'))
+    world = World(monkeypatch, xml)
+    accepted = []
+
+    def partial_import(cfg, rows):
+        kept = [a for a in rows if a["comment"] != "IBKR#v2#U1:DIVIDEND:A2"]
+        accepted.extend(kept)
+        return kept, False
+
+    monkeypatch.setattr(app, "ghost_import_activities", partial_import)
+    assert world.run()[1] is False
+    assert [a["type"] for a in accepted] == ["BUY", "DIVIDEND"]
+    assert ("U1", "IBKR#v2#U1:DIVIDEND:A1") in world.pos["versioned_identities"]
+    assert ("U1", "IBKR#v2#U1:DIVIDEND:A2") not in world.pos["versioned_identities"]
+    monkeypatch.setattr(app, "ghost_import_activities", lambda *args: pytest.fail("automatic filling"))
+    for _ in range(2):
+        assert world.run(pos=world.pos)[1] is False
+    assert len(world.cash_calls) == 3
+    assert caplog.text.count("automatic reruns will refuse") == 2
+    assert "explicit reviewed recovery required" in caplog.text
+
+
+def test_v2_action_conflict_accepted_context_protects_overlapping_queries(monkeypatch):
+    world = World(monkeypatch, report(divs=div_xml()))
+    assert world.run()[1] is True
+    key = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
+    assert world.pos["versioned_dividend_context"][key][0].day == "2026-07-15"
+    assert world.pos["versioned_dividend_context"][key][0].isin == ISIN_KO
+    world.imported.clear()
+    replacement = report(divs=div_xml().replace('actionID="A1"', 'actionID="REPLACED"'))
+    monkeypatch.setattr(app, "fetch_flex_report", lambda *args: replacement)
+    assert world.run(pos=world.pos)[1] is False
+    assert world.activities == []
+    # A new payment on the adjacent day remains eligible; v2 never uses proximity.
+    monkeypatch.setattr(app, "fetch_flex_report", lambda *args: replacement.replace("20260715", "20260716"))
+    assert world.run(pos=world.pos)[1] is True
+    assert [a["comment"] for a in world.activities] == ["IBKR#v2#U1:DIVIDEND:REPLACED"]
+
+
+def test_v2_action_conflict_additional_same_day_action_requires_manual_review(monkeypatch):
+    world = World(monkeypatch, report(divs=div_xml()))
+    assert world.run()[1] is True
+    world.imported.clear()
+    # A short report contains a distinct, legitimate event, but cannot prove
+    # whether OLD was replaced. The conservative guard must refuse this too.
+    extra = report(divs=div_xml(amount="5").replace('actionID="A1"', 'actionID="EXTRA"'))
+    monkeypatch.setattr(app, "fetch_flex_report", lambda *args: extra)
+    assert world.run(pos=world.pos)[1] is False
+    assert world.activities == []
 
 
 def test_v2_partition_isolation_invalid_actions_fail_account(monkeypatch, caplog):

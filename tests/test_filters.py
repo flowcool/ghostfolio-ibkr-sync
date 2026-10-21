@@ -337,6 +337,29 @@ def test_versioned_identity_reader_coverage_is_global_across_destination_account
     )[0] == "existing"
 
 
+@pytest.mark.parametrize("key", [ISIN, "KO", "MAPPED"])
+def test_v2_generation_dedup_historical_comments_win_locally_before_partial_coverage(key):
+    source = dividend([payment("A1", "15"), payment("A2", "10")])
+    index = positions(versioned_identities={("U1", "IBKR#v2#U1:DIVIDEND:A1")})
+    comments = {(ACC, f"dividend#{key}#2026-07-15")}
+    assert sync.dividend_dedup_decision(source, ACC, {ISIN: "MAPPED"}, index, comments)[0] == "existing"
+    assert sync.dividend_dedup_decision(source, "moved", {ISIN: "MAPPED"}, index, comments)[0] == "partial"
+
+
+def test_v2_generation_dedup_zero_actions_do_not_require_coverage_or_hide_new_actions():
+    source = dividend([payment("A1", "25"), payment("ZERO", "0.1"), payment("ZERO", "-0.1")])
+    index = positions(versioned_identities={("U1", "IBKR#v2#U1:DIVIDEND:A1")})
+    assert sync.dividend_dedup_decision(source, ACC, {}, index, set())[0] == "existing"
+    assert sync.dividend_dedup_decision(source, ACC, {}, positions(), set())[0] == "new"
+
+
+def test_v2_action_conflict_missing_index_context_cannot_prove_absence():
+    source = dividend([payment("A2", "25")])
+    index = positions(versioned_identities={("U1", "IBKR#v2#U1:DIVIDEND:A1")},
+                      dividend_dates={(ACC, "KO"): [("2026-07-15", None, None, None)]})
+    assert sync.dividend_dedup_decision(source, ACC, {}, index, set())[0] == "action_conflict"
+
+
 @pytest.mark.parametrize("side", [1, -1])
 def test_v2_accepted_state_split_manual_fills_remain_source_scoped(side):
     pos = positions(qty={(ACC, "KO"): 100},

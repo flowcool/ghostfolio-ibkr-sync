@@ -326,6 +326,7 @@ def historical_dividend_findings(dividends: Sequence[DividendGroup], account_id:
         reference = f"dividend#{dividend['isin'] or dividend['symbol']}#{dividend['date']}"
         symbol = resolve_symbol(dividend["isin"], dividend["symbol"], mapping)
         claim_comments = {reference}
+        claim_comments.add(f"dividend#{dividend['symbol']}#{dividend['date']}")
         if symbol:
             claim_comments.add(f"dividend#{symbol}#{dividend['date']}")
         candidates = [item for item in evidence
@@ -344,7 +345,8 @@ def historical_dividend_findings(dividends: Sequence[DividendGroup], account_id:
             finding["category"] = "absent"
             finding["reason"] = "no canonical destination identity; weak matches cannot certify absence"
             # Same predicate and order as import selection: comment first, then proximity.
-            comments = {reference, f"dividend#{symbol}#{dividend['date']}"}
+            comments = {reference, f"dividend#{symbol}#{dividend['date']}",
+                        f"dividend#{dividend['symbol']}#{dividend['date']}"}
             if any((account_id, comment) in existing_dividend_comments for comment in comments):
                 finding["historical_comment"] = [
                     {**_historical_destination(item), "comment": item["activity"].get("comment"),
