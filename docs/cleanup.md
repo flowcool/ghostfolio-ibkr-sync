@@ -281,10 +281,10 @@ python identity_migration.py preview --inputs inputs.yaml --output new-review
 This stage validates saved evidence and publishes a deterministic manifest. It
 has no network client and does not load runtime configuration or credentials.
 Inherited `DRY_RUN=false` does not enable writes. It never edits an activity or
-an input. Exact historical eligibility and the complete before/after import
-selection proof are pending separate implementation stages. The manifest has
-`actionable: false`, an empty replacement list and explicit pending gates. Do not
-use it to authorize conversion, apply or rollback.
+an input. It classifies exact historical eligibility and lists proposed comment
+replacements. The complete before/after import selection proof remains pending.
+The manifest keeps `actionable: false` and the pending gate. Do not use it to
+authorize conversion, apply or rollback.
 
 Use keyed YAML with unique string keys. Quote dates and numeric identifiers.
 Paths are relative to the YAML file. Absolute paths are also accepted. Hash each
@@ -332,7 +332,7 @@ reads quantity, unit price and fee as exact decimals. Each row needs a unique
 `id`, `comment`, `quantity`, `unitPrice`, `fee`, timezone-aware `date`, `type`,
 `accountId`, `currency`, boolean `isDraft`, `tags`, and `assetProfile` or
 `SymbolProfile`. Legitimate null comments, account assignments, currencies and
-profiles remain visible for later eligibility checks. Null financial numbers,
+profiles remain visible as excluded evidence. Null financial numbers,
 missing context, duplicate JSON keys and non-finite numbers are refused. Preserve
 all original fields, including fields outside this minimum.
 
@@ -344,5 +344,53 @@ It publishes `manifest.json` and `manifest.sha256` in a new directory with mode
 its exact decimals are strings. Equal input bytes produce equal output bytes and
 hashes. Existing outputs are never replaced. Keep these private outputs outside
 version control. A refused command exits nonzero and publishes no review.
+
+### Exact historical eligibility
+
+Only a unique source event and a unique owned historical row can qualify.
+Trades require the exact legacy `IBKR#<tradeID>` comment. A trade ID claimed by
+several source accounts blocks every affected replacement. Dividend comments can
+use the resolved symbol, raw source symbol or ISIN in
+`dividend#<key>#<YYYY-MM-DD>`. They must belong to the mapped destination account
+and represent exactly one positive action. Split dividend and PIL portions of
+that action are allowed. A row that represents several positive actions is an
+aggregate and cannot qualify. A proven zero-net action claims no payment row.
+Its signed tax still contributes to the historical fee comparison.
+
+Both kinds require active YAHOO context, the same mapped account, side/type,
+resolved security and supported currency. Any supplied conflicting account,
+profile, ISIN or denomination evidence blocks eligibility. The source calendar
+day must equal the stored instant's calendar day in the declared IANA timezone.
+The proposed replacement retains the original stored timestamp byte for byte.
+Quantity, unit price, gross and fee must match exactly. The tool compares original
+decimals using exact fractions. It does not reconstruct numbers from floats.
+Rational values such as `23/10` in expected fields and differences mean exact
+ratios, not rounded amounts. The historical group fee and the proposed action fee
+must each equal the stored fee after currency scaling and zero clamping. Opposite
+signed tax or refunds cannot be hidden by netting or a rounding tolerance.
+
+Manual, inactive, excluded, non-YAHOO, unsupported and unproven rows stay unchanged.
+Duplicate old rows, conflicting source captures, occupied v2 identities and
+partial action coverage block affected replacements. Identical events repeated
+across saved reports have one decision with all source references. Duplicate
+trade rows inside one report do not establish unique ownership. Malformed source
+cash omitted by the runtime reader remains visible and blocks affected dividend
+subsets. Outside-window history stays visible and unchanged.
+
+The manifest lists each source event under `events` and each saved row under
+`rows`. Event decisions retain source references, evidence variants, old/new
+comments, associated activity IDs, association counts, expected financial fields,
+exact differences, occupied IDs and an exclusion reason. Row decisions retain
+all original fields, their fingerprint and links to source decisions. Separate
+counts cover eligible replacements, already-v2 identities, absent/new candidates,
+aggregates, ambiguity, conflicts, partial coverage, unsupported evidence and
+outside-window decisions. `replacements` contains only proposed comment changes
+with ordered IDs and before/after row fingerprints.
+
+Historical deduplication remains more permissive than migration eligibility.
+An exact historical comment can suppress an import without proving complete
+events or exact financial values. These eligibility results are provisional
+until complete import selection is replayed across the declared inventory and
+windows. No financial correction, split, insertion or deletion is proposed.
 
 [Back to the README](../README.md)

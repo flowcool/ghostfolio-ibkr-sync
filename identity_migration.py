@@ -1,23 +1,48 @@
-"""Offline identity migration evidence preview, outside the runtime image.
+"""Offline exact identity migration preview, outside the runtime image.
 
-This first stage validates and binds saved inputs. It cannot authorize conversion.
+This stage classifies exact eligibility. It cannot authorize conversion.
 No runtime configuration, credential loader or network client is used.
 """
 
 import argparse
+import logging
 import re
+import xml.etree.ElementTree as ET
+from collections import Counter
 from datetime import date
 from decimal import Decimal
+from fractions import Fraction
+from math import isfinite
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import yaml
 
-from ghostfolio_ibkr_sync.ghostfolio import format_versioned_activity_identity
+from ghostfolio_ibkr_sync.ghostfolio import (
+    activity_is_active,
+    format_versioned_activity_identity,
+    parse_versioned_activity_identity,
+)
 from ghostfolio_ibkr_sync.ibkr import (
+    DIVIDEND_CASH_TYPES,
+    WITHHOLDING_CASH_TYPE,
+    _dividend_cash_sum,
     historical_dividend_report_window,
+    parse_cash_dividends,
+    parse_ibkr_datetime,
     parse_source_account_ids,
+    parse_trades,
+)
+from ghostfolio_ibkr_sync.sync import (
+    _historical_currency,
+    convert_dividend_actions,
+    convert_trade_to_activity,
+    dividend_action_quantities,
+    dividend_positive_actions,
+    minor_unit_conversion,
+    partition_dividend_actions,
+    resolve_symbol,
 )
 from identity_maintenance import (
     canonical_json,
@@ -102,6 +127,291 @@ def validate_snapshot(snapshot: Any, metadata: Any) -> None:
                 require(row[key] is None or isinstance(row[key], dict), "Invalid security context")
 
 
+def source_events(reports: dict[str, tuple[str, str]], config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collapse repeated identical events, retaining every captured source reference.
+
+    Conflicting repetitions remain one decision with all variants. No amount or
+    proximity search establishes ownership. Runtime converters validate support;
+    exact source decimals establish the financial comparison separately.
+    """
+    events: dict[str, dict[str, Any]] = {}
+    mapping = config["symbol_mapping"]
+
+    def add(account: str, kind: str, event_id: str, reference: str,
+            evidence: Any, old: list[str], day: str | None, expected: dict[str, Any] | None,
+            reason: str | None, group: str | None = None, coverage: list[str] | None = None) -> None:
+        try:
+            new = format_versioned_activity_identity(account, kind, event_id)
+        except RuntimeError:
+            new = None
+            reason = "unsupported"
+        key = new or f"invalid:{reference}"
+        item = events.setdefault(key, {
+            "event": key, "source_account": account, "kind": kind, "source_refs": [],
+            "old_comments": sorted(set(old)), "new_comment": new, "day": day,
+            "expected": expected, "reason": reason, "group": group,
+            "coverage": coverage or [], "variants": [],
+        })
+        item["source_refs"].append(reference)
+        item["old_comments"] = sorted(set(item["old_comments"]) | set(old))
+        item["coverage"] = sorted(set(item["coverage"]) | set(coverage or []))
+        if evidence not in item["variants"]:
+            item["variants"].append(evidence)
+        if len(item["variants"]) > 1 or item["expected"] != expected or item["reason"] != reason:
+            item["reason"] = "conflicting"
+        if kind == "TRADE" and sum(ref.rsplit(":", 2)[0] == reference.rsplit(":", 2)[0]
+                                   for ref in item["source_refs"]) > 1:
+            item["reason"] = "ambiguous"
+
+    for name, (account, xml) in sorted(reports.items()):
+        destination = config["accounts"][account]
+        for index, trade in enumerate(parse_trades(xml)):
+            reference = f"{name}:trade:{index}"
+            expected = None
+            reason = None
+            day = (parse_ibkr_datetime(trade.get("dateTime")) or "")[:10] or None
+            payload = convert_trade_to_activity(trade, destination, mapping, {})
+            try:
+                require(payload and trade.get("accountId") == account, "Unproven trade")
+                require(all(isfinite(payload[field]) and (payload[field] >= 0 if field == "fee"
+                                                         else payload[field] > 0)
+                            for field in ("quantity", "unitPrice", "fee")), "Unsafe numeric projection")
+                quantity, price, commission = [Decimal(trade[field]) for field in (
+                    "quantity", "tradePrice", "ibCommission")]
+                require(all(v.is_finite() for v in (quantity, price, commission)), "Invalid numbers")
+                require(not commission or float(commission) != 0, "Commission underflow")
+                quantity, price = quantity.copy_abs(), price.copy_abs()
+                require(quantity > 0 and price > 0, "Nonpositive trade")
+                currency, factor = minor_unit_conversion(payload["symbol"], trade["currency"])
+                require(_historical_currency(currency), "Unsupported denomination")
+                expected = {"accountId": destination, "symbol": payload["symbol"],
+                            "isin": trade.get("isin"), "currency": currency, "type": trade["buySell"],
+                            "quantity": quantity, "unitPrice": str(Fraction(price) * factor),
+                            "gross": str(Fraction(quantity) * Fraction(price) * factor),
+                            "fee": str(max(Fraction(0), -Fraction(commission)) * factor)}
+            except (RuntimeError, KeyError, ValueError, ArithmeticError):
+                reason = "unsupported"
+            add(account, "TRADE", trade.get("tradeID", ""), reference, trade,
+                [f"IBKR#{trade.get('tradeID', '')}"], day, expected, reason)
+
+        groups = parse_cash_dividends(xml) or []
+        # The runtime reader skips malformed cash dates/amounts. Migration must
+        # keep that excluded evidence and must not certify the surviving subset.
+        retained = Counter(canonical_json(row) for group in groups for row in group["cash_rows"])
+        omitted = []
+        for element in ET.fromstring(xml).iter("CashTransaction"):
+            row = dict(element.attrib)
+            if (row.get("type") not in (*DIVIDEND_CASH_TYPES, WITHHOLDING_CASH_TYPE)
+                    or row.get("levelOfDetail", "DETAIL").upper() != "DETAIL"):
+                continue
+            signature = canonical_json(row)
+            if retained[signature]:
+                retained[signature] -= 1
+            else:
+                omitted.append(row)
+        for index, row in enumerate(omitted):
+            add(account, "DIVIDEND", row.get("actionID", ""), f"{name}:omitted-cash:{index}",
+                {"omitted_cash": row}, [], None, None, "unsupported")
+        for index, group in enumerate(groups):
+            reference = f"{name}:dividend:{index}"
+            symbol = resolve_symbol(group["isin"], group["symbol"], mapping)
+            old = [f"dividend#{key}#{group['date']}"
+                   for key in (symbol, group["symbol"], group["isin"]) if key]
+            actions = dividend_positive_actions(group)
+            parts = partition_dividend_actions(group, groups)
+            quantities = dividend_action_quantities(group, quiet=True)
+            try:
+                proposed, ok = convert_dividend_actions(group, destination, mapping, {}, groups)
+            except RuntimeError:
+                proposed, ok = [], False
+            try:
+                coverage = sorted(format_versioned_activity_identity(a, "DIVIDEND", b)
+                                  for a, b in actions or [])
+            except RuntimeError:
+                coverage = []
+            group_key = f"{account}:{group['isin'] or group['symbol']}:{group['date']}"
+            # Every cash action, including zero/negative or unproven actions, is visible.
+            ids = sorted({row.get("actionID", "") for row in group["cash_rows"]}) or [""]
+            relevant = [row for row in group["accruals"] if row.get("actionID", "") in ids]
+            evidence = {"cash_rows": sorted(group["cash_rows"], key=canonical_json),
+                        "accruals": sorted(relevant, key=canonical_json)}
+            for action in ids:
+                expected = None
+                reason = None
+                try:
+                    require(parts is not None and quantities and ok and actions, "Invalid group")
+                    require(all(row.get("accountId") == account for row in group["cash_rows"]),
+                            "Unproven source ownership")
+                    require(len(proposed) == len(actions), "Incomplete conversion")
+                    part = next(p for p in parts if p["payments"][0].get("actionID") == action)
+                    quantity = quantities[(account, action)]
+                    currency, factor = minor_unit_conversion(symbol, group["currency"])
+                    require(_historical_currency(currency), "Unsupported denomination")
+                    gross = _dividend_cash_sum(part["payments"])
+                    tax = _dividend_cash_sum([r for r in part["cash_rows"]
+                                              if r.get("type") == WITHHOLDING_CASH_TYPE])
+                    group_tax = _dividend_cash_sum([r for r in group["cash_rows"]
+                                                    if r.get("type") == WITHHOLDING_CASH_TYPE])
+                    require(gross is not None and tax is not None and group_tax is not None,
+                            "Missing exact cash")
+                    expected = {"accountId": destination, "symbol": symbol, "isin": group["isin"],
+                                "currency": currency, "type": "DIVIDEND", "quantity": quantity,
+                                "unitPrice": str(Fraction(gross) * factor / Fraction(quantity)),
+                                "gross": str(Fraction(gross) * factor),
+                                "signed_tax": str(Fraction(tax) * factor),
+                                "group_signed_tax": str(Fraction(group_tax) * factor),
+                                "fee": str(max(Fraction(0), -Fraction(tax)) * factor),
+                                "historical_fee": str(max(Fraction(0), -Fraction(group_tax)) * factor)}
+                    if len(actions) != 1:
+                        reason = "aggregate"
+                except (RuntimeError, KeyError, StopIteration, ValueError, ArithmeticError):
+                    reason = "unsupported"
+                if any(row.get("actionID") == action or not (row.get("isin") or row.get("symbol"))
+                       or (row.get("isin") or row.get("symbol")) == (group["isin"] or group["symbol"])
+                       for row in omitted):
+                    reason = "conflicting"
+                    evidence = {**evidence, "omitted_cash": omitted}
+                # A proven zero-net action contributes tax to the historical
+                # clamp, but claims no historical payment row of its own.
+                aliases = [] if actions and (account, action) not in actions else old
+                add(account, "DIVIDEND", action, reference, evidence, aliases, group["date"],
+                    expected, reason, group_key, coverage)
+    for event in events.values():
+        event["source_refs"].sort()
+        event["variants"].sort(key=canonical_json)
+    return sorted(events.values(), key=lambda event: event["event"])
+
+
+def exact_differences(row: dict[str, Any], event: dict[str, Any], timezone: str) -> list[dict[str, Any]]:
+    """Compare original numbers by rational arithmetic, with no rounding tolerance."""
+    expected = event["expected"]
+    if any(not isfinite(float(row[field])) or (row[field] and float(row[field]) == 0)
+           for field in ("quantity", "unitPrice", "fee")):
+        return [{"field": "numeric_support", "expected": "finite representable numbers",
+                 "observed": {field: row[field] for field in ("quantity", "unitPrice", "fee")}}]
+    profile = row.get("assetProfile") if "assetProfile" in row else row.get("SymbolProfile")
+    profile = profile or {}
+    observed = {"accountId": row.get("accountId"), "symbol": profile.get("symbol"),
+                "currency": row.get("currency"), "type": row.get("type"),
+                "quantity": row["quantity"], "unitPrice": str(Fraction(row["unitPrice"])),
+                "gross": str(Fraction(row["quantity"]) * Fraction(row["unitPrice"])),
+                "fee": str(Fraction(row["fee"]))}
+    comparisons = {key: (value, observed[key]) for key, value in expected.items() if key in observed}
+    comparisons.update({"dataSource": ("YAHOO", profile.get("dataSource")),
+                        "day": (event["day"], instant(row["date"]).astimezone(
+                            ZoneInfo(timezone)).date().isoformat())})
+    if expected.get("isin") and profile.get("isin"):
+        comparisons["isin"] = expected["isin"], profile["isin"]
+    if "historical_fee" in expected:
+        comparisons["historical_fee"] = expected["historical_fee"], observed["fee"]
+    if profile.get("currency"):
+        comparisons["profile_currency"] = expected["currency"], profile["currency"]
+    if row.get("dataSource") is not None:
+        comparisons["row_dataSource"] = "YAHOO", row["dataSource"]
+    if row.get("symbol") is not None:
+        comparisons["row_symbol"] = expected["symbol"], row["symbol"]
+    if row.get("account") is not None:
+        account = row["account"]
+        comparisons["account_context"] = expected["accountId"], (
+            account.get("id") if isinstance(account, dict) else None)
+    if row.get("assetProfile") is not None and row.get("SymbolProfile") is not None:
+        comparisons["profile_context"] = row["assetProfile"], row["SymbolProfile"]
+    return [{"field": key, "expected": want, "observed": got}
+            for key, (want, got) in sorted(comparisons.items()) if want != got]
+
+
+def classify_history(reports: dict[str, tuple[str, str]], rows: list[dict[str, Any]],
+                     config: dict[str, Any]) -> dict[str, Any]:
+    """One decision per source event and per saved row; never dispatch a request."""
+    events = source_events(reports, config)
+    by_comment: dict[str, list[dict[str, Any]]] = {}
+    claims: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_comment.setdefault(row["comment"], []).append(row)
+    for event in events:
+        candidates = [row for comment in event["old_comments"] for row in by_comment.get(comment, [])
+                      if event["kind"] == "TRADE" or row["accountId"] ==
+                      config["accounts"][event["source_account"]]]
+        event["activity_ids"] = sorted(row["id"] for row in candidates)
+        for row in candidates:
+            claims.setdefault(row["id"], []).append(event)
+    replacements = []
+    for event in events:
+        ids = event["activity_ids"]
+        occupied = by_comment.get(event["new_comment"], []) if event["new_comment"] else []
+        covered = [comment for comment in event["coverage"] if comment in by_comment]
+        reason = event["reason"]
+        if event["day"] and not config["window"][0] <= event["day"] <= config["window"][1]:
+            reason = "outside-window"
+        elif covered and len(covered) < len(event["coverage"]):
+            reason = "partial-coverage"
+        elif occupied:
+            reason = "conflicting" if ids else "already-v2"
+        elif len(ids) > 1 or any(len(claims[row_id]) > 1 for row_id in ids):
+            # Several actions of the same group mean aggregation, not duplicate ownership.
+            linked = {other["event"]: other for row_id in ids for other in claims[row_id]}
+            reason = ("aggregate" if reason != "conflicting" and len(ids) == 1 and event["group"] and
+                      all(other["group"] == event["group"] for other in linked.values())
+                      else "ambiguous")
+        elif not ids and reason is None:
+            reason = "absent-new-candidate"
+        event["differences"] = []
+        if ids and len(ids) == 1:
+            row = next(row for row in rows if row["id"] == ids[0])
+            try:
+                active = activity_is_active(row)
+                require(parse_versioned_activity_identity(row["comment"], row["type"]) is None,
+                        "Historical row is not a legacy identity")
+            except RuntimeError:
+                active = False
+            if event["expected"]:
+                event["differences"] = exact_differences(row, event, config["timezone"])
+            if reason is None:
+                if not active:
+                    reason = "unsupported"
+                elif event["differences"]:
+                    reason = "conflicting"
+                else:
+                    after = {**row, "comment": event["new_comment"]}
+                    replacements.append({"id": row["id"], "old_comment": row["comment"],
+                                         "new_comment": event["new_comment"], "event": event["event"],
+                                         "before_fingerprint": digest(canonical_json(row)),
+                                         "after_fingerprint": digest(canonical_json(after))})
+        event["status"] = reason or "eligible-replacement"
+        event["reason"] = reason
+        event["evidence_status"] = "exact" if reason is None else "excluded"
+        event["association_cardinality"] = {"historical_rows": len(ids),
+            "source_events": max((len(claims[row_id]) for row_id in ids), default=1)}
+        event["occupied_ids"] = sorted(row["id"] for row in occupied)
+    decisions = []
+    for row in sorted(rows, key=lambda row: row["id"]):
+        linked = claims.get(row["id"], [])
+        status = linked[0]["status"] if linked else "unsupported"
+        reason = status
+        if not linked:
+            comment = row["comment"] or ""
+            reason = "absent-source" if comment.startswith(("IBKR#", "dividend#")) else "manual"
+            try:
+                if parse_versioned_activity_identity(comment, row["type"]):
+                    status = reason = "already-v2"
+            except RuntimeError:
+                reason = "invalid-identity"
+        if not linked and not config["window"][0] <= instant(row["date"]).astimezone(
+                ZoneInfo(config["timezone"])).date().isoformat() <= config["window"][1]:
+            status = "outside-window"
+        decisions.append({"id": row["id"], "fields": row, "status": status,
+                          "reason": reason,
+                          "evidence_status": "exact" if status == "eligible-replacement" else "excluded",
+                          "association_cardinality": {"source_events": len(linked),
+                                                      "historical_rows": 1},
+                          "source_events": sorted(e["event"] for e in linked),
+                          "fingerprint": digest(canonical_json(row))})
+    return {"events": events, "rows": decisions,
+            "counts": {"source_events": dict(sorted(Counter(e["status"] for e in events).items())),
+                       "historical_rows": dict(sorted(Counter(r["status"] for r in decisions).items()))},
+            "replacements": sorted(replacements, key=lambda r: r["id"])}
+
+
 def preview(inputs: Path, output: Path) -> str:
     config_path = safe_path(inputs)
     config_bytes = config_path.read_bytes()
@@ -140,6 +450,7 @@ def preview(inputs: Path, output: Path) -> str:
         return data
 
     reports: dict[str, Any] = {}
+    saved_reports: dict[str, tuple[str, str]] = {}
     covered: set[str] = set()
     for name, ref in sorted(records.items()):
         require(isinstance(ref, dict) and ref.get("source_account") in accounts,
@@ -151,6 +462,7 @@ def preview(inputs: Path, output: Path) -> str:
         require(bounds is not None, "Missing report window evidence")
         # Bounds are evidence of scope, not proof of full event completeness.
         reports[name] = {"source_account": account, "window": bounds, "sha256": ref["sha256"]}
+        saved_reports[name] = account, xml
         covered.add(account)
     require(covered == accounts.keys(), "Inventory accounts lack saved reports")
     snapshot_ref = config.get("snapshot")
@@ -160,19 +472,19 @@ def preview(inputs: Path, output: Path) -> str:
                      "mapping": digest(canonical_json(mapping)),
                      "inventory": digest(canonical_json(accounts))})
     manifest = {
-        "schema": "ibkr-migration-preview-v1", "stage": "validated-inputs",
+        "schema": "ibkr-migration-preview-v1", "stage": "exact-historical-eligibility",
         "actionable": False, "replacements": [],
-        "pending": ["exact-historical-eligibility", "complete-import-selection-proof"],
+        "pending": ["complete-import-selection-proof"],
         "bindings": bindings, "tool_commit": config["tool_commit"],
         "timezone": config["timezone"], "window": window, "accounts": accounts,
         "symbol_mapping": mapping, "reports": reports,
         "snapshot": {k: v for k, v in snapshot_ref.items() if k != "path"},
-        "rows": [{"id": row["id"], "fields": row,
-                  "fingerprint": digest(canonical_json(row))}
-                 for row in sorted(snapshot["activities"], key=lambda row: row["id"])],
         "limitations": ["Declared inventory and report bounds do not prove event completeness.",
                         "This evidence preview cannot authorize apply or rollback."],
     }
+    manifest.update(classify_history(saved_reports, snapshot["activities"], config))
+    manifest["limitations"].append(
+        "Historical deduplication does not certify event completeness or exact migration eligibility.")
     for path, data in captured.items():
         require(safe_path(path).read_bytes() == data, "Input changed during preview")
     data = canonical_json(manifest)
@@ -189,10 +501,15 @@ def main() -> int:
     command.add_argument("--inputs", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    # Shared converters can log private source evidence. Keep the CLI output bounded.
+    previous_logging_level = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
     try:
         print(preview(args.inputs, args.output))
     except (RuntimeError, ValueError, OSError, KeyError, TypeError, SyntaxError, yaml.YAMLError) as error:
         parser.exit(1, f"Preview refused ({type(error).__name__}); check saved input evidence.\n")
+    finally:
+        logging.disable(previous_logging_level)
     return 0
 
 
