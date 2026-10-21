@@ -302,3 +302,311 @@ def test_v2_partial_recovery_preview_publication_failure_leaves_no_partial_outpu
     with pytest.raises(OSError, match="Synthetic publication failure"):
         recovery.preview(*paths, case["root"] / "preview")
     assert {p.name: p.read_bytes() for p in case["root"].iterdir()} == before
+
+
+@pytest.fixture
+def submission(case, monkeypatch, request):
+    import yaml
+    from unittest.mock import Mock
+
+    if getattr(request, "param", None) == "three_actions":
+        case["source"] = case["source"].replace(b'</CashTransactions>',
+            b'<CashTransaction accountId="U1" conid="1001" currency="USD" actionID="third" '
+            b'exDate="20260101" isin="US0000000001" symbol="TEST" type="Dividends" '
+            b'amount="10" dateTime="20260110;120000 UTC"/></CashTransactions>')
+        case["source"] = case["source"].replace(b'</ChangeInDividendAccruals>',
+            b'<ChangeInDividendAccrual accountId="U1" conid="1001" currency="USD" actionID="third" '
+            b'exDate="20260101" quantity="20" code="Re" payDate="20260110" date="20260110" '
+            b'reportDate="20260110"/></ChangeInDividendAccruals>')
+        groups = recovery.parse_cash_dividends(case["source"].decode())
+        payloads, ok = recovery.convert_dividend_actions(groups[0], "destination", {}, {}, groups)
+        assert ok and len(payloads) == 3
+        case["payloads"] = payloads
+        case["evidence"]["requests"]["import-1"]["payloads"] = payloads
+    paths = save(case)
+    output = case["root"] / "review"
+    manifest_hash = recovery.preview(*paths, output)
+    permit = {
+        "schema": "ibkr-recovery-approval-v1", "host": "https://ghostfolio.invalid",
+        "manifest_sha256": manifest_hash, "operation_plan_ref": "approved-plan",
+        "backup_ref": "verified-backup", "writer_exclusion_ref": "stopped-all-writers",
+        "settlement_ref": "independent-settlement", "writers_stopped": True,
+        "requests_settled": True, "destination_version": case["evidence"]["destination_version"],
+        "destination_image": case["evidence"]["destination_image"],
+    }
+    approval = case["root"] / "approval.json"
+    approval.write_bytes(canonical_json(permit))
+    journal = case["root"] / "journal.yaml"
+    after = {"activities": case["snapshot"]["activities"] +
+             [accepted(case["payloads"][1], "new-1")], "count": 2}
+
+    def response(body, status=200):
+        result = requests.Response()
+        result.status_code = status
+        result._content = canonical_json(body)
+        return result
+
+    get = Mock(side_effect=[response(case["snapshot"]), response(after), response(after)])
+
+    def dispatch(*args, **kwargs):
+        # The unresolved state and exact payload must be durable BEFORE the POST.
+        state = yaml.safe_load(journal.read_text())
+        assert state["status"] == "unknown"
+        assert state["payloads"] == kwargs["json"]["activities"] == case["payloads"][1:]
+        assert journal.stat().st_mode & 0o777 == 0o600
+        return response({"activities": after["activities"][1:]}, 201)
+
+    post = Mock(side_effect=dispatch)
+    monkeypatch.setattr(requests, "get", get)
+    monkeypatch.setattr(requests, "post", post)
+    return {"paths": paths, "manifest": output / "manifest.json", "hash": manifest_hash,
+            "approval": approval, "permit": permit, "journal": journal,
+            "after": after, "get": get, "post": post, "response": response}
+
+
+def dispatch_recovery(submission):
+    s = submission
+    return recovery.submit(*s["paths"], s["manifest"], s["hash"], s["approval"],
+                           digest(s["approval"].read_bytes()), s["journal"],
+                           "https://ghostfolio.invalid", "synthetic-bearer")
+
+
+def journal_state(submission):
+    import yaml
+    return yaml.safe_load(submission["journal"].read_text())
+
+
+def test_v2_partial_recovery_submit_exact_missing_once_and_simulation(case, submission):
+    s = submission
+    before = [p.read_bytes() for p in s["paths"][:3]]
+    # The normal rule refuses the initial partial state; recovery does not relax it.
+    group = recovery.parse_cash_dividends(case["source"].decode())[0]
+    comment = case["payloads"][0]["comment"]
+    decision, _, _ = recovery.dividend_dedup_decision(group, "destination", {},
+        {"versioned_identities": {("U1", comment)}}, set())
+    assert decision == "partial"
+    dispatch_recovery(s)
+    state = journal_state(s)
+    assert state["status"] == "complete"
+    assert state["accepted_ids"] == ["new-1"]
+    assert state["simulation_reinsertions"] == 0 and state["coverage_groups"] == 1
+    assert s["post"].call_count == 1 and s["get"].call_count == 3
+    assert [p.read_bytes() for p in s["paths"][:3]] == before
+    assert "synthetic-bearer" not in s["journal"].read_text()
+    assert s["post"].call_args.args == ("https://ghostfolio.invalid/api/v1/import",)
+    assert s["post"].call_args.kwargs["allow_redirects"] is False
+    assert s["post"].call_args.kwargs["timeout"] == 60
+    with pytest.raises(RuntimeError, match="already exists"):
+        dispatch_recovery(s)
+    assert s["post"].call_count == 1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("writers_stopped", False), ("requests_settled", False),
+    ("operation_plan_ref", ""), ("backup_ref", ""), ("writer_exclusion_ref", ""),
+    ("settlement_ref", ""), ("host", "https://other.invalid"),
+    ("manifest_sha256", "changed"), ("destination_version", "changed"),
+    ("destination_image", "changed"), ("schema", "other"),
+])
+def test_v2_partial_recovery_submit_requires_approved_envelope(submission, field, value):
+    s = submission
+    s["permit"][field] = value
+    s["approval"].write_bytes(canonical_json(s["permit"]))
+    with pytest.raises(RuntimeError):
+        dispatch_recovery(s)
+    assert not s["journal"].exists()
+    s["get"].assert_not_called()
+    s["post"].assert_not_called()
+
+
+@pytest.mark.parametrize("which", ["source", "snapshot", "evidence", "manifest", "approval_hash"])
+def test_v2_partial_recovery_submit_changed_review_refuses(submission, which):
+    s = submission
+    if which in ("source", "snapshot", "evidence"):
+        s["paths"][("source", "snapshot", "evidence").index(which)].write_bytes(b"changed")
+    elif which == "manifest":
+        data = exact_json(s["manifest"].read_bytes())
+        data["missing_payloads"][0]["quantity"] = 99
+        s["manifest"].write_bytes(canonical_json(data))
+        s["hash"] = digest(s["manifest"].read_bytes())
+    else:
+        # Direct call supplies an approval hash reviewed before replacement.
+        s["approval"].write_bytes(b"changed")
+    with pytest.raises((RuntimeError, ValueError)):
+        dispatch_recovery(s)
+    s["get"].assert_not_called()
+    s["post"].assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["timeout", "redirect", "http400", "http500", "malformed",
+                                    "partial", "duplicate", "financial", "wrong_account", "id"])
+def test_v2_partial_recovery_submit_uncertain_or_partial_never_retries(submission, fault):
+    s = submission
+    row = copy.deepcopy(s["after"]["activities"][1])
+    if fault == "timeout":
+        s["post"].side_effect = requests.Timeout("secret response must not be logged")
+    else:
+        status = {"redirect": 307, "http400": 400, "http500": 500}.get(fault, 201)
+        if fault == "financial":
+            row["fee"] += 1
+        if fault == "wrong_account":
+            row["accountId"] = "other"
+        if fault == "id":
+            row["id"] = "accepted-1"
+        rows = [] if fault == "partial" else [row, row] if fault == "duplicate" else [row]
+        body = {} if fault == "malformed" else {"activities": rows}
+        s["post"].side_effect = None
+        s["post"].return_value = s["response"](body, status)
+    with pytest.raises(RuntimeError):
+        dispatch_recovery(s)
+    assert s["post"].call_count == 1 and s["get"].call_count == 1
+    assert journal_state(s)["status"] == ("partial" if fault == "partial" else "unknown")
+    with pytest.raises(RuntimeError, match="already exists"):
+        dispatch_recovery(s)
+    assert s["post"].call_count == 1
+
+
+@pytest.mark.parametrize("fault", ["pre_drift", "pre_partial", "readback_missing", "readback_money",
+    "readback_preserved", "readback_duplicate", "readback_id", "readback_extra", "readback_timeout",
+    "simulation_partial", "simulation_timeout"])
+def test_v2_partial_recovery_submit_readback_and_simulation_gates(case, submission, fault):
+    s = submission
+    fresh, after, simulation = [copy.deepcopy(x) for x in (case["snapshot"], s["after"], s["after"])]
+    if fault == "pre_drift":
+        fresh["activities"][0]["tags"] = ["changed"]
+    if fault == "pre_partial":
+        fresh["count"] = 5
+    if fault == "readback_missing":
+        after = case["snapshot"]
+    if fault == "readback_money":
+        after["activities"][1]["quantity"] += 1
+    if fault == "readback_preserved":
+        after["activities"][0]["tags"] = ["changed"]
+    if fault == "readback_duplicate":
+        after["activities"].append({**after["activities"][1], "id": "duplicate"})
+        after["count"] += 1
+    if fault == "readback_id":
+        after["activities"][1]["id"] = "different-id"
+    if fault == "readback_extra":
+        after["activities"].append({**after["activities"][0], "id": "extra", "comment": None})
+        after["count"] += 1
+    if fault == "simulation_partial":
+        simulation = case["snapshot"]
+    sequence = [s["response"](fresh), s["response"](after), s["response"](simulation)]
+    if fault == "readback_timeout":
+        sequence[1] = requests.Timeout("private")
+    if fault == "simulation_timeout":
+        sequence[2] = requests.Timeout("private")
+    s["get"].side_effect = sequence
+    with pytest.raises(RuntimeError):
+        dispatch_recovery(s)
+    assert s["post"].call_count == (0 if fault.startswith("pre_") else 1)
+    assert journal_state(s)["status"] == ("prepared" if fault.startswith("pre_")
+                                         else "accepted_unverified")
+
+
+@pytest.mark.parametrize("fault", ["lock", "journal", "symlink", "evidence_alias", "lock_alias",
+                                    "write_failure", "pending_failure", "evidence_race"])
+def test_v2_partial_recovery_submit_local_safety(case, submission, monkeypatch, fault):
+    import cleanup_recovery
+    s = submission
+    original = s["paths"][0].read_bytes()
+    lock = None
+    if fault == "lock":
+        lock = cleanup_recovery.lock_journal(s["journal"])
+    elif fault == "journal":
+        s["journal"].write_text("existing")
+    elif fault == "symlink":
+        s["journal"].symlink_to(s["paths"][0])
+    elif fault == "evidence_alias":
+        s["journal"] = s["paths"][0]
+    elif fault == "lock_alias":
+        Path(str(s["journal"]) + ".lock").hardlink_to(s["paths"][0])
+    elif fault in ("write_failure", "pending_failure"):
+        write = cleanup_recovery.write_journal
+        def failing(path, record, create=False):
+            if fault == "write_failure" or record["status"] == "unknown":
+                raise OSError("synthetic disk fault")
+            write(path, record, create)
+        monkeypatch.setattr(cleanup_recovery, "write_journal", failing)
+    else:
+        def changed(*args, **kwargs):
+            s["paths"][0].write_bytes(b"changed during GET")
+            return s["response"](case["snapshot"])
+        s["get"].side_effect = changed
+    try:
+        with pytest.raises((RuntimeError, OSError)):
+            dispatch_recovery(s)
+    finally:
+        if lock is not None:
+            os.close(lock)
+    s["post"].assert_not_called()
+    if fault != "evidence_race":
+        assert s["paths"][0].read_bytes() == original
+
+
+def test_v2_partial_recovery_submit_cli(case, submission, monkeypatch, capsys):
+    s = submission
+    source, destination, evidence, sha = s["paths"]
+    monkeypatch.setenv("GHOST_TOKEN", "synthetic-bearer")
+    monkeypatch.setattr("sys.argv", ["identity_recovery.py", "submit", "--source", str(source),
+        "--destination", str(destination), "--evidence", str(evidence), "--evidence-sha256", sha,
+        "--manifest", str(s["manifest"]), "--manifest-sha256", s["hash"],
+        "--approval", str(s["approval"]), "--approval-sha256", digest(s["approval"].read_bytes()),
+        "--journal", str(s["journal"]), "--host", "https://ghostfolio.invalid"])
+    with patch("logging.disable"):
+        assert recovery.main() == 0
+    assert "reinsertions: 0" in capsys.readouterr().out
+    with patch("logging.disable"), pytest.raises(SystemExit) as error:
+        recovery.main()
+    assert error.value.code == 1
+    assert "synthetic-bearer" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("submission", ["three_actions"], indirect=True)
+def test_v2_partial_recovery_submit_preserves_nonempty_partial_subset(case, submission):
+    s = submission
+    s["post"].side_effect = None
+    s["post"].return_value = s["response"]({"activities": s["after"]["activities"][1:]}, 201)
+    with pytest.raises(RuntimeError, match="Partial recovery"):
+        dispatch_recovery(s)
+    state = journal_state(s)
+    assert state["status"] == "partial" and state["accepted_ids"] == ["new-1"]
+    assert len(state["payloads"]) == 2
+    assert s["post"].call_count == 1 and s["get"].call_count == 1
+
+
+@pytest.mark.parametrize("fault", ["account_shape", "profile_precedence", "null_fee", "inactive",
+    "date", "currency", "symbol", "precision", "invalid_json", "response_timeout"])
+def test_v2_partial_recovery_submit_response_evidence_is_exact(submission, fault):
+    s = submission
+    row = copy.deepcopy(s["after"]["activities"][1])
+    if fault == "account_shape":
+        row["account"] = "invalid"
+    elif fault == "profile_precedence":
+        row["SymbolProfile"] = row["assetProfile"]
+        row["assetProfile"] = None
+    elif fault == "null_fee":
+        row["fee"] = None
+    elif fault == "inactive":
+        row["isDraft"] = True
+    elif fault == "date":
+        row["date"] = "2026-01-09T00:00:00Z"
+    elif fault == "currency":
+        row["currency"] = "EUR"
+    elif fault == "symbol":
+        row["assetProfile"]["symbol"] = "OTHER"
+    result = s["response"]({"activities": [row]}, 201)
+    if fault == "precision":
+        result._content = result.content.replace(b'"quantity":100.0',
+                                                b'"quantity":100.00000000000000001')
+    if fault == "invalid_json":
+        result._content = b'not-json'
+    if fault == "response_timeout":
+        result.status_code = 504
+    s["post"].side_effect = None
+    s["post"].return_value = result
+    with pytest.raises((RuntimeError, ValueError)):
+        dispatch_recovery(s)
+    assert journal_state(s)["status"] == "unknown"
+    assert s["post"].call_count == 1 and s["get"].call_count == 1
