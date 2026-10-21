@@ -200,6 +200,13 @@ Trade <id> cannot be converted safely; excluded before holdings checks
   before rollback. Pre-rc.5 code must never run against that history.
   A reader rollback keeps existing rows and can still refuse partial coverage.
   Resume writes only after mixed-history review and separate authorization.
+  Historical comment reversal uses the separately approved
+  [guarded rollback](cleanup.md#guarded-comment-rollback-and-resume-inspection).
+  It restores only unchanged journal-owned comments and retains new v2 imports.
+  Offline resume inspection never settles a timed-out request. An old comment
+  or an absent row does not prove cancellation. Require independent completion
+  or cancellation evidence before reversal. Keep journals and stop writers after
+  uncertainty. Database restore requires its own operation and reconciliation.
   Existing cleanup tools must not run against v2 history until separately
   qualified. Writer release and image-backed qualification remain separate.
 - **Longer Flex waits.** A transient IBKR SendRequest error is retried (up to five attempts, 18 minutes of

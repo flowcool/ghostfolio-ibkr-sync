@@ -68,7 +68,7 @@ from identity_maintenance import (
 )
 
 
-def keyed_yaml(data: bytes) -> dict[str, Any]:
+def keyed_yaml(data: bytes, *, allow_float: bool = False) -> dict[str, Any]:
     """Accept JSON-compatible keyed YAML without duplicate keys or aliases."""
     root = yaml.compose(data, Loader=yaml.SafeLoader)
     seen: set[int] = set()
@@ -89,7 +89,8 @@ def keyed_yaml(data: bytes) -> dict[str, Any]:
         else:
             require(isinstance(node, yaml.ScalarNode) and node.tag in {
                 'tag:yaml.org,2002:str', 'tag:yaml.org,2002:int',
-                'tag:yaml.org,2002:bool', 'tag:yaml.org,2002:null'}, "Unsupported YAML value")
+                'tag:yaml.org,2002:bool', 'tag:yaml.org,2002:null',
+                *({'tag:yaml.org,2002:float'} if allow_float else set())}, "Unsupported YAML value")
 
     check(root)
     result = yaml.safe_load(data)
@@ -794,6 +795,170 @@ def apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
         os.close(lock)
 
 
+def migration_journal(journal: Path, manifest: Path, manifest_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind every preimage and replacement to the reviewed manifest."""
+    reviewed = exact_json(read_evidence(manifest, manifest_sha256))
+    record = keyed_yaml(safe_path(journal).read_bytes(), allow_float=True)
+    require(record.get("schema") == "ibkr-migration-journal-v1"
+            and record.get("manifest_sha256") == manifest_sha256, "Journal binding changed")
+    planned = {r["id"]: r for r in reviewed["replacements"]}
+    require(isinstance(record.get("rows"), dict) and record["rows"].keys() == planned.keys(),
+            "Journal ownership changed")
+    for row_id, entry in record["rows"].items():
+        replacement = planned[row_id]
+        require(all(entry.get(k) == v for k, v in replacement.items()), "Journal replacement changed")
+        before = entry["preimage"]
+        require(before.get("id") == row_id and before.get("comment") == replacement["old_comment"]
+                and digest(canonical_json(before)) == replacement["before_fingerprint"]
+                and digest(canonical_json({**before, "comment": entry["new_comment"]}))
+                == replacement["after_fingerprint"], "Journal preimage changed")
+        require(parse_versioned_activity_identity(entry["new_comment"], before["type"]) is not None,
+                "Journal target is not v2")
+        require(entry.get("status") in {"prepared", "pending", "verified"}
+                and entry.get("rollback_status") in {None, "pending", "verified"},
+                "Invalid journal transition")
+    return record, reviewed
+
+
+def inspect_rows(record: dict[str, Any], snapshot: Any, metadata: dict[str, Any]) -> dict[str, str]:
+    # New imports can exist since apply. Check completeness against this capture.
+    validate_snapshot(snapshot, {**metadata, "count": len(snapshot["activities"])})
+    actual = {r["id"]: r for r in snapshot["activities"]}
+    result = {}
+    for row_id, entry in record["rows"].items():
+        row = actual.get(row_id)
+        fingerprint = digest(canonical_json(row))
+        state = ("converted" if fingerprint == entry["after_fingerprint"] else
+                 "original" if fingerprint == entry["before_fingerprint"] else
+                 "absent" if row is None else "drift")
+        pending = (entry.get("rollback_status") == "pending" or
+                   entry.get("rollback_status") is None and entry["status"] == "pending")
+        result[row_id] = "uncertain:" + state if pending else state
+    return result
+
+
+def inspect(journal: Path, manifest: Path, manifest_sha256: str,
+            snapshot: Path, snapshot_sha256: str) -> dict[str, str]:
+    """Inspect saved evidence only; readback never clears a pending request."""
+    record, reviewed = migration_journal(journal, manifest, manifest_sha256)
+    return inspect_rows(record, exact_json(read_evidence(snapshot, snapshot_sha256)), reviewed["snapshot"])
+
+
+def rollback(journal: Path, manifest: Path, manifest_sha256: str, approval: Path,
+             approval_sha256: str, host: str, token: str) -> None:
+    """Reverse unchanged journal-owned comments under a separate approval."""
+    from cleanup_recovery import journal_host, lock_journal, write_journal
+    from ghostfolio_ibkr_sync.ghostfolio import ghost_headers
+
+    host = journal_host({"ghost_host": host})
+    require(text(token), "Missing maintenance credential")
+    path = safe_path(journal)
+    for target in (path, safe_path(Path(str(path) + ".lock"))):
+        for source in (safe_path(manifest), safe_path(approval)):
+            require(not source.is_relative_to(target) and not target.is_relative_to(source)
+                    and (not target.exists() or not target.samefile(source)), "Journal overlaps evidence")
+    lock = lock_journal(path)
+    try:
+        journal_bytes = path.read_bytes()
+        record, reviewed = migration_journal(path, manifest, manifest_sha256)
+        permit_bytes = read_evidence(approval, approval_sha256)
+        permit = exact_json(permit_bytes)
+        require(permit.get("schema") == "ibkr-migration-rollback-approval-v1"
+                and permit.get("journal_sha256") == digest(journal_bytes)
+                and permit.get("manifest_sha256") == manifest_sha256
+                and permit.get("host") == record["host"] == host, "Rollback approval binding changed")
+        for key in ("operation_plan_ref", "backup_ref", "writer_exclusion_ref", "settlement_ref",
+                    "preservation_qualification_ref", "pacing_qualification_ref", "owner_id"):
+            require(text(permit.get(key)), "Missing qualified rollback prerequisite")
+        require(permit.get("writers_stopped") is True and permit.get("requests_settled") is True,
+                "Competing writers or requests remain")
+        for key in ("destination_version", "destination_image"):
+            require(permit.get(key) == reviewed["snapshot"][key], "Rollback destination changed")
+        batch, pause = permit.get("batch_size"), permit.get("pause_seconds")
+        require(isinstance(batch, Decimal) and batch.is_finite() and batch > 0 and batch == int(batch)
+                and isinstance(pause, Decimal) and pause.is_finite() and pause >= 0
+                and isfinite(float(pause)), "Missing measured rollback pacing")
+        settlements = permit.get("settlements", {})
+        require(isinstance(settlements, dict), "Invalid request settlements")
+        headers = ghost_headers(token)
+
+        def fresh() -> Any:
+            response = migration_request("get", f"{host}/api/v1/activities", headers=headers)
+            snapshot = exact_json(response.content)
+            inspect_rows(record, snapshot, reviewed["snapshot"])
+            require(read_evidence(approval, approval_sha256) == permit_bytes
+                    and digest(safe_path(manifest).read_bytes()) == manifest_sha256,
+                    "Rollback evidence changed")
+            return snapshot
+
+        snapshot = fresh()
+        states = inspect_rows(record, snapshot, reviewed["snapshot"])
+        selected = []
+        resolved = []
+        for row_id, entry in record["rows"].items():
+            state = states[row_id]
+            reverse = entry.get("rollback_status")
+            pending = reverse == "pending" or reverse is None and entry["status"] == "pending"
+            if pending:
+                proof = settlements.get(row_id, {})
+                require(isinstance(proof, dict) and proof.get("direction") == ("rollback" if reverse else "apply")
+                        and proof.get("outcome") in {"completed", "cancelled"}
+                        and proof.get("independent") is True and text(proof.get("evidence_ref")),
+                        "Pending request lacks independent settlement proof")
+                state = state.removeprefix("uncertain:")
+                expected_state = ("original" if reverse else "converted") if proof["outcome"] == "completed" else (
+                    "converted" if reverse else "original")
+                require(state == expected_state, "Settlement contradicts readback")
+                resolved.append((entry, reverse, proof))
+            elif reverse == "verified" or entry["status"] == "prepared":
+                require(state == "original", "Unchanged original context required")
+            else:
+                require(state == "converted", "Unchanged converted context required")
+            if state == "converted":
+                require(entry["preimage"].get("userId") == permit["owner_id"], "Rollback owner changed")
+                selected.append(row_id)
+        require(isinstance(permit.get("write_count"), Decimal)
+                and permit["write_count"] == len(selected), "Unapproved rollback write count")
+        expected = {r["id"]: r for r in snapshot["activities"]}
+
+        def check() -> None:
+            current = {r["id"]: r for r in fresh()["activities"]}
+            require(current.keys() == expected.keys() and all(
+                canonical_json(current[k]) == canonical_json(v) for k, v in expected.items()),
+                "Rollback ownership, occupancy or context changed")
+
+        check()
+        for entry, reverse, proof in resolved:
+            entry["settlement"] = json.loads(canonical_json(proof))
+            if reverse:
+                if proof["outcome"] == "completed":
+                    entry["rollback_status"] = "verified"
+                else:
+                    del entry["rollback_status"]
+            else:
+                entry["status"] = "verified" if proof["outcome"] == "completed" else "prepared"
+        for index, row_id in enumerate(selected):
+            if index and index % int(batch) == 0:
+                time.sleep(float(pause))
+            check()
+            entry = record["rows"][row_id]
+            payload = comment_payload(expected[row_id], entry["old_comment"])
+            entry.update(rollback_status="pending", rollback_request_payload=payload)
+            record["rollback_approval_sha256"] = approval_sha256
+            record["status"] = "rollback_in_progress"
+            write_journal(path, record)
+            migration_request("put", f"{host}/api/v1/activities/{quote(row_id, safe='')}",
+                              headers=headers, json=payload)
+            expected[row_id] = {**expected[row_id], "comment": entry["old_comment"]}
+            check()
+            entry["rollback_status"] = "verified"
+            write_journal(path, record)
+        record["status"] = "rolled_back"
+        write_journal(path, record)
+    finally:
+        os.close(lock)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -808,6 +973,19 @@ def main() -> int:
     command.add_argument("--approval-sha256", required=True)
     command.add_argument("--journal", type=Path, required=True)
     command.add_argument("--host", required=True)
+    command = commands.add_parser("inspect", help="Inspect saved resume evidence without HTTP")
+    command.add_argument("--journal", type=Path, required=True)
+    command.add_argument("--manifest", type=Path, required=True)
+    command.add_argument("--manifest-sha256", required=True)
+    command.add_argument("--snapshot", type=Path, required=True)
+    command.add_argument("--snapshot-sha256", required=True)
+    command = commands.add_parser("rollback", help="Reverse separately approved journal-owned comments")
+    command.add_argument("--journal", type=Path, required=True)
+    command.add_argument("--manifest", type=Path, required=True)
+    command.add_argument("--manifest-sha256", required=True)
+    command.add_argument("--approval", type=Path, required=True)
+    command.add_argument("--approval-sha256", required=True)
+    command.add_argument("--host", required=True)
     args = parser.parse_args()
     # Shared converters can log private source evidence. Keep the CLI output bounded.
     previous_logging_level = logging.root.manager.disable
@@ -815,12 +993,19 @@ def main() -> int:
     try:
         if args.command == "preview":
             print(preview(args.inputs, args.output))
+        elif args.command == "inspect":
+            print(canonical_json(inspect(args.journal, args.manifest, args.manifest_sha256,
+                                         args.snapshot, args.snapshot_sha256)).decode(), end="")
+        elif args.command == "rollback":
+            rollback(args.journal, args.manifest, args.manifest_sha256, args.approval,
+                     args.approval_sha256, args.host, os.environ.get("GHOST_TOKEN", ""))
+            print("Rollback complete: journal-owned comments restored")
         else:
             apply(args.inputs, args.manifest, args.manifest_sha256, args.approval,
                   args.approval_sha256, args.journal, args.host, os.environ.get("GHOST_TOKEN", ""))
             print("Migration complete: reviewed comments verified")
     except (RuntimeError, ValueError, OSError, KeyError, TypeError, SyntaxError, yaml.YAMLError) as error:
-        label = "Preview" if args.command == "preview" else "Apply"
+        label = args.command.capitalize()
         parser.exit(1, f"{label} refused ({type(error).__name__}); check evidence and journal.\n")
     finally:
         logging.disable(previous_logging_level)
