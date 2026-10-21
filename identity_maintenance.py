@@ -6,6 +6,7 @@ No configuration loader, credential reader or HTTP client belongs here.
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -73,11 +74,24 @@ def publish_private(output: Path, files: dict[str, bytes], inputs: list[Path]) -
         source = safe_path(path)
         require(not source.is_relative_to(target) and not target.is_relative_to(source),
                 "Output overlaps evidence")
-    target.mkdir(mode=0o700, parents=False, exist_ok=False)
-    for name, data in files.items():
+    for name in files:
         require(Path(name).name == name, "Invalid output name")
-        descriptor = os.open(target / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
+    require(not target.exists(), "Output already exists")
+    # Stage on the same filesystem for an atomic directory rename. Reserve the
+    # destination exclusively only after every file has been written and synced.
+    # Rename may replace our own empty reservation, never an earlier output.
+    with tempfile.TemporaryDirectory(prefix=".identity-preview-", dir=target.parent) as staging:
+        stage = Path(staging) / "review"
+        stage.mkdir(mode=0o700)
+        for name, data in files.items():
+            descriptor = os.open(stage / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+        target.mkdir(mode=0o700, parents=False, exist_ok=False)
+        try:
+            stage.rename(target)
+        except OSError:
+            target.rmdir()
+            raise

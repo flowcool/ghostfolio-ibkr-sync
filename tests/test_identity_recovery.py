@@ -285,3 +285,20 @@ def test_v2_partial_recovery_preview_input_symlink_is_refused(case):
 def test_v2_partial_recovery_preview_ambiguous_json_refused(raw):
     with pytest.raises(RuntimeError):
         exact_json(raw)
+
+
+@pytest.mark.parametrize("failure", ["fsync", "rename"])
+def test_v2_partial_recovery_preview_publication_failure_leaves_no_partial_output(case, monkeypatch, failure):
+    paths = save(case)
+    before = {p.name: p.read_bytes() for p in case["root"].iterdir()}
+
+    def fail(*args, **kwargs):
+        raise OSError("Synthetic publication failure")
+
+    if failure == "fsync":
+        monkeypatch.setattr("identity_maintenance.os.fsync", fail)
+    else:
+        monkeypatch.setattr(Path, "rename", fail)
+    with pytest.raises(OSError, match="Synthetic publication failure"):
+        recovery.preview(*paths, case["root"] / "preview")
+    assert {p.name: p.read_bytes() for p in case["root"].iterdir()} == before
