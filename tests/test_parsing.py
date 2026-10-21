@@ -557,3 +557,120 @@ def test_source_account_parser_returns_mixed_unique_accounts_for_caller_rejectio
     xml = _info_xml('<AccountInformation accountId="U1"/>'
                      '<AccountInformation accountId="U2"/>')
     assert ibkr.parse_source_account_ids(xml) == {"U1", "U2"}
+
+
+# Cash-action writer: real parser and synthetic source evidence only.
+@pytest.mark.parametrize("bonus_quantity", ["100", "37.125"])
+@pytest.mark.parametrize("currency,symbol,factor", [("USD", "KO", 1), ("GBP", "KO.L", 100)])
+def test_v2_event_partition_conserves_cash_before_independent_refund_clamps(
+        bonus_quantity, currency, symbol, factor):
+    payments = [structured_cash("20", currency=currency),
+                structured_cash("5", type_="Payment In Lieu Of Dividends", currency=currency),
+                structured_cash("10", action="bonus", currency=currency),
+                structured_cash("-4", type_="Withholding Tax", currency=currency, exDate=""),
+                structured_cash("2", type_="Withholding Tax", action="bonus", currency=currency,
+                                exDate="")]
+    evidence = [structured_accrual("100", currency=currency, grossAmount="999", tax="-999"),
+                structured_accrual(bonus_quantity, action="bonus", currency=currency)]
+    expected = None
+    for ordered in permutations(payments):
+        [dividend] = structured_dividend(ordered, reversed(evidence))
+        parts = sync.partition_dividend_actions(dividend)
+        assert parts is not None and len(parts) == 2
+        assert sum(part["gross"] for part in parts) == Decimal(35)
+        assert sum(ibkr._dividend_cash_sum([r for r in part["cash_rows"]
+                   if r["type"] == "Withholding Tax"]) for part in parts) == Decimal(-2)
+        assert sum(len(part["cash_rows"]) for part in parts) == len(payments)
+        activities, ok = sync.convert_dividend_actions(dividend, "ghost-account", {}, {})
+        assert ok and len(activities) == 2
+        # Map only for the minor-unit case; identities ignore destination mappings.
+        activities, ok = sync.convert_dividend_actions(
+            dividend, "ghost-account", {"US1912161007": symbol}, {})
+        assert ok
+        assert [a["comment"] for a in activities] == [
+            "IBKR#v2#broker-account:DIVIDEND:A1", "IBKR#v2#broker-account:DIVIDEND:bonus"]
+        assert [a["quantity"] for a in activities] == [100, float(bonus_quantity)]
+        assert [a["quantity"] * a["unitPrice"] for a in activities] == pytest.approx(
+            [25 * factor, 10 * factor])
+        assert [a["fee"] for a in activities] == [4 * factor, 0]
+        assert all(a["date"] == "2026-07-15T00:00:00+00:00" for a in activities)
+        assert all(a["currency"] == ("GBp" if factor == 100 else "USD") for a in activities)
+        if expected is None:
+            expected = activities
+        assert activities == expected
+
+
+@pytest.mark.parametrize("field,value", [
+    ("accountId", ""), ("actionID", ""), ("conid", ""), ("currency", ""),
+    ("accountId", "other"), ("actionID", "other"), ("conid", "other"),
+    ("currency", "EUR"), ("dateTime", "20260716"), ("exDate", "20260702"),
+    ("amount", "NaN"),
+])
+def test_v2_event_partition_tax_association_rejects_entire_group(field, value):
+    [dividend] = structured_dividend(
+        [structured_cash(), structured_cash("10", action="bonus"),
+         structured_cash("-4", type_="Withholding Tax")],
+        [structured_accrual(), structured_accrual("37", action="bonus")])
+    # Mutate after parsing to cover inconsistent/malformed retained evidence too.
+    dividend["cash_rows"][-1][field] = value
+    assert sync.convert_dividend_actions(dividend, "ghost-account", {}, {}) == ([], False)
+
+
+@pytest.mark.parametrize("missing_exdate", [True, False])
+def test_v2_event_partition_tax_optional_exdate_and_no_accrual_schema(missing_exdate):
+    tax = ET.fromstring(structured_cash("-3", type_="Withholding Tax"))
+    if missing_exdate:
+        del tax.attrib["exDate"]
+    tax.set("quantity", "not-an-accrual")
+    [dividend] = structured_dividend([structured_cash(), ET.tostring(tax, encoding="unicode")],
+                                     [structured_accrual()])
+    activities, ok = sync.convert_dividend_actions(dividend, "ghost-account", {}, {})
+    assert ok and activities[0]["fee"] == 3
+
+
+@pytest.mark.parametrize("override", [{"conid": "other"}, {"exDate": "20260702"},
+                                      {"currency": "EUR"}, {"conid": ""}])
+def test_v2_event_partition_conflicting_or_incomplete_payment_keys(override):
+    [dividend] = structured_dividend([structured_cash(), structured_cash("5", **override)],
+                                     [structured_accrual()])
+    assert sync.convert_dividend_actions(dividend, "ghost-account", {}, {}) == ([], False)
+
+
+def test_v2_event_partition_zero_net_action_and_tax_stay_accounted_without_quantity():
+    [dividend] = structured_dividend(
+        [structured_cash(), structured_cash("5", action="zero"),
+         structured_cash("-5", action="zero"),
+         structured_cash("2", action="zero", type_="Withholding Tax")],
+        [structured_accrual(), structured_accrual("invalid", action="zero")])
+    parts = sync.partition_dividend_actions(dividend)
+    assert len(parts) == 2 and sum(len(part["cash_rows"]) for part in parts) == 4
+    activities, ok = sync.convert_dividend_actions(dividend, "ghost-account", {}, {})
+    assert ok and len(activities) == 1 and activities[0]["fee"] == 0
+    assert activities[0]["comment"].endswith(":A1")
+
+
+def test_v2_event_partition_negative_action_rejects_positive_group():
+    [dividend] = structured_dividend([structured_cash(), structured_cash("-1", action="negative")],
+                                     [structured_accrual()])
+    assert sync.convert_dividend_actions(dividend, "ghost-account", {}, {}) == ([], False)
+
+
+@pytest.mark.parametrize("quantity", ["bad", "1e-400", "1e400"])
+def test_v2_event_partition_invalid_later_quantity_never_exposes_earlier_action(quantity):
+    [dividend] = structured_dividend([structured_cash(), structured_cash("10", action="bonus")],
+                                     [structured_accrual(), structured_accrual(quantity, action="bonus")])
+    assert sync.convert_dividend_actions(dividend, "ghost-account", {}, {}) == ([], True)
+
+
+@pytest.mark.parametrize("reused_action", [True, False])
+def test_v2_event_partition_multiple_payment_days(reused_action):
+    action = "A1" if reused_action else "A2"
+    groups = structured_dividend(
+        [structured_cash(), structured_cash("10", action=action, dateTime="20260716")],
+        [structured_accrual(), structured_accrual("37", action=action, date="20260716",
+                                                payDate="20260716", reportDate="20260716")])
+    assert len(groups) == 2
+    for group in groups:
+        activities, ok = sync.convert_dividend_actions(group, "ghost-account", {}, {}, groups)
+        assert ok is (not reused_action)
+        assert len(activities) == (0 if reused_action else 1)

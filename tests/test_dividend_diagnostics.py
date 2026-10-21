@@ -199,7 +199,7 @@ def representations(monkeypatch, rows, xml=None, identities=None, wire=None, rev
 
 
 def component(action):
-    return ("broker-account", "1", "USD", action, "20260701")
+    return ("U1", "1", "USD", action, "20260701")
 
 
 def ordinary_bonus():

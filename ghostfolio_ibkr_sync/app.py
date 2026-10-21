@@ -66,6 +66,7 @@ from ghostfolio_ibkr_sync.sync import (
     DividendEntry,
     Positions,
     Unmapped,
+    convert_dividend_actions,
     convert_dividend_to_activity,
     convert_trade_to_activity,
     dividend_dedup_decision,
@@ -287,16 +288,32 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             continue
         candidates.append(div)
 
+    # Validate all new identity segments before dispatch or independent cash.
+    try:
+        for div in candidates:
+            for row in div["payments"]:
+                if row.get("accountId", "") != ibkr_account_id:
+                    raise InvalidActivityIdentityError(
+                        "Dividend account differs from verified report account")
+                format_versioned_activity_identity(
+                    ibkr_account_id, "DIVIDEND", row.get("actionID", ""))
+    except InvalidActivityIdentityError as exc:
+        log.error("Flex Query %s: %s; account failed before any financial write", query_id, exc)
+        return {}, False
+
     # A schema mismatch blocks only account dividends, not trades or cash.
     if dividend_input_compatible(candidates):
         for div in candidates:
-            activity = convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
-            if activity and not activity_date_is_current(activity):
+            proposed, partition_ok = convert_dividend_actions(
+                div, ghost_account_id, mapping, unmapped, dividends)
+            if not partition_ok:
+                ok = False
+                continue
+            if any(not activity_date_is_current(activity) for activity in proposed):
                 log.error("Future or invalid dividend date; deferred until a later run")
                 ok = False
                 continue
-            if activity:
-                div_activities.append(activity)
+            div_activities.extend(proposed)
 
     if report_counts is None:
         log.info("New dividend activities: %d, duplicates skipped: %d",
