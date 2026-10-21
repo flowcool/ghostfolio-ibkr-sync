@@ -11,6 +11,10 @@ command in [Ghostfolio Setup](../README.md#1-choose-how-the-sync-authenticates) 
 Heuristic pair matching still requires a reviewed dry-run, verified backup and quiet
 portfolio writers. The recovery feature does not authorize financial repair by itself.
 
+Do not run the existing pair cleanup tools against v2 activity history until
+they are separately qualified. The dividend recovery preview below is a distinct
+offline command. It does not use the pair cleanup executor.
+
 For a separately authorized cleanup, select an explicit journal path:
 
 ```bash
@@ -56,5 +60,119 @@ compensation or reinjection. The API has no conditional writes or pair transacti
 so other writers must remain stopped during apply/resume. A readonly inspection does
 not constitute a guarantee against later concurrent edits.
 
+
+## Offline preview of missing v2 dividend actions
+
+Use `identity_recovery.py preview` only to inspect a saved partial import.
+Run it from the repository root with the development dependencies installed.
+The tool stays outside the container image. It reads no credentials or ENV
+configuration and sends no HTTP requests. Inherited `DRY_RUN=false` does not
+enable writes. There is no submission command in this interface.
+
+Prepare these private inputs:
+
+- The complete, unchanged Flex XML used for the original submission. It must
+  contain one statement with explicit date bounds, Account Information, Cash
+  Transactions and the required dividend accrual evidence. Keep all actions,
+  payment portions and associated tax rows. Do not shorten the report.
+- A fresh, complete, unredacted saved Ghostfolio response. Use the original JSON
+  numbers. The response must contain `activities` and its full `count`. Each row
+  needs its ID, comment and original quantity, unit price and fee. Accepted rows
+  also need account, date, currency, active state and security profile context.
+- A keyed JSON evidence file with the schema below. Keep the original submitted
+  payloads, not values reconstructed from accepted rows. Record every outstanding
+  request for this attempt. A settlement reference must point to independent
+  completion or cancellation proof. An absent row or old-comment readback alone
+  cannot settle a delayed request. Capture the destination after settlement.
+
+The evidence file uses this structure. Replace the illustrative values with
+verified capture metadata. Include every original action payload for each
+affected security/day group, including the already accepted actions.
+
+```json
+{
+  "schema": "ibkr-recovery-evidence-v1",
+  "source_sha256": "<original-submission-source-file-sha256>",
+  "destination_sha256": "<fresh-snapshot-file-sha256>",
+  "source_complete": true,
+  "destination_complete": true,
+  "unredacted": true,
+  "source_account": "U123",
+  "destination_account": "destination-account-id",
+  "window": ["2026-01-01", "2026-01-31"],
+  "symbol_mapping": {},
+  "tool_commit": "<original-submission-tool-commit>",
+  "destination_version": "<captured-version>",
+  "destination_image": "sha256:<captured-image-digest>",
+  "snapshot_ref": "<private-capture-reference>",
+  "snapshot_captured_at": "2026-02-01T12:00:00Z",
+  "requests": {
+    "original-request-id": {
+      "status": "completed",
+      "settlement_ref": "<independent-completion-or-cancellation-proof>",
+      "settled_at": "2026-02-01T11:00:00Z",
+      "payloads": [
+        {
+          "accountId": "destination-account-id",
+          "comment": "IBKR#v2#U123:DIVIDEND:action-id",
+          "currency": "USD",
+          "dataSource": "YAHOO",
+          "date": "2026-01-10T00:00:00+00:00",
+          "fee": 3.75,
+          "quantity": 100,
+          "symbol": "EXAMPLE",
+          "type": "DIVIDEND",
+          "unitPrice": 0.25
+        }
+      ]
+    }
+  }
+}
+```
+
+`symbol_mapping` contains the exact original ISIN-to-symbol mapping. The only
+settled request statuses are `completed` and `cancelled`. Completeness and
+settlement declarations need external evidence. The offline tool cannot prove
+that an omitted request or source action does not exist.
+
+Review the evidence file and obtain its SHA256 before running:
+
+```bash
+.venv/bin/python identity_recovery.py preview \
+  --source private/source.xml \
+  --destination private/activities.json \
+  --evidence private/recovery-evidence.json \
+  --evidence-sha256 <reviewed-evidence-sha256> \
+  --output private/recovery-preview
+```
+
+The output parent must exist. The command creates a new directory with mode
+0700 and `manifest.json` and `manifest.sha256` with mode 0600. Existing outputs,
+symlinks and input/output overlap are refused. Keep the output private. Identical
+input bytes produce an identical manifest hash. The manifest binds all input
+hashes and capture metadata. It lists only the exact missing import payloads,
+accepted-row fingerprints and group coverage. Original JSON decimals are read
+without float rounding. Fingerprints retain their exact decimal representation;
+missing import payloads use the runtime's numeric conversion rules.
+
+The preview compares all source actions with the original submitted payloads.
+It refuses changed financial values, missing quantity or tax evidence, duplicate
+identities, unresolved requests, overlapping manual or unexpected v2 actions,
+and changed ownership or active context. Accepted rows are never changed.
+Already complete groups produce no missing payload. A group without any proven
+accepted action is outside this recovery path.
+
+An exact historical comment can suppress a group without proving its event
+completeness. The preview refuses that ambiguity. Equal amounts do not establish
+ownership. Saved evidence proves only its declared accounts and window; it does
+not establish lifetime action identity or future snapshot freshness.
+
+Review the manifest before any operation. A preview authorizes no import,
+historical conversion or retry. Submission requires a separate approved operation
+plan, stopped competing writers, settled outstanding requests and fresh evidence
+checks. Recovery must submit only reviewed missing actions, prove full coverage
+by readback and prove zero reinsertions in normal simulation. Until that versioned
+submission path and its required qualification exist, writer enablement remains
+blocked. Normal sync keeps refusing partial action coverage.
 
 [Back to the README](../README.md)
