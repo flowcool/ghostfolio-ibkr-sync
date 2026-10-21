@@ -199,3 +199,17 @@ os._Environ.__getitem__ = checked
                             env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == migration.preview(inputs, root / "direct")
+
+
+def test_v2_migration_offline_cli_malformed_xml(case, monkeypatch, capsys):
+    root, config, save, inputs, source, snapshot = case
+    source.write_bytes(b"<FlexQueryResponse><unclosed>")
+    config["reports"]["report-1"]["sha256"] = digest(source.read_bytes())
+    save()
+    monkeypatch.setattr(sys, "argv", ["identity_migration.py", "preview", "--inputs",
+                                    str(inputs), "--output", str(root / "out")])
+    with pytest.raises(SystemExit) as result:
+        migration.main()
+    assert result.value.code == 1
+    assert "Preview refused (ParseError)" in capsys.readouterr().err
+    assert not (root / "out").exists()

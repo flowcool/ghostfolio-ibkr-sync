@@ -191,7 +191,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         print(preview(args.inputs, args.output))
-    except (RuntimeError, ValueError, OSError, KeyError, TypeError, yaml.YAMLError) as error:
+    except (RuntimeError, ValueError, OSError, KeyError, TypeError, SyntaxError, yaml.YAMLError) as error:
         parser.exit(1, f"Preview refused ({type(error).__name__}); check saved input evidence.\n")
     return 0
 
