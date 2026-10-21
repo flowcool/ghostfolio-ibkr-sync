@@ -1,12 +1,14 @@
-"""Offline exact identity migration preview, outside the runtime image.
+"""Exact identity preview and separately approved maintenance, outside the image.
 
-This stage classifies exact eligibility. It cannot authorize conversion.
-No runtime configuration, credential loader or network client is used.
+Preview never reads credentials or uses the network. Apply requires its own GO.
 """
 
 import argparse
+import json
 import logging
+import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from collections import Counter
 from datetime import date
@@ -15,6 +17,7 @@ from fractions import Fraction
 from math import isfinite
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import yaml
@@ -59,6 +62,7 @@ from identity_maintenance import (
     exact_json,
     instant,
     publish_private,
+    read_evidence,
     require,
     safe_path,
 )
@@ -542,7 +546,7 @@ def bind_selection(manifest: dict[str, Any], reports: dict[str, tuple[str, str]]
     # Bind the actual implementation bytes as well as the declared checkout
     # revision. No Git process or credential-bearing environment is needed.
     root = Path(__file__).resolve().parent
-    paths = ["identity_migration.py", "identity_maintenance.py",
+    paths = ["identity_migration.py", "identity_maintenance.py", "cleanup_recovery.py",
              *[f"ghostfolio_ibkr_sync/{name}.py" for name in
                ("app", "sync", "ghostfolio", "ibkr", "models")]]
     manifest["implementation"] = {path: digest((root / path).read_bytes()) for path in paths}
@@ -554,7 +558,7 @@ def bind_selection(manifest: dict[str, Any], reports: dict[str, tuple[str, str]]
         for row in rows]
 
 
-def preview(inputs: Path, output: Path) -> str:
+def migration_evidence(inputs: Path) -> tuple[dict[str, Any], dict[Path, bytes]]:
     config_path = safe_path(inputs)
     config_bytes = config_path.read_bytes()
     config = keyed_yaml(config_bytes)
@@ -637,11 +641,157 @@ def preview(inputs: Path, output: Path) -> str:
         "Historical deduplication does not certify event completeness or exact migration eligibility.")
     for path, data in captured.items():
         require(safe_path(path).read_bytes() == data, "Input changed during preview")
+    return manifest, captured
+
+
+def preview(inputs: Path, output: Path) -> str:
+    manifest, captured = migration_evidence(inputs)
     data = canonical_json(manifest)
     manifest_hash = digest(data)
     publish_private(output, {"manifest.json": data,
                             "manifest.sha256": (manifest_hash + "\n").encode()}, list(captured))
     return manifest_hash
+
+
+def migration_request(method: str, url: str, **kwargs: Any) -> Any:
+    """One request, with no redirect, symbol retry or credential exchange."""
+    import requests
+
+    try:
+        response = getattr(requests, method)(url, timeout=60, allow_redirects=False, **kwargs)
+    except requests.RequestException:
+        raise RuntimeError("Migration request unresolved; retain pending journal") from None
+    require(200 <= response.status_code < 300, "Migration HTTP outcome unresolved")
+    return response
+
+
+def migration_snapshot(host: str, headers: dict[str, str], metadata: dict[str, Any]) -> Any:
+    response = migration_request("get", f"{host}/api/v1/activities", headers=headers)
+    snapshot = exact_json(response.content)
+    validate_snapshot(snapshot, metadata)
+    return snapshot
+
+
+def comment_payload(row: dict[str, Any], comment: str) -> dict[str, Any]:
+    """Explicit UpdateOrderDto whitelist; never echo a GET object into PUT."""
+    profile = row.get("assetProfile") or row.get("SymbolProfile")
+    require(isinstance(profile, dict) and profile.get("dataSource") == "YAHOO"
+            and text(profile.get("symbol")), "Unsupported update profile")
+    payload = {key: row[key] for key in ("id", "accountId", "currency", "date", "type")}
+    payload.update(comment=comment, symbol=profile["symbol"], dataSource=profile["dataSource"])
+    for field in ("quantity", "unitPrice", "fee"):
+        number = row[field]
+        value = float(number)
+        require(isfinite(value) and value >= 0 and Decimal(str(value)) == number,
+                "Update number cannot be preserved by JSON transport")
+        payload[field] = value
+    tags = row["tags"]
+    require(all(isinstance(tag, dict) and text(tag.get("id")) for tag in tags),
+            "Unproven tag identity")
+    payload["tags"] = [tag["id"] for tag in tags]
+    require(len(set(payload["tags"])) == len(tags), "Duplicate update tags")
+    return payload
+
+
+def apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
+          approval_sha256: str, journal: Path, host: str, token: str) -> None:
+    """Apply a reviewed selection once; refuse existing journals and uncertain results."""
+    from cleanup_recovery import journal_host, lock_journal, write_journal
+    from ghostfolio_ibkr_sync.ghostfolio import ghost_headers
+
+    host = journal_host({"ghost_host": host})
+    require(text(token), "Missing maintenance credential")
+    proposed, captured = migration_evidence(inputs)
+    reviewed_bytes = read_evidence(manifest, manifest_sha256)
+    require(reviewed_bytes == canonical_json(proposed), "Reviewed manifest changed")
+    permit_bytes = read_evidence(approval, approval_sha256)
+    permit = exact_json(permit_bytes)
+    require(isinstance(permit, dict) and permit.get("schema") == "ibkr-migration-approval-v1",
+            "Invalid migration approval")
+    for key in ("operation_plan_ref", "backup_ref", "writer_exclusion_ref", "settlement_ref",
+                "preservation_qualification_ref", "pacing_qualification_ref", "owner_id"):
+        require(text(permit.get(key)), "Missing qualified operation prerequisite")
+    require(permit.get("writers_stopped") is True and permit.get("requests_settled") is True,
+            "Competing writers or requests remain")
+    require(all(permit.get(key) == value for key, value in {
+        "host": host, "manifest_sha256": manifest_sha256,
+        "destination_version": proposed["snapshot"]["destination_version"],
+        "destination_image": proposed["snapshot"]["destination_image"],
+    }.items()), "Approval target or manifest changed")
+    replacements = proposed["replacements"]
+    require(replacements and not proposed["pending"] and proposed["selection_proof"]["equal"],
+            "No proven replacements")
+    require(isinstance(permit.get("write_count"), Decimal)
+            and permit["write_count"] == len(replacements), "Unapproved write count")
+    batch_size, pause = permit.get("batch_size"), permit.get("pause_seconds")
+    require(isinstance(batch_size, Decimal) and batch_size.is_finite()
+            and batch_size == int(batch_size) and batch_size > 0
+            and isinstance(pause, Decimal) and pause.is_finite() and pause >= 0
+            and isfinite(float(pause)), "Missing measured batch size or pacing")
+    config = keyed_yaml(captured[safe_path(inputs)])
+    snapshot_path = safe_path(safe_path(inputs).parent / config["snapshot"]["path"])
+    snapshot = exact_json(captured[snapshot_path])
+    expected = {row["id"]: row for row in snapshot["activities"]}
+    records = {}
+    payloads = {}
+    for replacement in replacements:
+        row = expected[replacement["id"]]
+        require(row.get("userId") == permit["owner_id"], "Unproven migration owner")
+        payloads[row["id"]] = comment_payload(row, replacement["new_comment"])
+        records[row["id"]] = {**replacement, "preimage": row,
+                               "request_payload": payloads[row["id"]], "status": "prepared"}
+    # YAML cannot encode Decimal. Canonical evidence keeps exact decimals as strings.
+    records = json.loads(canonical_json(records))
+    captured.update({safe_path(manifest): reviewed_bytes, safe_path(approval): permit_bytes})
+    for name, expected_hash in proposed["implementation"].items():
+        implementation = safe_path(Path(__file__).parent / name)
+        captured[implementation] = read_evidence(implementation, expected_hash)
+    path = safe_path(journal)
+    lock_path = safe_path(Path(str(path) + ".lock"))
+    for target in (path, lock_path):
+        for source in captured:
+            require(not source.is_relative_to(target) and not target.is_relative_to(source)
+                    and (not target.exists() or not target.samefile(source)),
+                    "Journal overlaps evidence")
+    lock = lock_journal(path)
+    try:
+        require(not path.exists(), "Existing migration journal; automatic retry refused")
+        record = {"schema": "ibkr-migration-journal-v1", "host": host,
+                  "manifest_sha256": manifest_sha256, "approval_sha256": approval_sha256,
+                  "status": "prepared", "rows": records}
+        write_journal(path, record, create=True)
+        headers = ghost_headers(token)
+
+        def check_fresh() -> Any:
+            fresh = migration_snapshot(host, headers, config["snapshot"])
+            actual = {row["id"]: row for row in fresh["activities"]}
+            require(actual.keys() == expected.keys() and all(
+                canonical_json(actual[key]) == canonical_json(value)
+                for key, value in expected.items()), "Destination ownership, occupancy or context changed")
+            for source, data in captured.items():
+                require(safe_path(source).read_bytes() == data, "Reviewed input changed")
+            return fresh
+
+        check_fresh()  # All rows and all identity occupancy before the first PUT.
+        for index, replacement in enumerate(replacements):
+            if index and index % int(batch_size) == 0:
+                time.sleep(float(pause))
+            check_fresh()
+            row_id = replacement["id"]
+            entry = records[row_id]
+            entry["status"] = "pending"
+            record["status"] = "in_progress"
+            write_journal(path, record)
+            migration_request("put", f"{host}/api/v1/activities/{quote(row_id, safe='')}",
+                              headers=headers, json=payloads[row_id])
+            expected[row_id] = {**expected[row_id], "comment": replacement["new_comment"]}
+            after = check_fresh()
+            entry.update(status="verified", readback_sha256=digest(canonical_json(after)))
+            write_journal(path, record)
+        record["status"] = "complete"
+        write_journal(path, record)
+    finally:
+        os.close(lock)
 
 
 def main() -> int:
@@ -650,14 +800,28 @@ def main() -> int:
     command = commands.add_parser("preview", help="Validate saved migration evidence offline")
     command.add_argument("--inputs", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("apply", help="Apply separately approved comment replacements")
+    command.add_argument("--inputs", type=Path, required=True)
+    command.add_argument("--manifest", type=Path, required=True)
+    command.add_argument("--manifest-sha256", required=True)
+    command.add_argument("--approval", type=Path, required=True)
+    command.add_argument("--approval-sha256", required=True)
+    command.add_argument("--journal", type=Path, required=True)
+    command.add_argument("--host", required=True)
     args = parser.parse_args()
     # Shared converters can log private source evidence. Keep the CLI output bounded.
     previous_logging_level = logging.root.manager.disable
     logging.disable(logging.CRITICAL)
     try:
-        print(preview(args.inputs, args.output))
+        if args.command == "preview":
+            print(preview(args.inputs, args.output))
+        else:
+            apply(args.inputs, args.manifest, args.manifest_sha256, args.approval,
+                  args.approval_sha256, args.journal, args.host, os.environ.get("GHOST_TOKEN", ""))
+            print("Migration complete: reviewed comments verified")
     except (RuntimeError, ValueError, OSError, KeyError, TypeError, SyntaxError, yaml.YAMLError) as error:
-        parser.exit(1, f"Preview refused ({type(error).__name__}); check saved input evidence.\n")
+        label = "Preview" if args.command == "preview" else "Apply"
+        parser.exit(1, f"{label} refused ({type(error).__name__}); check evidence and journal.\n")
     finally:
         logging.disable(previous_logging_level)
     return 0

@@ -427,4 +427,115 @@ accounts are outside the proof. A future account could reuse a historical trade
 ID; no lifetime or global uniqueness claim follows from this bounded replay.
 No financial correction, split, insertion or deletion is proposed.
 
+## Explicit application of reviewed historical comments
+
+`identity_migration.py apply` is separate maintenance outside the runtime image.
+It changes only reviewed historical comments. It never invokes cleanup deletion,
+imports activities, updates cash or loads the runtime configuration. Preview stays
+strictly offline. `DRY_RUN=false` does not authorize maintenance.
+
+**Qualification remains pending.** Synthetic HTTP tests prove the tool's guards.
+They do not prove G5 preservation, reverse PUT behavior, background effects or a
+safe live cadence. Before any real use, obtain image-backed G5 evidence and
+measured batch/pacing evidence for the exact destination version and immutable
+image. Do not invent batch or pacing limits. A missing proof blocks real use.
+The existing cleanup executors remain unqualified for v2 history.
+
+Obtain a separately validated operation plan and operator GO. The plan must bind
+the target, recoverable backup, stopped competing writers, independently settled
+requests, exact write count, measured batch size, pause, stop rules and recovery.
+Keep all writers stopped through readback. This includes cron, manual imports,
+cleanup and other maintenance. The local lock protects only the same journal path.
+References in an approval file are declarations, not proof of those conditions.
+Confirm the current destination image/version independently before the operation.
+
+Review a private approval file and its SHA256. Use this schema; the numeric limits
+below are placeholders and must come from the qualified operation plan:
+
+```json
+{
+  "schema": "ibkr-migration-approval-v1",
+  "host": "https://ghostfolio.example.com",
+  "manifest_sha256": "<reviewed-manifest-sha256>",
+  "destination_version": "<qualified-version>",
+  "destination_image": "sha256:<qualified-image-digest>",
+  "owner_id": "<verified-destination-user-id>",
+  "operation_plan_ref": "<validated-plan-and-separate-go>",
+  "backup_ref": "<verified-recoverable-backup>",
+  "writer_exclusion_ref": "<all-competing-writers-stopped-proof>",
+  "settlement_ref": "<independent-outstanding-request-settlement-proof>",
+  "preservation_qualification_ref": "<image-backed-G5-proof>",
+  "pacing_qualification_ref": "<image-backed-measurement-proof>",
+  "writers_stopped": true,
+  "requests_settled": true,
+  "write_count": "<replace-with-approved-integer>",
+  "batch_size": "<replace-with-measured-positive-integer>",
+  "pause_seconds": "<replace-with-measured-nonnegative-number>"
+}
+```
+
+The three limit fields must be JSON numbers. String placeholders are refused.
+`write_count` must equal the manifest replacement count. A batch is a sequence of
+individual PUTs with complete readback after each PUT. The command waits for
+`pause_seconds` between batches. It provides no default live limits.
+
+Supply a session bearer only through `GHOST_TOKEN` in ENV. The command performs
+no token exchange and reads no broker credentials. The target URL must contain
+no credentials. Run only the command authorized by the operation plan:
+
+```sh
+.venv/bin/python identity_migration.py apply \
+  --inputs private/inputs.yaml \
+  --manifest private/review/manifest.json \
+  --manifest-sha256 <reviewed-manifest-sha256> \
+  --approval private/migration-approval.json \
+  --approval-sha256 <reviewed-approval-sha256> \
+  --journal private/migration-apply.yaml \
+  --host https://ghostfolio.example.com
+```
+
+The command rebuilds the complete offline preview and requires byte equality with
+the reviewed manifest. Preview remains `actionable: false`: approval of its content
+alone never grants GO. Changed inputs, mapping, inventory, selection, implementation
+bytes or target bindings require a new review. A preview with no replacements or
+an unresolved selection gate is refused.
+
+Apply creates an exclusive 0600 YAML journal with keyed rows and a companion lock.
+Preserve both files. Existing journals, symlinks and journal/evidence collisions
+are refused. Each record keeps the original full row, before/after fingerprints,
+old/new comment and request status. Exact decimal evidence is stored as strings.
+Keep the journal private. It contains no token.
+
+Before the first PUT and each later PUT, a complete unredacted activities GET must
+match every reviewed row and ID, including owner and identity occupancy. This is
+stricter than checking only the rows selected for conversion. The command verifies
+input bytes again before dispatch. Each listed row needs the approved `userId`.
+
+The explicit PUT whitelist contains `id`, `accountId`, `comment`, `currency`,
+`date`, `fee`, `quantity`, `symbol`, `type`, `unitPrice`, `dataSource` and tag IDs.
+It preserves the stored timestamp and uses only eligible YAHOO profiles. It never
+echoes raw GET fields into PUT. A number that cannot survive the JSON transport
+conversion exactly is refused before the first write. The pinned API can enqueue
+market-data gathering; synthetic readback does not qualify delayed background effects.
+
+Before each PUT, the journal durably records `pending`. The command sends one
+request with no redirect follow-up or automatic retry. Complete readback must
+prove exactly the target comment and unchanged IDs, ownership, financial values,
+dates, tags, profiles and all other captured fields. Only then does the row become
+`verified`. A completely verified run records `complete`.
+
+Stop on any stale or incomplete state, failed persistence, HTTP failure, redirect,
+timeout, normalization or changed context. A failed command exits nonzero.
+A row remains `pending` after an uncertain PUT or failed readback; verified earlier
+rows remain explicit. Never retry under a new journal to bypass uncertainty.
+An old-comment or absent-row readback cannot settle a delayed request. Keep writers
+stopped and require independent completion/cancellation evidence before any new
+operation, retry or reversal. This apply slice has no resume or rollback command.
+
+Reverting the tool's code does not reverse converted comments. Preserve all rows,
+inputs and journals. After v2 history exists, retain an rc.5-or-newer qualified
+reader. Comment reversal requires its separately guarded maintenance path and
+operation approval. Database restore is not the normal rollback; it requires its
+own approval and reconciliation of intervening writes.
+
 [Back to the README](../README.md)
