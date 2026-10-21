@@ -1,7 +1,8 @@
 """Offline tests: IBKR trade/dividend -> Ghostfolio activity conversion."""
 import pytest
+from decimal import Decimal
 
-from ghostfolio_ibkr_sync import sync
+from ghostfolio_ibkr_sync import ibkr, sync
 
 ISIN = "US1912161007"
 
@@ -255,3 +256,40 @@ def test_v2_comment_limits_trade_payload(length):
                                       {"tradeID": "a:b"}, {"tradeID": "é"}])
 def test_v2_identity_writer_conversion_never_falls_back(override):
     assert sync.convert_trade_to_activity(trade(**override), "target", {}, {}) is None
+
+
+@pytest.mark.parametrize("reverse_cash", [False, True])
+@pytest.mark.parametrize("reverse_accruals", [False, True])
+def test_v2_source_qualification_partition_cancellation_refund_and_pil(reverse_cash, reverse_accruals):
+    from xml.etree.ElementTree import Element, SubElement, tostring
+
+    root = Element("FlexStatement")
+    cash = SubElement(root, "CashTransactions")
+    accruals = SubElement(root, "ChangeInDividendAccruals")
+    keys = {"accountId": "U1", "conid": "100", "currency": "USD", "exDate": "20260701"}
+    rows = [("A", "Dividends", "10"), ("A", "Payment In Lieu Of Dividends", "2"),
+            ("B", "Dividends", "5"), ("C", "Dividends", "4"), ("C", "Dividends", "-4"),
+            ("A", "Withholding Tax", "-2"), ("B", "Withholding Tax", "1")]
+    for action, kind, amount in (rows[::-1] if reverse_cash else rows):
+        row = {**keys, "actionID": action, "type": kind, "amount": amount,
+               "symbol": "KO", "isin": ISIN, "dateTime": "20260715;120000 EST", "levelOfDetail": "DETAIL"}
+        if kind == "Withholding Tax":
+            row.pop("exDate")
+        SubElement(cash, "CashTransaction", row)
+    evidence = [("A", "3"), ("B", "2"), ("C", "1")]
+    for action, quantity in (evidence[::-1] if reverse_accruals else evidence):
+        SubElement(accruals, "ChangeInDividendAccrual", {
+            **keys, "actionID": action, "quantity": quantity, "code": "Re",
+            "payDate": "20260715", "date": "20260701", "reportDate": "20260715"})
+    groups = ibkr.parse_cash_dividends(tostring(root, encoding="unicode"))
+    group, = groups
+    parts = sync.partition_dividend_actions(group, groups)
+    assert sum((part["gross"] for part in parts), Decimal(0)) == Decimal(17)
+    assert sum((Decimal(r["amount"]) for p in parts for r in p["cash_rows"]), Decimal(0)) == Decimal(16)
+    activities, valid = sync.convert_dividend_actions(group, "dest", {}, {}, groups)
+    assert valid is True
+    assert [(a["comment"], a["quantity"], a["unitPrice"], a["fee"]) for a in activities] == [
+        ("IBKR#v2#U1:DIVIDEND:A", 3, 4, 2), ("IBKR#v2#U1:DIVIDEND:B", 2, 2.5, 0)]
+    # Opposite signed tax conserves before clamping; separate clamps differ.
+    assert sum(a["fee"] for a in activities) == 2
+    assert sync.convert_dividend_to_activity(group, "dest", {}, {}) is None  # unequal quantities

@@ -82,6 +82,19 @@ does not certify unchanged financial values. Review corrections manually. No
 automatic backfill, correction or historical edit is authorized. Concurrent runs
 with stale snapshots remain outside this protection.
 
+Broker generations stay independent. IBKR writes v2. The inspected Bourse Direct
+revision `3193086cd0223b0bfb18a388c53f1e0c65327dce` writes BD v1/v2;
+its proposed common-grammar target is BD v3, not a delivered v3 writer.
+DEGIRO revision `e8908adabd5453c9b57cb2dd687dc92a81ce15b2` writes
+`DEGIRO#<source-account>:<kind>:<source-id>`. Its core remains pinned to
+IBKR `5749146ff297133a6a85d9006bba60b65d9f7cde` under [ADR 0007](0007-pinned-degiro-core.md).
+Sibling comments never become IBKR identities. An otherwise matching active
+sibling row can still supply manual/proximity evidence in the same destination
+account. Namespace separation does not disable these historical heuristics.
+Shared-helper propagation requires a separate DEGIRO change; pins stay unchanged.
+See [qualification and release order](../releasing.md#v2-writer-qualification-and-release-order)
+for source, destination, maintenance and actual-image rollback gates.
+
 Sources: `ghost_get_existing_orders` in the
 [`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), `_dividend_date_matches` in the
 [`sync` module](../../ghostfolio_ibkr_sync/sync.py), `process_account` in the

@@ -173,11 +173,65 @@ operator authorization for a registry write and the original publication evidenc
 
 ## Runtime rollback
 
+After any imported or converted v2 activity exists, stop writers and set
+`DRY_RUN=true`. Keep rc.5 or a newer qualified dual reader. Never run pre-rc.5
+code against that history. Reader rollback retains rows and can still refuse
+partial dividend coverage. Comment reversal restores only unchanged journal-owned
+comments; it retains new v2 imports. See [guarded rollback](cleanup.md#guarded-comment-rollback-and-resume-inspection).
+
 Select the previously recorded installed digest and recreate the connector with
 its original ENV and mounts. This restores the runtime only: financial records
 and cash updates remain. It does not restore financial data or undo imports.
 Use a separately authorized Ghostfolio recovery procedure if data recovery is
 needed.
+
+## V2 writer qualification and release order
+
+Offline tests prove the implemented rules on their fixed inputs. They do not
+qualify IBKR ID lifetime or deployed Ghostfolio behavior. Record each gate's
+evidence, scope, missing cases and verdict before enabling the affected writes.
+Do not infer a vendor guarantee from nearby captures.
+
+| Gate | Required evidence |
+|---|---|
+| G1: bounded stability | Capture hashes, selected Flex fields, report windows and event counts. Match overlapping payments independently of actionID. Record retained, replaced and reused IDs, revisions, reversals and repayments. Qualify trade overlaps and corrections too. Missing cases block the affected capability. |
+| G2: account scope | Test equal tradeIDs/actionIDs in two source accounts. Retain the source-account segment in every identity. Record saved multi-account evidence when available; unknown global uniqueness is informational. |
+| G3: complete partition | Prove complete payment, PIL, signed tax/refund and accrual association for each qualified window. Conserve exact cash before fee clamping. A stable ID does not prove a complete window. |
+| G4: destination comments | Confirm the current version and immutable image against the inspected source. On that image, import and read back exact comments, punctuation, realistic lengths and otherwise identical payloads from two accounts. Offline tests cover 1999/2000/2001 characters; the source-backed maximum is 2000. |
+| G5: comment preservation | On the qualified image, prove whitelisted full PUT and reverse PUT preserve ownership, financial values, UTC instant, tags and profiles. Measure background effects, batch sizes and pacing. Synthetic HTTP does not prove these effects. |
+| G6: reader rollback | Use the actual rc.5 image with complete and partial v2 action sets and mixed historical generations. Prove row preservation, simulation and partial-coverage refusal. Current-source tests cannot substitute for this image. |
+| G7: sibling compatibility | Compare readers and import/cash/request helpers at pinned revisions. Keep sibling generations and pins unchanged. Flag changed shared helpers for a separate DEGIRO change under [ADR 0007](adr/0007-pinned-degiro-core.md). |
+
+The destination source reference is Ghostfolio 3.86.0, commit
+`ef47c0d1b2c48fa4e97fb381561b514e657928cf`. Saved deployment evidence binds it to
+`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`.
+This is not a current runtime observation. A mutable `latest` tag cannot confirm
+the installed image. Version drift requires renewed qualification.
+
+Use this order for the v2 writer:
+
+1. Complete offline implementation and review. Archive the approved change and
+   replay acceptance on main. Replay complete saved migration inputs, including
+   the full configured source-account inventory and destination snapshot.
+   Diagnostic section captures without AccountInformation cannot supply that proof.
+2. Obtain a separate operator GO for an unused immutable RC numbered rc.6 or later.
+   Publish its digest before lab validation. Publication does not enable writes.
+3. Pass both empty first-install and golden-copy upgrade scenarios on that same
+   digest through the versioned infra runner. Include new v2 imports, repeat runs,
+   mixed history, partial acceptance, bounded recovery, maintenance and rollback.
+   Derive expected sets from each fixed report/snapshot pair. Do not reuse reader
+   counts as writer expectations. Keep lab credentials separate. Stop both instances.
+4. Complete G1–G7 and confirm the current destination image. Obtain separate GO
+   for production preview/soak. A failed or incomplete digest cannot proceed;
+   publish a new RC and rerun both lab scenarios.
+5. Historical conversion needs its own reviewed preview, operation plan and GO.
+   Stable promotion needs a new GO. Neither follows from offline tests or RC publication.
+
+The reader floor is rc.5, commit `246b890d8cf2b6a58e99bbbf0169aa5f846c23bc`,
+image `sha256:32a034c96c2a675329e0aa38a3003a0352db8cec013ea74b6d04ac04cc8a9369`.
+Keep existing pair cleanup tools outside the runtime image and do not run them
+against v2 history until separately qualified. Use the distinct
+[recovery and maintenance tools](cleanup.md) only within their approved operations.
 
 ## Reviewer
 
