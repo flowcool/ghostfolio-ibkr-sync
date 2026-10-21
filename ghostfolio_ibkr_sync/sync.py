@@ -360,8 +360,8 @@ def partition_dividend_actions(dividend: DividendGroup,
         if group is dividend:
             continue
         if any((row.get("accountId", ""), row.get("actionID", "")) in associations
-               for row in group["payments"]):
-            return reject("source action split across payment groups")
+               for row in group["cash_rows"]):
+            return reject("source action split across cash groups")
 
     if len({row.get("currency", "") for row in dividend["cash_rows"]}) > 1:
         return reject("contradictory cash currencies")

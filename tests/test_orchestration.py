@@ -1887,7 +1887,7 @@ def test_v2_event_partition_identity_failure_precedes_every_financial_write(monk
     assert w.pos["versioned_identities"] == set()
 
 
-@pytest.mark.parametrize("failure", ["tax", "payment", "negative", "day", "security_key"])
+@pytest.mark.parametrize("failure", ["tax", "payment", "negative", "day", "security_key", "tax_security_key", "tax_day"])
 def test_v2_partition_isolation_safe_sales_cash_and_later_accounts_continue(env, caplog, failure):
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
     root = ET.fromstring(report(trade_xml("BUY") + trade_xml("SELL", "SELL", 4), div_xml()))
@@ -1901,6 +1901,11 @@ def test_v2_partition_isolation_safe_sales_cash_and_later_accounts_continue(env,
         attrs = dict(cash_section[0].attrib, dateTime="20260716;120000 EST")
     elif failure == "security_key":
         attrs = dict(cash_section[0].attrib, isin="")
+    elif failure == "tax_security_key":
+        attrs = dict(cash_section[0].attrib, type="Withholding Tax", amount="-3", isin="")
+    elif failure == "tax_day":
+        attrs = dict(cash_section[0].attrib, type="Withholding Tax", amount="-3",
+                     dateTime="20260716;120000 EST")
     else:
         attrs = dict(cash_section[0].attrib, conid="conflict")
     ET.SubElement(cash_section, "CashTransaction", attrs)

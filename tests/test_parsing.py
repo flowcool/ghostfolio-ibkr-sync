@@ -688,3 +688,16 @@ def test_v2_event_partition_action_cannot_split_across_security_keys(other_isin)
     assert len(groups) == 2
     for group in groups:
         assert sync.convert_dividend_actions(group, "ghost-account", {}, {}, groups) == ([], False)
+
+
+@pytest.mark.parametrize("tax_override", [{"isin": ""}, {"isin": "other-isin"},
+                                         {"dateTime": "20260716"}])
+def test_v2_event_partition_withholding_cannot_escape_into_tax_only_group(tax_override):
+    groups = structured_dividend(
+        [structured_cash(), structured_cash("-3", type_="Withholding Tax", **tax_override)],
+        [structured_accrual()])
+    assert len(groups) == 2
+    [payment_group] = [group for group in groups if group["payments"]]
+    assert sync.convert_dividend_actions(payment_group, "ghost-account", {}, {}, groups) == ([], False)
+    [tax_only] = [group for group in groups if not group["payments"]]
+    assert sync.dividend_dedup_decision(tax_only, "ghost-account", {}, {}, set())[0] == "not_payable"
