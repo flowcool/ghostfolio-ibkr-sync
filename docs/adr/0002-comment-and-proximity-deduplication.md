@@ -45,8 +45,9 @@ Normal reruns do not fill missing actions. This refusal can recur for the whole
 report window after partial server acceptance.
 
 Before a group with no coverage can use proximity, the sync checks stored v2
-dividend context for the same source account. A different known day or security
-rules out overlap. A matching symbol or ISIN on the same day, or context that
+dividend context for the same source account. A different known day or distinct
+ISINs with no matching symbol rule out overlap. Different symbols alone cannot
+prove distinct securities. A matching symbol or ISIN on the same day, or context that
 cannot rule out overlap, blocks the group for manual review. The check retains
 inactive rows and all contexts of duplicate identities. It ignores amounts and
 destination ownership. Accepted rows also supply context to later queries in

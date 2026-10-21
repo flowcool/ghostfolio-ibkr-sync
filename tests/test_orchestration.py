@@ -624,6 +624,7 @@ def test_v2_action_conflict_accepted_context_protects_overlapping_queries(monkey
     assert world.run()[1] is True
     key = ("U1", "IBKR#v2#U1:DIVIDEND:A1")
     assert world.pos["versioned_dividend_context"][key][0].day == "2026-07-15"
+    assert world.pos["versioned_dividend_context"][key][0].isin == ISIN_KO
     world.imported.clear()
     replacement = report(divs=div_xml().replace('actionID="A1"', 'actionID="REPLACED"'))
     monkeypatch.setattr(app, "fetch_flex_report", lambda *args: replacement)

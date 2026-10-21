@@ -47,6 +47,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     parse_source_account_ids,
     parse_trades,
 )
+from ghostfolio_ibkr_sync.models import DividendContext
 from ghostfolio_ibkr_sync.notify import (
     FORCED_PREVIEW_NOTIFY_TITLE,
     NOTIFY_TITLE,
@@ -266,6 +267,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                                                  existing_dividend_comments)
         report_counts = log_historical_dividend_comparison(findings, ghost_account_id)
     div_activities: list[Activity] = []
+    proposed_dividend_context: dict[str, DividendContext] = {}
     div_skipped_dup = 0
     candidates = []
     for div in dividends:
@@ -323,6 +325,9 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                 ok = False
                 continue
             div_activities.extend(proposed)
+            for activity in proposed:
+                proposed_dividend_context[activity["comment"]] = dividend_context(
+                    {**activity, "isin": div["isin"]}, activity["date"])
 
     if report_counts is None:
         log.info("New dividend activities: %d, duplicates skipped: %d",
@@ -362,7 +367,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                 positions["versioned_identities"].add((identity[0], comment))
                 if identity[1] == "DIVIDEND":
                     positions.setdefault("versioned_dividend_context", {}).setdefault(
-                        (identity[0], comment), []).append(dividend_context(activity, activity["date"]))
+                        (identity[0], comment), []).append(proposed_dividend_context[comment])
                 if identity[1] == "TRADE":
                     sign = -1.0 if activity["type"] == "SELL" else 1.0
                     positions["qty"][(activity["accountId"], activity["symbol"])] += sign * activity["quantity"]

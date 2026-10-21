@@ -945,8 +945,8 @@ def dividend_action_conflict(div: DividendGroup, symbol: str | None,
             same_isin = bool(div["isin"] and context.isin and div["isin"] == context.isin)
             if same_symbol or same_isin:
                 return True
-            if ((symbol and context.symbol) or (div["isin"] and context.isin)):
-                continue  # Comparable known securities differ.
+            if div["isin"] and context.isin:
+                continue  # Distinct ISINs prove disjoint security; symbols can change.
             return True
     return False
 
