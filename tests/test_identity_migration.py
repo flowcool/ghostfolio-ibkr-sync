@@ -1340,3 +1340,24 @@ def test_v2_migration_apply_rollback_only_late_drift(rollback_case):
     with pytest.raises(RuntimeError, match="context changed"):
         reverse()
     assert len(state.puts) == 2
+
+
+@pytest.mark.parametrize("value", [None, [], "invalid", 42, True])
+def test_v2_migration_apply_rollback_only_invalid_approval_root(rollback_case, value, monkeypatch, capsys):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    approval = journal.parent / "malformed-approval.json"
+    approval.write_text(json.dumps(value))
+    manifest = journal.parent / "preview/manifest.json"
+    before = journal.read_bytes()
+    monkeypatch.setenv("GHOST_TOKEN", "synthetic-token")
+    monkeypatch.setattr(sys, "argv", ["identity_migration.py", "rollback", "--journal", str(journal),
+        "--manifest", str(manifest), "--manifest-sha256", digest(manifest.read_bytes()),
+        "--approval", str(approval), "--approval-sha256", digest(approval.read_bytes()),
+        "--host", "https://ghostfolio.example.test"])
+    with pytest.raises(SystemExit) as error:
+        migration.main()
+    assert error.value.code == 1
+    assert "Rollback refused (RuntimeError)" in capsys.readouterr().err
+    assert journal.read_bytes() == before
+    assert len(state.puts) == 2

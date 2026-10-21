@@ -863,7 +863,7 @@ def rollback(journal: Path, manifest: Path, manifest_sha256: str, approval: Path
         record, reviewed = migration_journal(path, manifest, manifest_sha256)
         permit_bytes = read_evidence(approval, approval_sha256)
         permit = exact_json(permit_bytes)
-        require(permit.get("schema") == "ibkr-migration-rollback-approval-v1"
+        require(isinstance(permit, dict) and permit.get("schema") == "ibkr-migration-rollback-approval-v1"
                 and permit.get("journal_sha256") == digest(journal_bytes)
                 and permit.get("manifest_sha256") == manifest_sha256
                 and permit.get("host") == record["host"] == host, "Rollback approval binding changed")
