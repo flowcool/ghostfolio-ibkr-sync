@@ -60,6 +60,18 @@ class InvalidActivityIdentityError(RuntimeError):
     """A reserved activity identity is malformed or incompatible with its row."""
 
 
+def format_versioned_activity_identity(source_account: str, kind: str, source_id: str) -> str:
+    """Build an exact v2 comment; writer limits never narrow historical reads."""
+    if (kind not in ("TRADE", "DIVIDEND")
+            or re.fullmatch(r"[A-Za-z0-9._-]+", source_account) is None
+            or re.fullmatch(r"[A-Za-z0-9._-]+", source_id) is None):
+        raise InvalidActivityIdentityError("Unsafe source activity identity")
+    comment = f"IBKR#v2#{source_account}:{kind}:{source_id}"
+    if len(comment) > 2000:
+        raise InvalidActivityIdentityError("Source activity identity exceeds 2000 characters")
+    return comment
+
+
 def parse_versioned_activity_identity(
     comment: object, activity_type: object,
 ) -> VersionedActivityIdentity | None:

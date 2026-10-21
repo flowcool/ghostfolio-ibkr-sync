@@ -51,6 +51,11 @@ def report(trades="", divs="", cash="100.5", cash_section=True, base_currency="U
     cash_xml = (f'<CashReport><CashReportCurrency currency="BASE_SUMMARY" endingCash="{cash}"/></CashReport>'
                 if cash is not None else "")
     info = f'<AccountInformation accountId="{source_account}" currency="{base_currency}"/>' if base_currency else ""
+    parsed_trades = ET.fromstring(f"<R>{trades}</R>")
+    for row in parsed_trades:
+        if "accountId" not in row.attrib:
+            row.set("accountId", source_account)
+    trades = "".join(ET.tostring(row, encoding="unicode") for row in parsed_trades)
     ct = f"<CashTransactions>{divs}</CashTransactions>" if cash_section else ""
     # Enrich existing fixtures; input compatibility scenarios belong to task 2.1.
     accruals = []
@@ -156,7 +161,7 @@ def test_source_account_duplicate_matching_evidence_allows_existing_paths(monkey
     w = World(monkeypatch, xml)
 
     assert w.run()[1] is True
-    assert [activity["comment"] for activity in w.activities] == ["IBKR#T1"]
+    assert [activity["comment"] for activity in w.activities] == ["IBKR#v2#U1:TRADE:T1"]
     assert w.cash_calls == [(ACC, 100.5)]
 
 
@@ -182,7 +187,7 @@ def test_missing_cash_transactions_section_fails_the_run_but_still_imports_trade
     w = World(monkeypatch, report(trade_xml("T1"), cash_section=False))
     _, ok = w.run()
     assert ok is False
-    assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:T1"]
 
 
 def test_import_failure_fails_the_account_keeps_state_untouched_but_still_updates_cash(monkeypatch):
@@ -214,9 +219,9 @@ def test_successful_run_imports_and_records_trades_and_dividends(monkeypatch):
     w = World(monkeypatch, xml)
     unmapped, ok = w.run(pos=positions({(ACC, "PEP"): 10}))
     assert ok is True
-    assert sorted(a["comment"] for a in w.activities) == ["IBKR#T1", "IBKR#T2", f"dividend#{ISIN_KO}#2026-07-15"]
+    assert sorted(a["comment"] for a in w.activities) == ["IBKR#v2#U1:TRADE:T1", "IBKR#v2#U1:TRADE:T2", f"dividend#{ISIN_KO}#2026-07-15"]
     assert len(w.imported) == 2                                     # buys/dividends before sells
-    assert w.ids == {"T1", "T2"}
+    assert w.ids == set()
     assert w.comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}   # keyed by accountId
     assert w.pos["qty"][(ACC, "KO")] == pytest.approx(10.0)
     assert w.pos["qty"][(ACC, "PEP")] == pytest.approx(6.0)         # 10 - 4
@@ -225,7 +230,7 @@ def test_successful_run_imports_and_records_trades_and_dividends(monkeypatch):
     assert w.cash_calls == [(ACC, 100.5)]
 
 
-def test_second_account_sharing_the_sets_does_not_reimport(monkeypatch):
+def test_v2_identity_writer_second_source_account_imports_same_trade_id(monkeypatch):
     w = World(monkeypatch, report(trade_xml("T1"), div_xml()))
     w.run()
     first = len(w.activities)
@@ -233,7 +238,8 @@ def test_second_account_sharing_the_sets_does_not_reimport(monkeypatch):
     monkeypatch.setattr(app, "fetch_flex_report",
                         lambda *args: report(trade_xml("T1"), div_xml(), source_account="U2"))
     app.process_account(CFG, "U2", "q2", "IBKR", {}, w.ids, w.comments, w.pos)
-    assert first == 2 and w.activities == []
+    assert first == 2
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U2:TRADE:T1"]
 
 
 def test_versioned_identity_reader_trade_dedup_is_applied_by_source_account(monkeypatch):
@@ -246,27 +252,14 @@ def test_versioned_identity_reader_trade_dedup_is_applied_by_source_account(monk
 
     other = World(monkeypatch, report(trade_xml("T1"), source_account="U2"))
     assert other.run(pos=indexed, source_account="U2")[1] is True
-    assert [activity["comment"] for activity in other.activities] == ["IBKR#T1"]
+    assert [activity["comment"] for activity in other.activities] == ["IBKR#v2#U2:TRADE:T1"]
 
 
-def test_trade_without_id_is_skipped_and_warned(monkeypatch, caplog):
-    w = World(monkeypatch, report(trade_xml("")))
-    w.run()
-    assert w.activities == []
-    assert any("missing tradeID" in r.message for r in caplog.records)
-
-
-@pytest.mark.parametrize("second", [{}, {"symbol": "PEP", "isin": ISIN_PEP}])
-def test_every_trade_without_id_is_counted_and_warned(monkeypatch, caplog, second):
-    caplog.set_level("INFO")
-    w = World(monkeypatch, report(trade_xml("") + trade_xml("", **second)
-                                 + trade_xml("T1") + trade_xml("T1")))
-    assert w.run()[1] is False
-    assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
-    assert w.ids == {"T1"}
-    assert len([r for r in caplog.records if "missing tradeID" in r.message]) == 2
-    assert any("New trade activities: 1, duplicates skipped: 1, other skipped: 2"
-               in r.message for r in caplog.records)
+def test_v2_identity_writer_missing_id_blocks_entire_account(monkeypatch, caplog):
+    w = World(monkeypatch, report(trade_xml("T1") + trade_xml("")))
+    assert w.run() == ({}, False)
+    assert w.activities == [] and w.cash_calls == []
+    assert "account failed before any financial write" in caplog.text
 
 
 def test_already_imported_trade_is_not_reimported(monkeypatch, caplog):
@@ -284,7 +277,7 @@ def test_fx_and_option_trades_never_reach_the_import_nor_the_holdings_gate(monke
                  + trade_xml("T1"))
     w = World(monkeypatch, xml)
     w.run()
-    assert [a["comment"] for a in w.activities] == ["IBKR#T1"]
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:T1"]
 
 
 @pytest.mark.parametrize("invalid", [{"tradePrice": "invalid"}, {"dateTime": "garbage"},
@@ -304,7 +297,7 @@ def test_invalid_trade_does_not_prevent_unrelated_valid_security_import(monkeypa
     w = World(monkeypatch, report(trade_xml("B1", tradePrice="invalid") + trade_xml("S1", "SELL")
                                  + trade_xml("P1", symbol="PEP", isin=ISIN_PEP)))
     assert w.run()[1] is False
-    assert [a["comment"] for a in w.activities] == ["IBKR#P1"]
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:P1"]
     assert w.pos["qty"][(ACC, "KO")] == 0
     assert w.pos["qty"][(ACC, "PEP")] == 10
 
@@ -315,8 +308,8 @@ def test_unknown_trade_side_run_rejects_row_and_imports_valid_rows(monkeypatch, 
     w = World(monkeypatch, xml)
     _, ok = w.run()
     assert ok is False
-    assert [a["comment"] for a in w.activities] == ["IBKR#B1", "IBKR#P1"]
-    assert w.ids == {"B1", "P1"}
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:B1", "IBKR#v2#U1:TRADE:P1"]
+    assert w.ids == set()
     # the rejected row never reaches the holdings gate: 10 bought, nothing subtracted
     assert w.pos["qty"][(ACC, "KO")] == 10
     assert any(r.levelname == "ERROR" and "Unknown buySell" in r.message and "U1" in r.message
@@ -326,7 +319,7 @@ def test_unknown_trade_side_run_rejects_row_and_imports_valid_rows(monkeypatch, 
 def test_valid_balanced_batch_still_imports_without_existing_holdings(monkeypatch):
     w = World(monkeypatch, report(trade_xml("B1") + trade_xml("S1", "SELL")))
     assert w.run()[1] is True
-    assert [a["comment"] for a in w.activities] == ["IBKR#B1", "IBKR#S1"]
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:B1", "IBKR#v2#U1:TRADE:S1"]
     assert w.pos["qty"][(ACC, "KO")] == 0
 
 
@@ -968,10 +961,10 @@ def test_dry_run_sends_nothing_but_still_updates_the_in_memory_state(monkeypatch
     monkeypatch.setattr(ghostfolio, "requests", ReadOnlyHttp())
     ids, comments, pos = set(), set(), positions()
     _, ok = app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {}, ids, comments, pos)
-    assert ok is True and ids == {"T1"} and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
+    assert ok is True and ids == set() and comments == {(ACC, f"dividend#{ISIN_KO}#2026-07-15")}
 
 
-def test_main_shares_the_existing_sets_between_accounts_through_the_real_process_account(env, monkeypatch):
+def test_v2_identity_writer_main_keeps_equal_ids_independent_across_accounts(env, monkeypatch):
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
     imported = []
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
@@ -981,7 +974,8 @@ def test_main_shares_the_existing_sets_between_accounts_through_the_real_process
     env.setattr(app, "ghost_import_activities", lambda cfg, acts: imported.append(list(acts)) or (list(acts), True))
     env.setattr(app, "ghost_update_cash_balance", lambda *a: True)
     assert app.main() == 0
-    assert len(imported) == 1 and imported[0][0]["comment"] == "IBKR#T1"               # B sees A's import
+    assert [batch[0]["comment"] for batch in imported] == [
+        "IBKR#v2#U1:TRADE:T1", "IBKR#v2#U2:TRADE:T1"]
 
 
 def test_malformed_flex_report_fails_only_that_account(monkeypatch):
@@ -1017,7 +1011,7 @@ def test_api_profiles_drive_holdings_manual_alias_and_dividend_reconciliation(mo
                  + trade_xml("VALID-SELL", "SELL", 5, date="20260901;100000"), div_xml())
     w = World(monkeypatch, xml)
     assert w.run(ids=ids, comments=comments, pos=pos)[1] is True
-    assert [a["comment"] for a in w.activities] == ["IBKR#VALID-SELL"]
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:VALID-SELL"]
 
 
 def test_main_invalid_api_profile_stops_before_fetch_or_write(monkeypatch):
@@ -1077,7 +1071,7 @@ def test_server_skipped_buy_cannot_authorize_sell_in_same_batch(monkeypatch):
                         sent.append(kw["json"]["activities"]) or
                         SimpleNamespace(status_code=201, json=lambda: {"activities": []}))
     assert w.run(pos=positions({(ACC, "KO"): 10}))[1] is False
-    assert [[a["comment"] for a in batch] for batch in sent] == [["IBKR#B"]]
+    assert [[a["comment"] for a in batch] for batch in sent] == [["IBKR#v2#U1:TRADE:B"]]
     assert w.ids == set()
     assert w.pos["qty"][(ACC, "KO")] == 10
 
@@ -1142,16 +1136,16 @@ def test_short_import_acceptance_keeps_proven_buys_and_continues_safely(
 
     assert app.main() == 1
     assert [[activity["comment"] for activity in batch] for batch in batches] == [
-        ["IBKR#B1", "IBKR#B2"], ["IBKR#LATER"],
+        ["IBKR#v2#U1:TRADE:B1", "IBKR#v2#U1:TRADE:B2"], ["IBKR#v2#U2:TRADE:LATER"],
     ]
     assert shared_positions["qty"][("gf-A", "KO")] == 10
     assert shared_positions["qty"][("gf-B", "PEP")] == 10
     assert cash == ["gf-A", "gf-B"]
-    assert "IBKR#B2" in caplog.text
+    assert "IBKR#v2#U1:TRADE:B2" in caplog.text
     assert "inspect Ghostfolio before rerun" in caplog.text
     assert len(notifications) == 1
     assert "account: account_failed (account #1)" in notifications[0][1]
-    for identifier in ("IBKR#B2", "U1", "gf-A", "KO"):
+    for identifier in ("IBKR#v2#U1:TRADE:B2", "U1", "gf-A", "KO"):
         assert identifier not in notifications[0][1]
 
 
@@ -1289,7 +1283,7 @@ def test_dividend_structured_input_schema_blocks_account_only(monkeypatch, caplo
     field = "actionID" if mode == "payment_missing" else "quantity"
     w = World(monkeypatch, structured_input_xml(mode, field))
     assert w.run()[1] is True
-    assert [a["comment"] for a in w.activities] == ["IBKR#INPUT-T"]
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:INPUT-T"]
     assert w.comments == set() and dict(w.pos["dividend_dates"]) == {}
     assert w.cash_calls == [(ACC, 100.5)]
     assert reason in caplog.text and "account dividends not imported" in caplog.text
@@ -1654,3 +1648,64 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
             "flex-request", "flex-report", "accounts", "cash"])
         warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings.count("DRY_RUN not set: simulation, nothing written") == 1
+
+
+@pytest.mark.parametrize("override", [{"accountId": ""}, {"accountId": "U2"},
+                                      {"accountId": " U1"}, {"tradeID": "a:b"},
+                                      {"tradeID": "é"}, {"tradeID": "a" * 2000}])
+@pytest.mark.parametrize("existing", [False, True])
+def test_v2_identity_writer_preflight_blocks_all_financial_writes(monkeypatch, override, existing):
+    xml = report(trade_xml("GOOD") + trade_xml("BAD", **override), div_xml())
+    w = World(monkeypatch, xml)
+    ids = {override.get("tradeID", "BAD")} if existing else set()
+    assert w.run(ids=ids) == ({}, False)
+    assert w.activities == [] and w.cash_calls == []
+    assert w.pos["qty"] == {} and w.pos["versioned_identities"] == set()
+
+
+def test_v2_identity_writer_missing_account_attribute_blocks_writes(monkeypatch):
+    xml = report(trade_xml("T1")).replace(' accountId="U1" />', ' />')
+    assert '<Trade ' in xml and '<Trade tradeID="T1"' in xml
+    w = World(monkeypatch, xml)
+    assert w.run() == ({}, False)
+    assert w.activities == [] and w.cash_calls == []
+
+
+@pytest.mark.parametrize("account", ["U1:bad", "U1é", "U1 "])
+def test_v2_identity_writer_unsafe_verified_account_blocks_cash(monkeypatch, account):
+    w = World(monkeypatch, report(source_account=account))
+    assert w.run(source_account=account) == ({}, False)
+    assert w.activities == [] and w.cash_calls == []
+
+
+def test_v2_identity_writer_excluded_assets_do_not_block_safe_trades(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("GOOD") + trade_xml("", accountId="", assetCategory="OPT")
+                                 + trade_xml("bad:id", accountId="U2", assetCategory="CASH")))
+    assert w.run()[1] is True
+    assert [a["comment"] for a in w.activities] == ["IBKR#v2#U1:TRADE:GOOD"]
+
+
+@pytest.mark.parametrize("length", [1999, 2000, 2001])
+def test_v2_comment_limits_long_account_in_orchestration(monkeypatch, length):
+    account = "U" * (length - 16)
+    w = World(monkeypatch, report(trade_xml("T"), source_account=account))
+    result = w.run(source_account=account)
+    if length > 2000:
+        assert result == ({}, False)
+        assert w.activities == [] and w.cash_calls == []
+    else:
+        assert result[1] is True
+        assert w.activities[0]["comment"] == f"IBKR#v2#{account}:TRADE:T"
+        assert len(w.activities[0]["comment"]) == length
+
+
+def test_v2_identity_writer_repeated_source_report_does_not_reimport(monkeypatch):
+    w = World(monkeypatch, report(trade_xml("T1")))
+    assert w.run()[1] is True
+    assert w.ids == set()
+    assert w.pos["versioned_identities"] == {("U1", "IBKR#v2#U1:TRADE:T1")}
+    assert w.pos["qty"][(ACC, "KO")] == 10
+    w.imported.clear()
+    assert w.run(ids=w.ids, comments=w.comments, pos=w.pos)[1] is True
+    assert w.activities == []
+    assert w.pos["qty"][(ACC, "KO")] == 10

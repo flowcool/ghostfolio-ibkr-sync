@@ -332,7 +332,7 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
     env.setattr(requests, "get", get)
     env.setattr(requests, "put", lambda url, **kw: writes.append(("PUT", url, kw["json"])) or R({}))
     env.setattr(requests, "delete", lambda url, **kw: writes.append(("DELETE", url)))
-    trade = ('<Trade tradeID="T1" symbol="KO" isin="US1912161007" assetCategory="STK" buySell="BUY" '
+    trade = ('<Trade accountId="U1" tradeID="T1" symbol="KO" isin="US1912161007" assetCategory="STK" buySell="BUY" '
              'quantity="10" tradePrice="60" ibCommission="-1" currency="USD" dateTime="20260801;100000"/>')
     div = ('<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="25" dateTime="20260715;120000 EST" '
            'isin="US1912161007" symbol="KO" currency="USD" description="KO CASH DIVIDEND" '

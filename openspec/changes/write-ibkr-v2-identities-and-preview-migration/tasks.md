@@ -14,7 +14,7 @@ The release owner also requires a complete saved migration-input replay and all 
 
 ## 1. Strict identities and account state
 
-- [ ] 1.1 Write strict source-account trade identities. Implement the shared v2 formatter and trade writing. Require every candidate accountId to match the verified report account before any financial write. Reject unsafe segments and comments over 2000 ASCII characters without transformation or legacy fallback. Keep historical reader acceptance unchanged. Document the Flex accountId prerequisite and exact formats. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_identity_writer or v2_comment_limits or versioned_identity_reader'`.
+- [x] 1.1 Write strict source-account trade identities. Implement the shared v2 formatter and trade writing. Require every candidate accountId to match the verified report account before any financial write. Reject unsafe segments and comments over 2000 ASCII characters without transformation or legacy fallback. Keep historical reader acceptance unchanged. Document the Flex accountId prerequisite and exact formats. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_identity_writer or v2_comment_limits or versioned_identity_reader'`.
   - Requirements: Versioned activity identity reader; Destination comment compatibility gates.
   - Scenarios: Write account-scoped identities; Comment boundaries.
   - Files: `ghostfolio_ibkr_sync/{ghostfolio,sync,ibkr,models,app}.py; tests/{test_ghostfolio,test_conversion,test_orchestration}.py; README.md; docs/ibkr-setup.md`.
