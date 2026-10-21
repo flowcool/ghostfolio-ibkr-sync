@@ -55,7 +55,7 @@ The release owner also requires a complete saved migration-input replay and all 
   - Requirements: Offline historical identity migration preview.
   - Scenarios: Offline and deterministic boundary.
   - Files: `identity_migration.py (new); identity_maintenance.py; tests/test_identity_migration.py (new); docs/cleanup.md`.
-- [ ] 4.2 Select only exact unique historical replacements. Classify every source event and historical row once. Permit only exact unique 1-to-1 trade or one-action dividend comments with proven ownership, security, account, date and exact money/quantity. Require both fee-clamp projections to equal the stored fee. Exclude aggregates, ambiguity, manual/inactive/unsupported rows, occupied v2 identities and partial groups. Keep full exclusion evidence visible and document eligibility. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_migration_preview'`.
+- [x] 4.2 Select only exact unique historical replacements. Classify every source event and historical row once. Permit only exact unique 1-to-1 trade or one-action dividend comments with proven ownership, security, account, date and exact money/quantity. Require both fee-clamp projections to equal the stored fee. Exclude aggregates, ambiguity, manual/inactive/unsupported rows, occupied v2 identities and partial groups. Keep full exclusion evidence visible and document eligibility. Verify: `.venv/bin/python -m pytest -q tests -k 'v2_migration_preview'`.
   - Requirements: Offline historical identity migration preview; Flex selection and conversion.
   - Scenarios: Exact migration preview.
   - Files: `identity_migration.py; identity_maintenance.py; tests/test_identity_migration.py; docs/cleanup.md`.
