@@ -172,10 +172,10 @@ def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False
 
 
 def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -> Decimal | None:
-    """Return the common quantity required by the historical group converter.
+    """Return the common quantity of the historical aggregate projection.
 
-    Keep the scalar compatibility boundary until conversion emits one activity
-    per action. Call dividend_action_quantities for independent action evidence.
+    The action writer calls this only after partitioning each action. Keep the
+    scalar helper for historical comparisons, never to combine new actions.
     """
     quantities = dividend_action_quantities(dividend, quiet=quiet)
     if quantities is None:
@@ -354,15 +354,14 @@ def partition_dividend_actions(dividend: DividendGroup,
             return reject("conflicting payment day")
         by_action[action].append(row)
 
-    # An action cannot acquire a second day/contract/ex-date in another group.
+    # Each action belongs to exactly one parsed security/day group.
+    # report_dividends retains the original parser objects, including dividend.
     for group in report_dividends:
-        for row in group["payments"]:
-            action = row.get("accountId", ""), row.get("actionID", "")
-            if action in associations:
-                key = tuple(row.get(field, "") for field in DIVIDEND_PAYMENT_KEYS)
-                if (key != associations[action]
-                        or _dividend_day(row.get("dateTime")) != dividend["date"]):
-                    return reject("conflicting source action across payment groups")
+        if group is dividend:
+            continue
+        if any((row.get("accountId", ""), row.get("actionID", "")) in associations
+               for row in group["payments"]):
+            return reject("source action split across payment groups")
 
     if len({row.get("currency", "") for row in dividend["cash_rows"]}) > 1:
         return reject("contradictory cash currencies")
@@ -418,6 +417,13 @@ def convert_dividend_actions(dividend: DividendGroup, ghost_account_id: str,
     activities = []
     for part in parts:
         if part["gross"] == 0:
+            tax = _dividend_cash_sum([row for row in part["cash_rows"]
+                                      if row.get("type") == WITHHOLDING_CASH_TYPE])
+            if tax:
+                log.warning("Dividend %s %s: action %s nets to zero but carries signed "
+                            "withholding %s %s — not imported, check by hand",
+                            dividend["symbol"], dividend["date"],
+                            part["payments"][0]["actionID"], tax, dividend["currency"])
             continue
         activity = convert_dividend_to_activity(part, ghost_account_id, mapping, unmapped)
         if activity is None:

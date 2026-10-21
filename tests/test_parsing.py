@@ -636,17 +636,22 @@ def test_v2_event_partition_conflicting_or_incomplete_payment_keys(override):
     assert sync.convert_dividend_actions(dividend, "ghost-account", {}, {}) == ([], False)
 
 
-def test_v2_event_partition_zero_net_action_and_tax_stay_accounted_without_quantity():
+@pytest.mark.parametrize("tax", ["2", "-2", "0", "-1e-400"])
+def test_v2_event_partition_zero_net_action_and_tax_stay_accounted_without_quantity(tax, caplog):
     [dividend] = structured_dividend(
         [structured_cash(), structured_cash("5", action="zero"),
          structured_cash("-5", action="zero"),
-         structured_cash("2", action="zero", type_="Withholding Tax")],
+         structured_cash(tax, action="zero", type_="Withholding Tax")],
         [structured_accrual(), structured_accrual("invalid", action="zero")])
     parts = sync.partition_dividend_actions(dividend)
     assert len(parts) == 2 and sum(len(part["cash_rows"]) for part in parts) == 4
     activities, ok = sync.convert_dividend_actions(dividend, "ghost-account", {}, {})
     assert ok and len(activities) == 1 and activities[0]["fee"] == 0
     assert activities[0]["comment"].endswith(":A1")
+    if Decimal(tax):
+        assert f"action zero nets to zero but carries signed withholding {Decimal(tax)} USD" in caplog.text
+    else:
+        assert "nets to zero" not in caplog.text
 
 
 def test_v2_event_partition_negative_action_rejects_positive_group():
@@ -674,3 +679,12 @@ def test_v2_event_partition_multiple_payment_days(reused_action):
         activities, ok = sync.convert_dividend_actions(group, "ghost-account", {}, {}, groups)
         assert ok is (not reused_action)
         assert len(activities) == (0 if reused_action else 1)
+
+
+@pytest.mark.parametrize("other_isin", ["", "other-isin"])
+def test_v2_event_partition_action_cannot_split_across_security_keys(other_isin):
+    groups = structured_dividend([structured_cash(), structured_cash("10", isin=other_isin)],
+                                 [structured_accrual()])
+    assert len(groups) == 2
+    for group in groups:
+        assert sync.convert_dividend_actions(group, "ghost-account", {}, {}, groups) == ([], False)
