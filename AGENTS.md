@@ -40,11 +40,13 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   without an OpenSpec change approved by the operator. When reality contradicts
   the spec, stop and report; never amend the spec silently.
 - **OpenSpec to work items.** After approval, one parent item for the change and
-  one self-contained item per task (spec path, requirement, scenario, acceptance
-  command, files to touch). Closing an item ticks its task in `tasks.md`; archive
-  the change when every task item is closed, before the release item.
+  one implementation item that lists all tasks (spec path, requirement, scenario,
+  acceptance command, files to touch per task). `tasks.md` tracks the tasks; a
+  task ticks its box in a commit, not in a new item. One branch and one PR per
+  change: the last commit archives the change. A task that needs an `operation`
+  or decision item keeps its own item.
 - **Release.** A change that touches shipped code ends with a release item after
-  its last task: archive, replay on `main`, semver tag on the operator's go,
+  its implementation item: replay on `main`, semver tag on the operator's go,
   image pullable; the parent item closes only after it.
 - **Release lab gate.** Publish the immutable RC digest before lab validation.
   Before an RC digest proceeds to production soak or stable promotion, require it
@@ -57,11 +59,12 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   instances after every run. Operational details live
   in the shared knowledge concept `operations/ghostfolio/connector-lab.md`;
   executable commands remain versioned in the infra repository.
-- **One item = one fresh session.** Claim, implement, prove, close, stop. Do not
+- **One session = one fresh context.** Claim, implement, prove, close, stop. Do not
   start the next item or arm a goal across items. Budget about 150 tool calls;
   above that, stop and report the state.
 - **Generated OpenSpec skills.** These rules override them. `openspec-apply-change`
-  implements one task per session, not every task until done. Change names are
+  implements the change's unchecked tasks in order until the 150-call budget,
+  then pushes and stops. Change names are
   lowercase kebab-case; stop before any shell command if a selected change name
   is not, and pass values read from OpenSpec output as quoted arguments, never
   as shell source. Never read or write a path under `openspec/` that is a symlink or resolves
@@ -71,7 +74,7 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Tests:** offline pytest with synthetic inputs and mocked HTTP for logic changes.
   No tests for contributor tooling, docs or CI. No full-suite rerun for prose edits.
 - **Notes:** one closing note with evidence per item; no per-step findings.
-- **Git:** one branch and one PR per item. Merge only when CI is green AND
+- **Git:** one branch and one PR per change. Merge only when CI is green AND
   CodeRabbit has finished its review of the head commit, or on the operator's
   explicit go. A PR that changes only `openspec/`, `docs/` or `*.md` needs CI
   green only. Open the PR yourself, then run `~/.agents/bin/pr-ship <n> --repo
