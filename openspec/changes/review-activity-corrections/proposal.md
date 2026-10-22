@@ -2,16 +2,16 @@
 
 ## Why
 
-The connector skips probable duplicates and reports dividend differences. Corrections remain manual. A review file will let the operator approve exact replacements for the next run.
+The connector skips probable duplicates. Corrections remain manual. The operator will approve exact replacements for the next run through a file.
 
 ## What Changes
 
 - Add optional `ACTIVITY_REVIEW_FILE`, on a persistent writable volume.
-- Compare BUY, SELL and DIVIDEND events with existing activities. Use exact references or bounded date proximity. Present each candidate and all proposed values in keyed YAML.
+- Compare BUY, SELL and DIVIDEND events with existing activities. Use exact references or bounded date proximity. Present candidates and proposed values in keyed YAML.
 - Read approvals on every run. Only `approve: yes` permits the displayed correction. Blank approvals remain pending and prevent the related new import.
 - Update one existing activity per source event. Preserve its ID, account, tags and user notes. Replace recognized old references with the current IBKR reference.
-- Remove confirmed corrections. Retain pending, failed and source-unavailable proposals. Reset approval when reviewed values change.
-- Store before/after values in a private recovery journal. Confirm updates by readback. Bound read-only recovery after uncertain responses.
+- Remove confirmed corrections. Release an import hold when all former candidates belong to other identified events. Retain missing-target, failed and source-unavailable proposals. Reset approval when reviewed values change.
+- Journal before/after values. Confirm updates by exact readback. After uncertainty, block account writes until expected values appear. No reset, retry or interactive recovery.
 - Let simulation refresh the file without financial writes or consuming valid approvals.
 
 ### Record scope
@@ -46,8 +46,8 @@ Rebuild the inventory if source sections or record types change.
 
 ## Impact
 
-Changes will affect configuration, activity indexing, conversion orchestration, update requests and user guidance. Existing disabled behavior stays intact. No new dependency is planned. Shared-helper changes require a downstream propagation assessment; sibling connectors remain unchanged.
+Changes will affect configuration, activity indexing, conversion orchestration, update requests and user guidance. Disabled behavior stays intact. No new dependency. Shared-helper changes require a downstream propagation assessment; sibling connectors remain unchanged.
 
 ## Non-goals
 
-No implementation in this planning delivery. No many-to-one merge, deletion, rejection choice, automatic approval, bulk historical migration, corporate-action support, production activation or publication.
+No implementation. No many-to-one merge, deletion, rejection choice, automatic approval, bulk historical migration, corporate-action support, production activation or publication.
