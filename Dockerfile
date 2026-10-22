@@ -29,7 +29,7 @@ COPY requirements.txt .
 # out of the runtime image and its scans.
 COPY pyproject.toml /build/pyproject.toml
 COPY ghostfolio_ibkr_sync/*.py /build/ghostfolio_ibkr_sync/
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
     && pip install --no-cache-dir --no-deps /build \
     && rm -rf /build \
     && pip uninstall -y pip

@@ -36,7 +36,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"  # same as the image base
-      - run: pip install -r requirements-dev.txt
+      - run: pip install --require-hashes -r requirements-dev.txt
       - run: scripts/check.sh
         env:
           PYTHON: python
@@ -52,7 +52,7 @@ jobs:
         with:
           python-version: "3.14"
       - name: Install runtime, development and audit dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.txt
       - name: Audit the complete Python CI environment
         run: pip-audit
 

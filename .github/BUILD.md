@@ -21,7 +21,8 @@ merging a digest update. High/critical image vulnerabilities with available fixe
 fail CI. The supercronic binary is excluded from the blocking scan and remains
 covered by a separate advisory scan that never blocks.
 
-Runtime requirements pin the complete dependency closure. Once enabled for this
+Requirements pin the complete dependency closure with sha256 hashes, installed with
+`pip --require-hashes`. Once enabled for this
 repository, Renovate proposes weekly Python, GitHub Actions and Docker updates
 after 14 days for Python and 3 days for Actions and images. Major updates require
 Dependency Dashboard approval; merges stay manual. Dependabot owns security
