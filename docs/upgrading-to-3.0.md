@@ -259,8 +259,8 @@ With `DRY_RUN` true, the candidate writes nothing.
    digest with the retained ENV and mounts, then run
    `docker compose up -d`. Set `DRY_RUN=true` explicitly for a rollback preview;
    older images can write when the variable is absent. If you changed the Flex query for 3.0, see the order warning in step 2.
-6. The latest candidates run the refactored typed package. The 10-day production soak
-   restarts on this refactored candidate, and the stable release follows only after it.
+6. The latest candidates run the refactored typed package. Stable promotion uses
+   accepted candidate evidence and the maintainer's GO. No soak or waiting period is required.
 7. After the stable release, return to `:latest` (or pin `:3.0.0`). A pinned `-rc.N` tag gets no
    automatic update, so change it yourself.
 
