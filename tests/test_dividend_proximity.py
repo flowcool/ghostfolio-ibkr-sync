@@ -1,9 +1,8 @@
 """Offline proximity index: connector-comment rows are excluded, exact identity still dedups."""
 import pytest
 
+from _sync_helpers import ACC, ISIN_KO, World, comparison, destination, div_xml, read, report
 from ghostfolio_ibkr_sync import diagnostics
-from test_dividend_diagnostics import destination, read
-from test_orchestration import ACC, ISIN_KO, World, div_xml, report
 
 
 def payments():
@@ -171,7 +170,6 @@ def test_dividend_proximity_amount_manual_ordinary_next_to_pil_is_skipped_with_w
 
 
 def test_dividend_proximity_amount_readable_report_shows_no_raw_tuple(monkeypatch, caplog):
-    from test_dividend_diagnostics import comparison
     findings = comparison(monkeypatch, [manual()])
     absent = findings[0]
     assert absent["proximity"]["matched_date"] == "2026-07-17"

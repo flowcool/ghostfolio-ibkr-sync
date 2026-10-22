@@ -7,34 +7,18 @@ import pytest
 
 import requests
 import logging
+from _sync_helpers import (
+    ACC,
+    CFG,
+    ISIN_KO,
+    comparison,
+    destination,
+    div_xml,
+    read,
+    report,
+    structured_input_xml,
+)
 from ghostfolio_ibkr_sync import diagnostics, ghostfolio, ibkr
-from test_orchestration import ACC, CFG, ISIN_KO, div_xml, report
-
-
-def destination(**changes):
-    row = {"id": "dividend-1", "type": "DIVIDEND", "accountId": ACC,
-           "comment": f"dividend#{ISIN_KO}#2026-07-15", "date": "2026-07-15T00:00:00Z",
-           "quantity": 100, "unitPrice": 0.25, "fee": 0, "currency": "USD",
-           "assetProfile": {"symbol": "KO", "isin": ISIN_KO, "dataSource": "YAHOO", "currency": "USD"}}
-    row.update(changes)
-    return row
-
-
-def read(monkeypatch, rows, wire=None, dry=True):
-    response = requests.Response()
-    response.status_code = 200
-    response._content = (wire or json.dumps({"activities": rows, "count": len(rows)})).encode()
-    calls = []
-    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: calls.append((args, kwargs)) or response)
-    result = ghostfolio.ghost_get_existing_orders({**CFG, "dry_run": dry})
-    assert len(calls) == 1
-    return result
-
-
-def comparison(monkeypatch, rows, xml=None, wire=None):
-    _, _, positions = read(monkeypatch, rows, wire)
-    source = ibkr.parse_cash_dividends(xml or report(divs=div_xml()))
-    return diagnostics.historical_dividend_comparison(source, ACC, {}, positions)
 
 
 def test_historical_diagnostic_coherent_whole_payment(monkeypatch):
@@ -379,7 +363,6 @@ def test_evidence_weak_history_is_accounted_without_certification(monkeypatch, c
 
 @pytest.mark.parametrize("mode", ["old", "missing", "empty", "conflict", "short"])
 def test_evidence_incomplete_source_quantity_is_uncertain(monkeypatch, mode):
-    from test_orchestration import structured_input_xml
     finding = comparison(monkeypatch, [destination()], structured_input_xml(mode))[0]
     assert finding["category"] == "uncertain"
     assert "source quantity" in finding["reason"]
