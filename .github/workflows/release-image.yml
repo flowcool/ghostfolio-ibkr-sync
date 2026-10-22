@@ -176,7 +176,12 @@ jobs:
       - name: Sign the verified manifest keylessly and check the signature
         run: |
           digest=$(cat release-manifest-digest.txt)
-          cosign sign --yes "$IMAGE@$digest"
+          # The version tag is already public: retry transient Sigstore errors.
+          for attempt in 1 2 3; do
+            cosign sign --yes "$IMAGE@$digest" && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep $((attempt * 20))
+          done
           cosign verify \
             --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \

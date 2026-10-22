@@ -57,6 +57,10 @@ cosign verify \
 ```
 
 Images published before this guarantee have no signature.
+If signing still fails after retries, the version stays published without a
+signature and cannot be re-signed by the workflow (the single-publication guard
+refuses it). Publish a superseding patch release instead of signing by hand: a
+manual signature carries a personal identity and fails the command above.
 
 A published, non-draft GitHub prerelease with an exact `vX.Y.Z-rc.N` tag
 (`N >= 1`, no leading zeros) on main publishes only `:X.Y.Z-rc.N`, with the same

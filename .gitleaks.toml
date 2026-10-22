@@ -1,0 +1,8 @@
+# Default gitleaks rules plus an allowlist for synthetic test canaries and the
+# README placeholder. Real credential-shaped strings are still detected.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test canaries and documentation placeholders"
+regexes = ['''^CANARY-[A-Za-z0-9-]+$''', '''^YOUR_AUTH_TOKEN$''']
