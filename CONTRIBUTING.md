@@ -18,7 +18,7 @@ The local Python commands below are only for development and tests. They are not
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pip install --require-hashes -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 scripts/check.sh   # Ruff, strict mypy and pytest, as in CI
 ```
