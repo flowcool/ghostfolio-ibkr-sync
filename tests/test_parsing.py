@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import requests
+from _sync_helpers import report
 from ghostfolio_ibkr_sync import ibkr, sync
 
 
@@ -532,7 +533,6 @@ def test_base_currency_parse_absent_is_none(info):
 
 
 def test_base_currency_parse_report_fixture():
-    from test_orchestration import report
     assert ibkr.parse_base_currency(report()) == "USD"
     assert ibkr.parse_base_currency(report(base_currency=None)) is None
 

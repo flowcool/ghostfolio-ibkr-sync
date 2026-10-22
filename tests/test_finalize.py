@@ -2,13 +2,21 @@
 import json
 import sys
 import time
-from collections import defaultdict
 from datetime import datetime, timezone
 
 import pytest
 
 import requests
 import logging
+from _sync_helpers import (
+    World,
+    destination,
+    div_xml,
+    positions,
+    read,
+    report,
+    structured_input_xml,
+)
 from ghostfolio_ibkr_sync import app, notify, outcome
 
 URL_SECRET = "CANARY-DEST-a41f"
@@ -28,12 +36,6 @@ def env(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("DRY_RUN", "false")
     return monkeypatch
-
-
-def positions():
-    return {"qty": defaultdict(float), "isin_symbols": defaultdict(set),
-            "manual_sells": defaultdict(list), "manual_buys": defaultdict(list),
-            "dividend_dates": defaultdict(list), "versioned_identities": set()}
 
 
 def spy_send(monkeypatch, status="sent"):
@@ -259,7 +261,6 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
 
 @pytest.mark.parametrize("mode", ["missing", "empty", "conflict", "short"])
 def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifications(env, mode):
-    from test_orchestration import World, structured_input_xml
 
     xml = structured_input_xml(mode)
     w = World(env, xml)
@@ -281,7 +282,6 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
 
 
 def test_dividend_structured_input_other_failures_still_notify(env):
-    from test_orchestration import World, structured_input_xml
 
     xml = structured_input_xml("old")
     World(env, xml, cash_ok=False)
@@ -294,8 +294,6 @@ def test_dividend_structured_input_other_failures_still_notify(env):
 
 @pytest.mark.parametrize("price", [0.25, 0.26])
 def test_historical_diagnostic_findings_preserve_success_and_notifications(env, caplog, price):
-    from test_dividend_diagnostics import destination, read
-    from test_orchestration import World, report, div_xml
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(unitPrice=price)])
     xml = report(divs=div_xml())
@@ -374,8 +372,6 @@ def test_historical_diagnostic_preflight_raw_dry_run_stays_silent(env):
 
 
 def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, caplog):
-    from test_dividend_diagnostics import destination, read
-    from test_orchestration import World, report, div_xml
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
     xml = report(divs=div_xml())

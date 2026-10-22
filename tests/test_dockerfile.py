@@ -24,10 +24,6 @@ def test_python_base_keeps_tag_and_pins_digest():
                         dockerfile().splitlines()[0])
 
 
-def test_python_runtime_baseline_docker_base_is_3_14():
-    test_python_base_keeps_tag_and_pins_digest()
-
-
 def test_python_runtime_baseline_all_workflow_pins_are_3_14():
     pins = {}
     for path in sorted((ROOT / '.github' / 'workflows').glob('*.yml')):
