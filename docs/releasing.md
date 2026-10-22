@@ -99,7 +99,7 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
 
    `release-image.yml` runs the same checks and the same single-publication
    guard as for stable, and publishes only `:X.Y.Z-rc.N`.
-2. **Validate.** Before an RC digest proceeds to production soak or stable
+2. **Validate.** Before an RC digest proceeds to production or stable
    promotion, require it to pass the versioned infra `lab.py` runner in both
    isolated scenarios: empty first install and golden-copy upgrade. A failed or
    incomplete digest cannot proceed; publish a new RC for its fix and run both
@@ -108,7 +108,12 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
    is a separate operator-validated operation. Users can try a candidate with the
    [user procedure](upgrading-to-3.0.md#try-a-release-candidate). A fix creates a
    new RC (`N + 1`); never replace a published RC tag.
-3. **Promote.** Tag stable `vX.Y.Z` on the same commit as the highest RC, then
+
+   There is no mandatory soak or waiting period. Reuse accepted evidence for the
+   exact RC digest. Retagging identical bytes does not require another lab run.
+   Repeat affected checks after a relevant source, configuration or destination change.
+
+3. **Promote.** On the operator's GO, tag stable `vX.Y.Z` on the same commit as the highest RC, then
    follow [Publish](#publish). Pass `--notes-start-tag <previous stable>` to
    `gh release create` so the generated notes cover the whole version, not only
    the changes since the last RC.
@@ -222,7 +227,7 @@ Use this order for the v2 writer:
    Derive expected sets from each fixed report/snapshot pair. Do not reuse reader
    counts as writer expectations. Keep lab credentials separate. Stop both instances.
 4. Complete G1–G7 and confirm the current destination image. Obtain separate GO
-   for production preview/soak. A failed or incomplete digest cannot proceed;
+   for production activation. A failed or incomplete digest cannot proceed;
    publish a new RC and rerun both lab scenarios.
 5. Historical conversion needs its own reviewed preview, operation plan and GO.
    Stable promotion needs a new GO. Neither follows from offline tests or RC publication.

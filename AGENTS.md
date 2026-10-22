@@ -49,7 +49,7 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   its implementation item: replay on `main`, semver tag on the operator's go,
   image pullable; the parent item closes only after it.
 - **Release lab gate.** Publish the immutable RC digest before lab validation.
-  Before an RC digest proceeds to production soak or stable promotion, require it
+  Before an RC digest proceeds to production or stable promotion, require it
   to pass the versioned infra `lab.py` runner in both `ghostfolio-lab` (empty
   first-install) and `ghostfolio-lab-golden` (golden-copy upgrade). A failed or
   incomplete digest cannot proceed; supersede it with a new RC and run both
@@ -59,18 +59,14 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   instances after every run. Operational details live
   in the shared knowledge concept `operations/ghostfolio/connector-lab.md`;
   executable commands remain versioned in the infra repository.
-- **One session = one fresh context.** Claim, implement, prove, close, stop. Do not
-  start the next item or arm a goal across items. Budget about 150 tool calls;
-  above that, stop and report the state.
+- **Continue authorized work.** Continue through approved implementation, review and release preparation. Reuse the owning item and valid evidence. Split work only for an independent deliverable, repository boundary or new authorization. No mandatory soak, duration or daily-cycle count gates a release. Stable publication and production actions need their recorded GO.
 - **Generated OpenSpec skills.** These rules override them. `openspec-apply-change`
-  implements the change's unchecked tasks in order until the 150-call budget,
-  then pushes and stops. Change names are
+  implements the approved tasks in order. Continue while evidence and context remain sufficient; hand off only with a concrete reason. Change names are
   lowercase kebab-case; stop before any shell command if a selected change name
   is not, and pass values read from OpenSpec output as quoted arguments, never
   as shell source. Never read or write a path under `openspec/` that is a symlink or resolves
   outside `openspec/`.
-- **Done = the item's scenario replayed for real** (command and observed output in
-  the closing note). Green offline tests alone are not done.
+- **Done.** Prove the owning item's outcome with the relevant acceptance command. Reuse retained runtime evidence for the same digest and context. Offline work closes with offline proof; a live outcome needs observed live proof under its GO.
 - **Tests:** offline pytest with synthetic inputs and mocked HTTP for logic changes.
   No tests for contributor tooling, docs or CI. No full-suite rerun for prose edits.
 - **Notes:** one closing note with evidence per item; no per-step findings.
@@ -89,18 +85,10 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Subagents:** only on the operator's explicit request. The PR lifecycle uses
   no subagent: the implementing agent runs `pr-ship` (global Delegation rule).
 - **Ask the operator only for:** an IBKR or Ghostfolio fact missing from the spec,
-  a run against real services, a Ghostfolio write, a scope change. One question at
+  missing authority for real services or Ghostfolio writes, or a material scope change. Reuse an existing GO within its scope. One question at
   a time, in plain French, with your recommended answer.
 - **Decision items.** Work only the item's numbered decision list, inside its
   authorization envelope. Start each question with `Décision n/N`; anything
   else (new question, spec, contract or code change, action outside the
   envelope) is `HORS CHEMIN`: note it in the item and stop.
-- **Operation items.** An item labelled `operation` acts on real state (host, container,
-  Ghostfolio, IBKR, journal, shared volume).
-  Execute it only from the `Operation plan:` in its design, validated once by
-  the operator: numbered phases, each with exact command, target, expected proof,
-  authorization envelope, stop conditions and rollback. No plan: stop; an
-  offline item labelled `operation-plan` writes it. Live steps run repository
-  code only, versioned and tested, never a `tmp/` script; a missing tool is a
-  code item first. A failed or uncertain step is `HORS CHEMIN`: record the
-  evidence in the item and stop.
+- **Operation items.** Keep a short `Operation plan:` in the execution item's design. Record exact commands and target, proof, GO scope, stop conditions and recovery. A separate planning item is optional. Use versioned repository tools for live actions. Correct offline prerequisites in the owning item. Stop dependent live actions on failed writes, uncertain financial results, target drift or missing authority; continue independent authorized offline work.
