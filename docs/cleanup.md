@@ -621,3 +621,22 @@ after exact mixed-history review and separate GO. A database restore remains a
 separate operation with reconciliation of intervening writes.
 
 [Back to the README](../README.md)
+
+## Activity review journals
+
+Optional normal-run review uses a separate private journal. It calls no cleanup,
+migration, recovery-submit or deletion executor. Do not pass its journal to those
+tools. Keep `<review-file>.journal.yaml` and its companion lock on the volume.
+Never delete or edit an unresolved journal to release an account. Only live exact
+expected-after evidence resolves it.
+
+For offline inspection, load YAML without mutation. Compare its full `before`,
+`after`, `request`, binding and status with an exact saved JSON snapshot.
+`activity_review.inspect_reverse(entry, observed_row)` prepares a whitelisted
+reverse request only for an unchanged confirmed after image. It sends no request.
+Reversal needs separate explicit authority and fresh ownership/unchanged-row
+checks. Software rollback does not restore financial data.
+
+Runtime and offline identity readers use the first line of notes-bearing v2
+comments. Extended reading does not qualify destructive maintenance tools;
+their existing separate image-qualification boundary remains.

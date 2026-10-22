@@ -170,9 +170,9 @@ def build_preview(source: bytes, snapshot: dict[str, Any], evidence: dict[str, A
                     "Redacted or incomplete destination financial evidence")
         identity = parse_versioned_activity_identity(row["comment"], row.get("type"))
         if row["comment"] is not None:
-            by_comment.setdefault(row["comment"], []).append(row)
+            by_comment.setdefault(row["comment"].split("\n", 1)[0] if identity else row["comment"], []).append(row)
         if identity and identity[1] == "DIVIDEND":
-            key = identity[0], row["comment"]
+            key = identity[0], row["comment"].split("\n", 1)[0]
             identities.add(key)
             profile = row.get("SymbolProfile") or row.get("assetProfile") or {}
             contexts.setdefault(key, []).append(dividend_context(profile, row.get("date")))
@@ -226,7 +226,7 @@ def build_preview(source: bytes, snapshot: dict[str, Any], evidence: dict[str, A
             require(len(occupied) <= 1, "Duplicate accepted identity")
             if occupied:
                 row = occupied[0]
-                require(normalized_payload(accepted_payload(row)) == normalized_payload(payload),
+                require(normalized_payload({**accepted_payload(row), "comment": comment}) == normalized_payload(payload),
                         "Accepted row financial or ownership context changed")
                 accepted.append(row["id"])
                 preserved.append({"id": row["id"], "comment": comment,
@@ -375,7 +375,7 @@ def submit(source: Path, destination: Path, evidence: Path, evidence_sha256: str
             require(isinstance(row_id, str) and row_id.strip() and row_id not in ids
                     and isinstance(comment, str) and comment in expected and comment not in seen,
                     "Unmatched accepted identity")
-            require(normalized_payload(accepted_payload(row)) == expected[comment],
+            require(normalized_payload({**accepted_payload(row), "comment": comment}) == expected[comment],
                     "Accepted response changed financial evidence")
             seen.add(comment)
             ids.add(row_id)

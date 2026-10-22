@@ -13,6 +13,14 @@ from typing import Any, cast
 
 import requests
 
+from ghostfolio_ibkr_sync.activity_review import (
+    ReviewState,
+    assert_unchanged,
+    close_review,
+    open_review,
+    process_review,
+    source_events,
+)
 from ghostfolio_ibkr_sync.config import (
     dry_run_requested,
     load_config,
@@ -134,7 +142,12 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     # Fetch the Flex Query report
     try:
-        xml_text = fetch_flex_report(config["ibkr_token"], query_id)
+        if "_review_reports" in config:
+            xml_text = config["_review_reports"].get(ibkr_account_id)
+            if xml_text is None:
+                raise RuntimeError("Review source acquisition failed")
+        else:
+            xml_text = fetch_flex_report(config["ibkr_token"], query_id)
     except Exception as exc:
         log.error("Failed to fetch Flex Query for account %s: %s", ibkr_account_id, exc)
         return {}, False
@@ -151,6 +164,11 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                   "Ghostfolio lookup or any write", query_id, reason)
         return {}, False
 
+    if ibkr_account_id in config.get("_review_failed_sources", set()):
+        return {}, False
+    if config.get("_review_state") is not None:
+        assert_unchanged(config["_review_state"])
+
     # Find the Ghostfolio account
     try:
         ghost_account_id = ghost_find_account_id(config, ghost_account_name)
@@ -162,6 +180,10 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     if ghost_account_id in config.get("_uncertain_import_accounts", set()):
         log.error("Account %s has an uncertain earlier import outcome; refusing further writes", ghost_account_id)
+        return {}, False
+
+    if ghost_account_id in config.get("_review_blocked_accounts", set()):
+        log.error("Account %s has a correction failure; all financial writes blocked", ghost_account_id)
         return {}, False
 
     # Flex provenance is a prerequisite: fail before any import, cash or platform write
@@ -185,7 +207,8 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         activities, proposed_dividend_context, unmapped, selection_ok = select_account_activities(
             xml_text, ibkr_account_id, ghost_account_id, mapping, existing_trade_ids,
             existing_dividend_comments, positions, query_id=query_id,
-            diagnostic_preview=bool(config.get("dry_run")))
+            diagnostic_preview=bool(config.get("dry_run")),
+            review_holds=config.get("_review_holds"))
     except InvalidActivityIdentityError:
         return {}, False
     ok = ok and selection_ok
@@ -238,12 +261,14 @@ def select_account_activities(
     query_id: str = "offline", diagnostic_preview: bool = False,
     date_is_current: Callable[[Mapping[str, Any]], bool] | None = None,
     holdings_trace: dict[str, Any] | None = None,
+    review_holds: set[str] | None = None,
 ) -> tuple[list[Activity], dict[str, DividendContext], Unmapped, bool]:
     """Select without fetching or dispatching; mutate only manual-match state.
 
     Offline callers supply a captured clock and isolated holdings state.
     """
     ok = True
+    review_holds = review_holds or set()
     date_is_current = date_is_current or activity_date_is_current
     # Parse trades and dividends
     trades: list[dict[str, Any]] = parse_trades(xml_text)
@@ -284,6 +309,8 @@ def select_account_activities(
 
     for trade in unique:
         trade_id = trade.get("tradeID", "")
+        if format_versioned_activity_identity(ibkr_account_id, "TRADE", trade_id) in review_holds:
+            continue
         decision = trade_id_decision(
             trade_id, ibkr_account_id, conflicts, existing_trade_ids, positions,
         )
@@ -336,6 +363,9 @@ def select_account_activities(
     div_skipped_dup = 0
     candidates = []
     for div in dividends:
+        if any(format_versioned_activity_identity(ibkr_account_id, "DIVIDEND", row.get("actionID", ""))
+               in review_holds for row in div["payments"]):
+            continue
         dedup, symbol, matched = dividend_dedup_decision(
             div, ghost_account_id, mapping, positions, existing_dividend_comments)
         if dedup == "not_payable":
@@ -423,6 +453,7 @@ def record_accepted_activities(
         comment = activity["comment"]
         identity = parse_versioned_activity_identity(comment, activity["type"])
         if identity is not None:
+            comment = comment.split("\n", 1)[0]
             positions["versioned_identities"].add((identity[0], comment))
             if identity[1] == "DIVIDEND":
                 positions.setdefault("versioned_dividend_context", {}).setdefault(
@@ -482,6 +513,55 @@ def run_sync(outcome: RunOutcome) -> int:
         log.error("Configuration error: %s", exc)
         record_failure(outcome, "config", "invalid_configuration")
         return 1
+    state: ReviewState | None = None
+    try:
+        if config.get("activity_review_file"):
+            state = open_review(config["activity_review_file"], [config["mapping_file"]])
+            config["_review_state"] = state
+        return run_configured_sync(config, outcome)
+    except (RuntimeError, OSError) as exc:
+        log.error("Sync prerequisite failed: %s", exc)
+        record_failure(outcome, "review", "review_unavailable")
+        return 1
+    finally:
+        if state is not None:
+            close_review(state)
+
+
+def prepare_review_sources(config: dict[str, Any], mapping: dict[str, str], names: list[str]) -> None:
+    """Acquire and validate each report once; safe accounts remain independent."""
+    reports: dict[str, str | None] = {}
+    events: dict[str, dict[str, Any]] = {}
+    accounts: dict[str, str] = {}
+    failed: set[str] = set()
+    for source, query, name in zip(config["account_ids"], config["query_ids"], names, strict=True):
+        try:
+            target = ghost_find_account_id(config, name)
+            if target is None:
+                raise RuntimeError("Review destination account missing")
+            accounts[source] = target
+            xml = fetch_flex_report(config["ibkr_token"], query)
+            reports[source] = xml
+            events.update(source_events(xml, source, target, mapping))
+        except Exception:
+            reports[source] = None
+            failed.add(source)
+            log.error("Review report acquisition/validation failed for source account %s", source)
+    for item in config["_review_state"]["document"]["proposals"].values():
+        source = item.get("source account")
+        target = item.get("destination account")
+        if (isinstance(source, str) and source in failed and source not in accounts
+                and isinstance(target, str) and target):
+            accounts[source] = target
+    # Retained bindings can suspend failed sources, never authorize dispatch.
+    config["_review_reports"] = reports
+    config["_review_events"] = events
+    config["_review_accounts"] = accounts
+    config["_review_failed_sources"] = failed
+
+
+def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
+    """Execute with any optional persistent-review lock held for the whole run."""
     reason = timezone_preview_reason()
     if reason:
         config["dry_run"] = True
@@ -529,6 +609,9 @@ def run_sync(outcome: RunOutcome) -> int:
         account_names = account_ids
         log.warning("No GHOST_ACCOUNT_NAMES provided, using IBKR account IDs as Ghostfolio account names")
 
+    if config.get("_review_state") is not None:
+        prepare_review_sources(config, mapping, account_names)
+
     # Fetch existing activities once for the whole run; process_account keeps the
     # sets current as it imports
     try:
@@ -550,6 +633,17 @@ def run_sync(outcome: RunOutcome) -> int:
              "%d versioned identities in Ghostfolio",
              len(existing_trade_ids), len(existing_dividend_comments),
              len(positions.get("versioned_identities", set())))
+
+    if (config.get("_review_state") is not None
+            and (any(xml is not None for xml in config["_review_reports"].values())
+                 or config["_review_state"]["original"] is not None
+                 or config["_review_state"]["journal_original"] is not None)):
+        blocked, held = process_review(config["_review_state"], config,
+                                       config["_review_events"], config["_review_accounts"])
+        config["_review_blocked_accounts"], config["_review_holds"] = blocked, held
+        # A replacement changes positions once. Never add its full quantity to
+        # the earlier holdings. Rebuild every account from verified destination.
+        existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
 
     all_unmapped = {}
     failed_accounts = []

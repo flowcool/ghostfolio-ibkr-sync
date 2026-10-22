@@ -52,7 +52,7 @@ One run does this, in order:
 5. Convert what is left to Ghostfolio activities and import them as a batch per account. If Ghostfolio reports an unresolved symbol, remove that symbol from the batch and retry the rest; the run still exits 1 so the omitted activities remain visible. If a successful response lists fewer created activities than were submitted, retain only the proven creations, log the omitted comments, do not retry the batch, and fail that account. Sells use only the proven buys. Cash and later accounts continue.
 6. Set the account's cash balance. This happens even if the import failed; it is skipped, with a warning, only when the report has no base-currency cash row. The Ghostfolio account currency must equal the IBKR base currency (Account Information `CurrencyPrimary` in the Flex Query): on a mismatch, or when the report has no base currency, the update is refused with an `ERROR` naming the cause, no balance is sent and the account counts as failed. `DRY_RUN` still reads the account and reports the same refusal. After all accounts, the run exits `0` if every account was clean and `1` otherwise.
 
-The tool never deletes or edits an existing Ghostfolio activity: it only adds new ones and updates each account's cash balance (and its platform, if `GHOST_PLATFORM_ID` is set and the account has none). Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
+Imports add new activities. Optional [activity review](#activity-correction-review) permits an exact approved replacement; sync never deletes activities. The connector also updates each account's cash balance (and its platform, if `GHOST_PLATFORM_ID` is set and the account has none). Add `DRY_RUN=1` to see the whole decision without any write (see [Dry run first](#dry-run-first)).
 
 Activities are read from `assetProfile` on current Ghostfolio APIs (the legacy
 `SymbolProfile` response field was removed in 3.78.0). Legacy-only responses
@@ -268,6 +268,7 @@ All configuration is done via environment variables:
 | `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count). Two accounts cannot share one name: the run stops at start-up (exit 1) before any network call. Without names, the IBKR account IDs are the targets and must also be distinct | `IBKR Individual` |
 | `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
+| `ACTIVITY_REVIEW_FILE` | No | Optional writable YAML path on a persistent volume. Blank disables review. See [activity review](#activity-correction-review). | `/review/activities.yaml` |
 | `CRON` | No | Five numeric cron fields for recurring runs (Docker only); validated before startup | `0 6 * * *` |
 | `TZ` | For writes | Valid IANA timezone for historical dividend dates and cron scheduling. Missing or invalid values force the whole run into `DRY_RUN`, with a WARNING. Explicit false `DRY_RUN` retains the configured forced-preview notification, even on success | `Europe/Warsaw` |
 | `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
@@ -780,7 +781,7 @@ accounts continue.
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.
 - **Account-scoped queries** - use a separate Flex Query per sub-account. Several account/query pairs can run sequentially in one container; separate containers are recommended for operational isolation.
-- **Additive imports** - later IBKR corrections to already-imported trades or same-date dividends are not reconciled. Dividend proximity matching (manual or legacy rows only, never rows with a `dividend#` comment) can suppress a distinct payment within ±3 days; the skip is logged (`INFO` when the gross agrees, one `WARNING` otherwise) and the payment must then be added by hand. A row with a `dividend#` comment is trusted by exact identity; editing such a row is outside the contract. Check unusual payment schedules and tax corrections manually.
+- **Additive imports** - with activity review disabled, later IBKR corrections to stored trades or same-date dividends are not reconciled. Optional review exposes supported one-to-one corrections for explicit approval. Dividend proximity matching (manual or legacy rows only, never rows with a `dividend#` comment) can suppress a distinct payment within ±3 days; the skip is logged (`INFO` when the gross agrees, one `WARNING` otherwise) and the payment must then be added by hand. A row with a `dividend#` comment is trusted by exact identity; editing such a row is outside the contract. Check unusual payment schedules and tax corrections manually.
 - **Commission currency** - commissions are booked in the activity currency; a different IBKR commission currency is not converted.
 - **Cleanup is not transactional** - cleanup requires complete financial evidence, equal fees, a unique one-to-one pair and unchanged fresh copies of both rows. Draft or excluded candidates are refused. PUT can succeed while DELETE fails; stop and inspect both rows and the safety log before any recovery. A new apply writes a private YAML journal with exact preimages and known/unknown outcomes. Explicit journal recovery can finish an unchanged pair; it does not recreate deleted activities or repair changed records.
 - **Active position context** - drafts and excluded activities/accounts retain their import identifiers for deduplication, but cannot contribute holdings, manual matches or dividend proximity evidence. Holdings and manual reconciliation use active YAHOO profiles; other sources cannot back YAHOO sells. Excluded target accounts are refused. Future timestamps are deferred with exit 1 until a later run; this conservative instant check avoids server-local draft assignment even when import responses omit tags. Accepted imports use the actual server profile symbol; a canonicalized symbol can require an explicit mapping before sells under the original ticker are allowed.
@@ -813,3 +814,117 @@ Every runtime dependency is pinned. Renovate proposes ordinary Python, GitHub Ac
 ## Credits and license
 
 Forked from [obol89/ghostfolio-ibkr-sync](https://github.com/obol89/ghostfolio-ibkr-sync), with thanks to its contributors. See [LICENSE](LICENSE) for the inherited **MIT NON-AI License**, including its additional restrictions.
+
+## Activity correction review
+
+Set `ACTIVITY_REVIEW_FILE` to enable persistent proposals for supported BUY,
+SELL and DIVIDEND events. Blank retains the existing additive import path.
+The reader accepts a canonical v2 first line, one blank separator line and
+preserved user notes, even after review is disabled.
+
+**Offline implementation only:** correction dispatch remains unavailable.
+`activity_review.QUALIFIED_EXECUTION` is unset in the shipped configuration.
+An isolated release qualification must establish the exact destination image,
+a finite per-run correction limit and a minimum delay. No ENV setting bypasses
+this gate. A `yes` stays pending meanwhile. Synthetic tests do not qualify an image.
+
+Mount a dedicated persistent directory. The parent must exist. Files must be
+owned by the runtime user, readable and writable, mode `0600`. Symlinks, hard
+links and overlap with mapping/source/evidence inputs are refused. Compose additions:
+
+```yaml
+services:
+  ibkr-sync:
+    environment:
+      DRY_RUN: "true"
+      ACTIVITY_REVIEW_FILE: /review/activities.yaml
+    volumes:
+      - ./review:/review
+```
+
+Review acquires and validates all configured reports once before corrections,
+then reuses them for normal processing. Exact references take priority over
+proximity, including outside the date window. Other candidates require the same
+account, operation type, security and denomination. Trade proximity is inclusive
+±2 UTC calendar days; dividend proximity is inclusive ±3 days. Amount agreement
+never grants approval. A manual BUY two days later remains a candidate even when
+its quantity differs. A dividend three days later also remains a candidate.
+Separate fills/actions are never combined. Dividend cash portions from one action
+reuse normal withholding and quantity conversion. Partial action coverage and
+conflicting context remain refused. Legacy dividend aggregates are excluded.
+Current report windows do not prove historical cross-account coverage for
+legacy-global `IBKR#<tradeID>` upgrades; those remain non-actionable.
+
+The version 1 keyed YAML shows stable keys, source account/event, destination
+account/activity, match reason, current/full proposed values, changed fields,
+status and `approve`. Numbers are exact plain-decimal text from the transmitted
+payload and original response JSON. Equivalent numeric spellings compare equal;
+financial tolerance never grants authority. Dates compare as full UTC instants.
+
+Edit only `approve`, between runs. Locate the generated proposal and change:
+
+```yaml
+approve: yes
+```
+
+Only lowercase `yes`, plain or quoted, approves the displayed replacement.
+Blank/null stays pending. Boolean `true`, `no`, `y`, unknown fields and invalid
+schemas are errors. One source can select one target and one target one source.
+Conflicting approvals dispatch nothing for the affected account. New proposals
+start blank. Changed source, target, owner, tags, notes, mapping or relevant
+identity occupancy clears approval. A shorter report retains `source unavailable`
+with its approval suspended; unchanged evidence can resume on return.
+
+Pending proposals hold related imports before ordinary deduplication and holdings
+selection. Unrelated events continue. Deleting an entry causes blank rediscovery.
+There is no rejection choice: resolve false matches manually in Ghostfolio.
+Release requires an exact manual/connector correction, or positive proof that
+all former candidates now belong to other identified events. Missing or inactive
+targets stay held. New candidates are checked before ordinary selection resumes;
+that selection can still refuse an import.
+
+After qualification, each unchanged approved correction sends one whitelisted
+PUT. It preserves activity ID, account, owner, tags and non-reference notes.
+It sends no correction POST/DELETE. Whole-comment recognized legacy references
+alone can be replaced. Legacy references followed by notes are ambiguous.
+Canonical v2 notes and manual notes survive exactly. Unsupported profiles,
+changed profile metadata, unpreservable numbers, ambiguous references, API trimming
+and overlength comments keep affected corrections unavailable.
+
+Before PUT, `<review-file>.journal.yaml` records full before/after evidence,
+request and bindings. Requests are sequential; exact readback precedes the next
+request. The qualified limit defers remaining approvals unchanged. Holdings and
+identity indexes are rebuilt before ordinary imports; a corrected BUY counts once.
+A correction failure blocks later imports, cash and platform writes on that account.
+Other safe accounts continue. Ordinary import failures keep independent cash.
+Failure notifications retain the single summary without financial details.
+
+Recovery reads immediately, then after 2, 5 and 10 seconds. These waits do not
+prove settlement. Only complete expected-after evidence resolves a request,
+including a separately authorized manual correction to that exact state.
+Unchanged old state, drift, deletion or unavailable evidence retains the account
+block across restarts. There is no retry PUT, reset, abandon or interactive prompt.
+Logs identify account/activity, expected fields and observed differences.
+Never delete or edit a journal to resume. Preserve its private financial evidence.
+
+Simulation refreshes proposals and clears stale approvals without financial writes
+or consuming valid `yes`. It cannot resolve a real pending journal or release
+its account block, even when expected-after values appear. A later live run must
+verify and durably record completion.
+
+`<review-file>.lock` excludes overlapping cooperating runs. Atomic synced
+replacement and byte checks detect observed edits before dispatch/publication.
+Advisory locking cannot exclude arbitrary editors. Require exclusive destination
+writers and edit the review only between runs. File syntax/schema, unknown
+proposal and lock errors stop all accounts sharing the file. An invalid approval
+on a valid bound entry blocks its account. A detected edit preserves operator
+files and pending intent and stops the affected run.
+
+To disable preview, stop the connector and remove the ENV value. Keep its files.
+Do not disable review to bypass uncertainty; stop writers until exact readback
+resolves it. Software rollback does not restore data. After notes-bearing writes,
+retain a qualified notes-compatible reader; bare-v2 rc.5 alone is insufficient.
+Offline journal inspection can prepare a guarded reverse payload for an unchanged
+confirmed row only. Reversal requires separate authority and never runs automatically.
+See [maintenance](docs/cleanup.md#activity-review-journals) and
+[release qualification](docs/releasing.md#activity-review-qualification).

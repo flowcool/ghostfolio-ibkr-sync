@@ -30,6 +30,7 @@ class Settings:
     ghost_platform_id: str
     mapping_file: str
     dry_run: bool
+    activity_review_file: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

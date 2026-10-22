@@ -344,7 +344,13 @@ def classify_history(reports: dict[str, tuple[str, str]], rows: list[dict[str, A
     by_comment: dict[str, list[dict[str, Any]]] = {}
     claims: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        by_comment.setdefault(row["comment"], []).append(row)
+        comment = row["comment"]
+        try:
+            if parse_versioned_activity_identity(comment, row.get("type")):
+                comment = comment.split("\n", 1)[0]
+        except RuntimeError:
+            pass  # The existing classifier below reports reserved forms as excluded.
+        by_comment.setdefault(comment, []).append(row)
     for event in events:
         candidates = [row for comment in event["old_comments"] for row in by_comment.get(comment, [])
                       if event["kind"] == "TRADE" or row["accountId"] ==

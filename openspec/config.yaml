@@ -10,7 +10,8 @@ context: |
   This repository is the canonical source of the Ghostfolio helpers projected into
   ghostfolio-degiro-sync; a change to them flags downstream propagation.
   DEGIRO stays pinned to the last single-file commit; propagation needs a separate DEGIRO change.
-  Imports are additive; existing activities are never changed automatically.
+  Imports are additive. Optional activity review can replace one activity only after literal yes approval,
+  qualification, durable intent and exact readback. Sync never deletes activities.
   The product already runs with live writes; specs describe observed behavior before any change.
   Readers: the operator (infrastructure expert, not a developer) and community users.
   A changed decision is applied to proposal, specs, design and tasks before commit.
