@@ -45,6 +45,22 @@ Both native architectures must pass security and isolated runtime checks. Their
 published configuration digests must match the checked images, and the assembled
 manifest must contain those amd64 and arm64 images before `latest` promotion.
 SBOM and provenance accompany the published native images.
+The assembled manifest digest is signed keylessly with cosign using the release
+workflow identity, and the signature is verified before `latest` promotion.
+Verify an installed image with:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/flowcool/ghostfolio-ibkr-sync/\.github/workflows/release-image\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/flowcool/ghostfolio-ibkr-sync@sha256:<manifest-digest>
+```
+
+Images published before this guarantee have no signature.
+If signing still fails after retries, the version stays published without a
+signature and cannot be re-signed by the workflow (the single-publication guard
+refuses it). Publish a superseding patch release instead of signing by hand: a
+manual signature carries a personal identity and fails the command above.
 
 A published, non-draft GitHub prerelease with an exact `vX.Y.Z-rc.N` tag
 (`N >= 1`, no leading zeros) on main publishes only `:X.Y.Z-rc.N`, with the same
