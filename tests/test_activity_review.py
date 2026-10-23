@@ -508,6 +508,74 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     assert fetched == ["Q1"] * 4  # No second acquisition during account processing.
 
 
+@pytest.mark.parametrize("limit,delay", [(1, 0), (2, 0.5)])
+def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monkeypatch, limit, delay):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    days = [(1, 1), (2, 10), (3, 20)]
+    xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000") for i, day in days)
+                 + trade_xml("T4", date="20260830;100000"))
+    app, fetched = runtime_environment(tmp_path, monkeypatch, xml)
+    rows = [destination(f"IBKR#v2#U1:TRADE:T{i}", id=f"row{i}",
+                        date=f"2026-08-{day:02}T10:00:00Z") for i, day in days]
+    server = RuntimeServer(monkeypatch, rows)
+    imports = []
+
+    def import_new(url, **kwargs):
+        assert url == "http://ghost/api/v1/import" and kwargs["allow_redirects"] is False
+        submitted = kwargs["json"]["activities"]
+        assert len(submitted) == 1 and submitted[0]["comment"] == "IBKR#v2#U1:TRADE:T4"
+        imports.extend(deepcopy(submitted))
+        payload = {key: value for key, value in submitted[0].items() if key != "symbol"}
+        created = destination(id="row4", **payload)
+        server.rows.append(created)
+        response = requests.Response()
+        response.status_code = 201
+        response._content = json.dumps({"activities": [created]}, default=float).encode()
+        return response
+
+    monkeypatch.setattr(requests, "post", import_new)
+    path = tmp_path / "review.yaml"
+    monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
+    monkeypatch.setenv("DRY_RUN", "true")
+    # These budgets are test inputs. The shipped activation stays unset.
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))
+    assert app.run_sync(new_run_outcome()) == 0
+    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    assert len(document["proposals"]) == 3
+    for proposal in document["proposals"].values():
+        proposal["approve"] = "yes"
+    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    monkeypatch.setenv("DRY_RUN", "false")
+    expected_pending = {key: deepcopy(value) for key, value in document["proposals"].items()}
+    assert not imports and not server.cash and not server.writes  # Seed run is a true DRY_RUN.
+
+    passes = 0
+    while expected_pending:
+        passes += 1
+        previous = len(server.writes)
+        outcome = new_run_outcome()
+        assert app.run_sync(outcome) == 0
+        assert outcome["accounts_failed"] == 0
+        assert len(server.writes) - previous == min(limit, len(expected_pending))
+        assert len(server.cash) == passes  # Ordinary cash processing still runs.
+        assert len(imports) == 1  # Unrelated new activity imports despite deferred approvals.
+        document = review.decode_review(review.read_yaml(path.read_bytes()))
+        assert document["proposals"] == {key: value for key, value in expected_pending.items()
+                                         if key in document["proposals"]}
+        assert len(document["proposals"]) == max(0, len(expected_pending) - limit)
+        expected_pending = document["proposals"]
+
+    assert len(server.writes) == 3
+    assert {payload["id"] for payload in server.writes} == {"row1", "row2", "row3"}
+    assert server.waits == ([0.5] if limit == 2 else [])
+    # A fresh normal run reopens the journal and cannot resend a consumed yes.
+    assert app.run_sync(new_run_outcome()) == 0
+    assert len(server.writes) == 3 and len(server.cash) == passes + 1
+    assert len(imports) == 1
+    assert fetched == ["Q1"] * (passes + 2)
+
+
 def test_review_acceptance_failure_fences_cash_other_account_continues(tmp_path, monkeypatch):
     from ghostfolio_ibkr_sync.outcome import new_run_outcome
     app, fetched = runtime_environment(tmp_path, monkeypatch)
