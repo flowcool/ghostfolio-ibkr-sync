@@ -830,3 +830,21 @@ def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypa
     assert app.run_sync(new_run_outcome()) == 0
     assert [cash["id"] for cash in server.cash] == ["other"]
     assert len(server.writes) == 1
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_review_recovery_diagnostic_reports_only_stable_drift(monkeypatch, caplog, invalid):
+    row = destination(quantity=Decimal("99"), updatedAt="2026-08-03T00:00:00Z")
+    row["account"]["balance"] = Decimal("999")
+    row["valueInBaseCurrency"] = Decimal("9999")
+    if invalid:
+        row["date"] = "unsupported date"
+    monkeypatch.setattr(review, "snapshot_rows", lambda config: [row])
+    monkeypatch.setattr(review.time, "sleep", lambda wait: None)
+    # Historical journals may contain the original full GET row.
+    entry = {"activity id": "row1", "destination account": "acc",
+             "before": review.plain(destination()), "after": review.plain(destination(quantity=Decimal("10")))}
+    matched, observed = review.recovery_read({}, entry)
+    assert not matched and observed is row
+    diagnostic = next(record for record in caplog.records if "observed differences" in record.msg)
+    assert diagnostic.args[-1] == (["unavailable activity evidence"] if invalid else ["quantity"])

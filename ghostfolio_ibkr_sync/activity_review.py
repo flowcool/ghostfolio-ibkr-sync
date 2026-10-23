@@ -650,9 +650,15 @@ def recovery_read(config: dict[str, Any], entry: dict[str, Any]) -> tuple[bool, 
                 break
         except Exception:
             observed = None
-    differences = (sorted(key for key in set(entry["after"]) | set(observed or {})
-                          if plain((observed or {}).get(key)) != entry["after"].get(key))
-                   if observed else ["unavailable activity evidence"])
+    try:
+        observed_values = values_of(observed) if observed is not None else None
+        expected_values = values_of(entry["after"])
+    except (RuntimeError, KeyError):
+        observed_values = None
+        expected_values = {}
+    differences = (sorted(key for key in set(expected_values) | set(observed_values)
+                          if observed_values.get(key) != expected_values.get(key))
+                   if observed_values is not None else ["unavailable activity evidence"])
     log.error("Review account %s activity %s remains blocked; expected %s; observed differences %s",
               entry["destination account"], entry["activity id"],
               {key: entry["after"].get(key) for key in REPLACED if key != "symbol"}, differences)
