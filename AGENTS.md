@@ -71,16 +71,14 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Tests:** offline pytest with synthetic inputs and mocked HTTP for logic changes.
   No tests for contributor tooling, docs or CI. No full-suite rerun for prose edits.
 - **Notes:** one closing note with evidence per item; no per-step findings.
-- **Git:** one branch and one PR per change. Merge only when CI is green AND
-  CodeRabbit has finished its review of the head commit, or on the operator's
-  explicit go. A PR that changes only `openspec/`, `docs/` or `*.md` needs CI
-  green only. Open the PR yourself, then run `~/.agents/bin/pr-ship <n> --repo
-  flowcool/ghostfolio-ibkr-sync --request-review-after 0` in one call (Claude: Bash
-  `timeout: 600000`; Codex: one exec cell, see the global runbook), never a
-  `sleep` loop. It waits, merges on `ready` and hands back any other verdict;
-  exit 2 means re-run. Fix or answer each actionable comment, then re-run;
-  a pushed fix needs a finished review again. Still open after a second round:
-  leave the PR open, stop and report.
+- **Git:** one branch and one PR per change. Pullfrog is the sole reviewer.
+  Require CI green and a completed Pullfrog review of the head. Resolve actionable
+  threads. Ignore CodeRabbit and the known sticky `pullfrog-approval` status;
+  every other CI failure remains blocking. Docs-only PRs need CI only.
+  Open the PR yourself, then run `~/.agents/bin/pr-ship <n> --repo
+  flowcool/ghostfolio-ibkr-sync` in one call. Exit 2 means re-run. Fix or answer
+  actionable comments, resolve them and re-run. A pushed fix needs a review of
+  the new head. After a second unresolved round, leave the PR open and report.
 - **Docs:** README and user docs required by the spec only. No new plan, review
   or contract files.
 - **Subagents:** only on the operator's explicit request. The PR lifecycle uses
