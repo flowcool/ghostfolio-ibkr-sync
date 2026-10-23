@@ -159,7 +159,7 @@ def test_only_supercronic_pin_is_read_without_requirements(tmp_path):
 
 
 def test_real_repository_pin_is_readable():
-    assert watch.read_pins() == PINS
+    assert watch.read_pins() == [{**SUPERCRONIC, "version": "0.2.51"}]
 
 
 @pytest.mark.parametrize("dockerfile", ["FROM python\n", "ARG SUPERCRONIC_VERSION=v0.2.49rc1\n",
