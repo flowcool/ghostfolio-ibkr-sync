@@ -855,11 +855,51 @@ conflicting context remain refused. Legacy dividend aggregates are excluded.
 Current report windows do not prove historical cross-account coverage for
 legacy-global `IBKR#<tradeID>` upgrades; those remain non-actionable.
 
-The version 1 keyed YAML shows stable keys, source account/event, destination
-account/activity, match reason, current/full proposed values, changed fields,
-status and `approve`. Numbers are exact plain-decimal text from the transmitted
+The schema-2 YAML contains two sections in the same private file:
+
+| Section | What you approve | What stays unchanged |
+|---|---|---|
+| `reference_updates` | The connector reference in `comment` only | Date, quantity, price, fee, account, activity ID, tags and notes |
+| `activity_corrections` | The displayed one-to-one replacement, including any financial changes | Activity ID, account, owner, tags and preserved notes |
+
+Each proposal shows `execution path`, `evidence level`, stable keys, source
+account/event, destination account/activity, match reason, current/full proposed
+values, changed fields, status and `approve`. Read the full proposed comment.
+`exact` means the association is proven by the supported identity evidence.
+`probable` means a supported proximity match needs your judgment. `blocked` means
+required evidence is missing or conflicting; even yes cannot make it writable.
+These levels describe the association, not the correctness of a financial amount.
+No confidence percentage grants authority.
+
+The file is generated. Do not create proposal keys or move entries between sections.
+A reference-only proposal has `changed fields: [comment]`. A financial correction
+shows exact before/after values under `current values` and `proposed values`. Numbers are exact plain-decimal text from the transmitted
 payload and original response JSON. Equivalent numeric spellings compare equal;
 financial tolerance never grants authority. Dates compare as full UTC instants.
+
+For example, these excerpts show two generated entries. The real file also
+contains the binding and complete values. Do not copy this abbreviated example
+as an input file:
+
+```yaml
+version: 2
+reference_updates:
+  "<generated-key>":
+    section: reference_updates
+    evidence level: exact
+    execution path: historical maintenance
+    source event: "IBKR#v2#U1:TRADE:123"
+    activity id: "<existing-activity-id>"
+    changed fields: [comment]
+    approve: yes
+activity_corrections:
+  "<another-generated-key>":
+    section: activity_corrections
+    evidence level: probable
+    execution path: normal run
+    changed fields: [comment, quantity]
+    approve: null
+```
 
 Edit only `approve`, between runs. Locate the generated proposal and change:
 
@@ -868,8 +908,11 @@ approve: yes
 ```
 
 Only lowercase `yes`, plain or quoted, approves the displayed replacement.
-Blank/null stays pending. Boolean `true`, `no`, `y`, unknown fields and invalid
-schemas are errors. One source can select one target and one target one source.
+Every other approval value is skipped for that cycle. Blank/null stays pending;
+`no`, `true`, `y`, `Yes` and typos do not approve anything. A non-null skipped
+choice produces a warning. It is not stored as a rejection and does not release
+the related import hold. Unknown fields, invalid bindings and invalid schemas
+remain errors. One source can select one target and one target one source.
 Conflicting approvals dispatch nothing for the affected account. New proposals
 start blank. Changed source, target, owner, tags, notes, mapping or relevant
 identity occupancy clears approval. A shorter report retains `source unavailable`
@@ -882,6 +925,34 @@ Release requires an exact manual/connector correction, or positive proof that
 all former candidates now belong to other identified events. Missing or inactive
 targets stay held. New candidates are checked before ordinary selection resumes;
 that selection can still refuse an import.
+
+The `execution path` tells you how an approved proposal can run:
+
+| Execution path | Command | Separate operation authorization |
+|---|---|---|
+| `normal run` | Normal connector cycle, after correction activation is qualified | Subject to the configured correction contract |
+| `historical maintenance` | `identity_migration.py prepare`, then separately authorized `apply` from the checkout | Required; yes alone never authorizes maintenance |
+
+Historical conversion uses this same file, but runs outside the daily connector.
+For example, an old global trade reference may need historical cross-account
+proof that current runtime reports cannot supply. Keep the connector and other
+review-file writers stopped while staging, approving, preparing and applying
+that maintenance selection. Normal refresh can replace the staged evidence and
+clear its approval. Do not copy a yes onto a new proposal.
+
+Follow the [shared-file historical workflow](docs/cleanup.md#historical-maintenance-with-the-shared-review-file).
+Preparation checks the exact subset you approved. A proof for all candidates
+does not authorize a smaller selection. Preparation sends no financial request. Preparation and apply hold the shared
+review lock. Apply requires this file and removes confirmed selections. Staging
+again clears historical approvals; review and approve them again, including after rollback.
+Apply still requires the reviewed target, qualified preservation and pacing,
+settled requests, exclusive destination writers, backup and a separate operation GO.
+Do not bypass a blocked runtime trade by editing its evidence or execution path.
+
+Schema 1 remains readable. The first schema-2 refresh clears old approvals once;
+read the new presentation before setting yes again. Journals retain pending
+request fences. An older connector refuses schema 2. Keep a private file copy
+before upgrade; do not downgrade or edit a pending journal to resume writes.
 
 After qualification, each unchanged approved correction sends one whitelisted
 PUT. It preserves activity ID, account, owner, tags and non-reference notes.
@@ -916,8 +987,7 @@ verify and durably record completion.
 replacement and byte checks detect observed edits before dispatch/publication.
 Advisory locking cannot exclude arbitrary editors. Require exclusive destination
 writers and edit the review only between runs. File syntax/schema, unknown
-proposal and lock errors stop all accounts sharing the file. An invalid approval
-on a valid bound entry blocks its account. A detected edit preserves operator
+proposal and lock errors stop all accounts sharing the file. A non-yes approval is skipped; it does not block unrelated account writes. A detected edit preserves operator
 files and pending intent and stops the affected run.
 
 To disable preview, stop the connector and remove the ENV value. Keep its files.

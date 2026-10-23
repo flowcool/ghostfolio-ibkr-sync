@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from ghostfolio_ibkr_sync.activity_preservation import preserved_equal
 from ghostfolio_ibkr_sync.app import (
     record_accepted_activities,
     select_account_activities,
@@ -558,7 +559,8 @@ def bind_selection(manifest: dict[str, Any], reports: dict[str, tuple[str, str]]
     root = Path(__file__).resolve().parent
     paths = ["identity_migration.py", "identity_maintenance.py", "cleanup_recovery.py",
              *[f"ghostfolio_ibkr_sync/{name}.py" for name in
-               ("app", "sync", "ghostfolio", "ibkr", "models")]]
+               ("app", "sync", "ghostfolio", "ibkr", "models", "activity_review", "activity_preservation")]]
+    manifest["preservation_semantics"] = "stable-business-v1"
     manifest["implementation"] = {path: digest((root / path).read_bytes()) for path in paths}
     approved = {replacement["id"]: replacement["new_comment"]
                 for replacement in manifest["replacements"]}
@@ -568,7 +570,7 @@ def bind_selection(manifest: dict[str, Any], reports: dict[str, tuple[str, str]]
         for row in rows]
 
 
-def migration_evidence(inputs: Path) -> tuple[dict[str, Any], dict[Path, bytes]]:
+def migration_evidence(inputs: Path, review_file: Path | None = None) -> tuple[dict[str, Any], dict[Path, bytes]]:
     config_path = safe_path(inputs)
     config_bytes = config_path.read_bytes()
     config = keyed_yaml(config_bytes)
@@ -643,6 +645,43 @@ def migration_evidence(inputs: Path) -> tuple[dict[str, Any], dict[Path, bytes]]
                         "This evidence preview cannot authorize apply or rollback."],
     }
     manifest.update(classify_history(saved_reports, snapshot["activities"], config))
+    if review_file is not None:
+        from ghostfolio_ibkr_sync import activity_review as review
+
+        path = safe_path(review_file)
+        review.safe_path(path, list(captured))
+        data = path.read_bytes()
+        document = review.decode_review(review.read_yaml(data))
+        require(review.read_yaml(data).get("version") == 2, "Historical preparation requires schema 2")
+        review.refresh_proposals(document["proposals"], {}, snapshot["activities"], config["accounts"])
+        journal_path = Path(str(path) + ".journal.yaml")
+        if journal_path.exists():
+            review.safe_path(journal_path, list(captured))
+            journal_data = journal_path.read_bytes()
+            journal = review.read_yaml(journal_data)
+            review.validate_document(journal, "entries")
+            require(all(entry.get("status") == "confirmed" for entry in journal["entries"].values()),
+                    "Pending review request blocks historical preparation")
+            captured[journal_path] = journal_data
+        expected = historical_proposals(manifest)
+        selected = []
+        for key, item in document["proposals"].items():
+            if type(item.get("approve")) is not str or item["approve"] != "yes":
+                continue
+            if item.get("execution path") != "historical maintenance":
+                continue
+            rebuilt = expected.get(key)
+            require(rebuilt is not None and proposal_content(item) == proposal_content(rebuilt),
+                    "Approved historical proposal changed")
+            selected.append(key)
+        require(selected, "No exact yes historical reference selection")
+        _, conflicted_accounts = review.approved_proposals(document["proposals"])
+        require(all(expected[key]["destination account"] not in conflicted_accounts for key in selected),
+                "Conflicting shared review approvals")
+        chosen_ids = {expected[key]["activity id"] for key in selected}
+        manifest["replacements"] = [item for item in manifest["replacements"] if item["id"] in chosen_ids]
+        manifest["review_selection"] = {"schema": 2, "sha256": digest(data), "keys": sorted(selected)}
+        captured[path] = data
     bind_selection(manifest, saved_reports, snapshot["activities"], config)
     manifest["limitations"].append(
         "Proof is invalid after configuration, inventory, window, tool, image or snapshot changes; "
@@ -661,6 +700,84 @@ def preview(inputs: Path, output: Path) -> str:
     publish_private(output, {"manifest.json": data,
                             "manifest.sha256": (manifest_hash + "\n").encode()}, list(captured))
     return manifest_hash
+
+
+def proposal_content(item: dict[str, Any]) -> dict[str, Any]:
+    """Consent cannot change the action; revision is journal request identity."""
+    return {key: value for key, value in item.items() if key not in {"approve", "review revision", "status"}}
+
+
+def historical_proposals(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Display exact comment-only candidates; no HTTP or runtime activation."""
+    from ghostfolio_ibkr_sync import activity_review as review
+
+    rows = {item["id"]: item["fields"] for item in manifest["rows"]}
+    events = {item["event"]: item for item in manifest["events"]}
+    planned = manifest.get("selection_proof", {}).get("planned_replacements", manifest["replacements"])
+    result = {}
+    for replacement in planned:
+        row = rows[replacement["id"]]
+        event = events[replacement["event"]]
+        before = review.values_of(row)
+        proposed = {**before, "comment": replacement["new_comment"]}
+        source, destination = event["source_account"], row["accountId"]
+        key = review.fingerprint([replacement["new_comment"], destination, row["id"]])
+        result[key] = {"key": key, "source account": source,
+                       "source event": replacement["new_comment"], "destination account": destination,
+                       "activity id": row["id"], "match reason": "exact historical reference",
+                       "current values": before, "proposed values": proposed,
+                       "changed fields": ["comment"], "status": "pending", "approve": None,
+                       "actionable": True, "binding": review.fingerprint([replacement, manifest["bindings"]]),
+                       "review revision": review.uuid4().hex,
+                       "date context": "Stored UTC instant preserved; historical day proof uses " + manifest["timezone"],
+                       "section": "reference_updates", "evidence level": "exact",
+                       "execution path": "historical maintenance"}
+    return result
+
+
+def stage_review(inputs: Path, review_file: Path) -> int:
+    """Stage historical candidates in the same private file, with writers stopped."""
+    from ghostfolio_ibkr_sync import activity_review as review
+
+    manifest, captured = migration_evidence(inputs)
+    require(not manifest["pending"] and manifest["selection_proof"]["equal"],
+            "Historical selection proof unavailable")
+    state = review.open_review(str(review_file), [str(path) for path in captured])
+    try:
+        require(all(entry.get("status") == "confirmed" for entry in state["journal"]["entries"].values()),
+                "Pending review request blocks historical staging")
+        previous = state["document"]["proposals"]
+        rows = [item["fields"] for item in manifest["rows"]]
+        review.refresh_proposals(previous, {}, rows, manifest["accounts"])
+        staged = historical_proposals(manifest)
+        # Staging is a new maintenance review, never resurrection of consumed
+        # consent after a rollback or a failed review-file cleanup.
+        previous = {key: item for key, item in previous.items()
+                    if item.get("execution path") != "historical maintenance"}
+        for path, data in captured.items():
+            require(safe_path(path).read_bytes() == data, "Historical input changed during staging")
+        review.publish_review(state, {"version": 1, "proposals": {**previous, **staged}})
+        return len(staged)
+    finally:
+        review.close_review(state)
+
+
+def prepare_review(inputs: Path, review_file: Path, output: Path) -> str:
+    from ghostfolio_ibkr_sync import activity_review as review
+
+    state = review.open_review(str(review_file), [str(inputs), str(output)])
+    try:
+        manifest, captured = migration_evidence(inputs, review_file)
+        require(not manifest["pending"] and manifest["selection_proof"]["equal"],
+                "Selected historical subset changes import selection")
+        review.assert_unchanged(state)
+        data = canonical_json(manifest)
+        manifest_hash = digest(data)
+        publish_private(output, {"manifest.json": data,
+                                "manifest.sha256": (manifest_hash + "\n").encode()}, list(captured))
+        return manifest_hash
+    finally:
+        review.close_review(state)
 
 
 def migration_request(method: str, url: str, **kwargs: Any) -> Any:
@@ -704,14 +821,38 @@ def comment_payload(row: dict[str, Any], comment: str) -> dict[str, Any]:
 
 
 def apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
-          approval_sha256: str, journal: Path, host: str, token: str) -> None:
+          approval_sha256: str, journal: Path, host: str, token: str,
+          review_file: Path | None = None) -> None:
+    """Require shared-file consent and exclude cooperating review writers."""
+    from ghostfolio_ibkr_sync import activity_review as review
+
+    require(review_file is not None, "Historical apply requires the shared review file")
+    assert review_file is not None
+    require(not safe_path(journal).exists(), "Existing migration journal; automatic retry refused")
+    state = review.open_review(str(review_file), [str(p) for p in (inputs, manifest, approval, journal)])
+    try:
+        _apply(inputs, manifest, manifest_sha256, approval, approval_sha256, journal, host, token,
+               review_file, state["original"])
+        reviewed = exact_json(read_evidence(manifest, manifest_sha256))
+        consumed = set(reviewed["review_selection"]["keys"])
+        review.publish_review(state, {"version": 1, "proposals": {
+            key: item for key, item in state["document"]["proposals"].items() if key not in consumed}})
+    finally:
+        review.close_review(state)
+
+
+def _apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
+           approval_sha256: str, journal: Path, host: str, token: str,
+           review_file: Path, review_bytes: bytes | None) -> None:
     """Apply a reviewed selection once; refuse existing journals and uncertain results."""
     from cleanup_recovery import journal_host, lock_journal, write_journal
     from ghostfolio_ibkr_sync.ghostfolio import ghost_headers
 
     host = journal_host({"ghost_host": host})
     require(text(token), "Missing maintenance credential")
-    proposed, captured = migration_evidence(inputs)
+    proposed, captured = migration_evidence(inputs, review_file)
+    require(captured[safe_path(review_file)] == review_bytes,
+            "Review changed after maintenance lock acquisition")
     reviewed_bytes = read_evidence(manifest, manifest_sha256)
     require(reviewed_bytes == canonical_json(proposed), "Reviewed manifest changed")
     permit_bytes = read_evidence(approval, approval_sha256)
@@ -744,12 +885,20 @@ def apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
     expected = {row["id"]: row for row in snapshot["activities"]}
     records = {}
     payloads = {}
+    from ghostfolio_ibkr_sync import activity_review as review
+
+    consent = review.decode_review(review.read_yaml(captured[safe_path(review_file)]))["proposals"]
+    consent_by_id = {consent[key]["activity id"]: (key, consent[key]["review revision"])
+                     for key in proposed["review_selection"]["keys"]}
     for replacement in replacements:
         row = expected[replacement["id"]]
         require(row.get("userId") == permit["owner_id"], "Unproven migration owner")
         payloads[row["id"]] = comment_payload(row, replacement["new_comment"])
         records[row["id"]] = {**replacement, "preimage": row,
-                               "request_payload": payloads[row["id"]], "status": "prepared"}
+                               "request_payload": payloads[row["id"]], "status": "prepared",
+                               "review_key": consent_by_id[row["id"]][0],
+                               "review_revision": consent_by_id[row["id"]][1],
+                               "review_sha256": proposed["review_selection"]["sha256"]}
     # YAML cannot encode Decimal. Canonical evidence keeps exact decimals as strings.
     records = json.loads(canonical_json(records))
     captured.update({safe_path(manifest): reviewed_bytes, safe_path(approval): permit_bytes})
@@ -776,7 +925,7 @@ def apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
             fresh = migration_snapshot(host, headers, config["snapshot"])
             actual = {row["id"]: row for row in fresh["activities"]}
             require(actual.keys() == expected.keys() and all(
-                canonical_json(actual[key]) == canonical_json(value)
+                preserved_equal(actual[key], value)
                 for key, value in expected.items()), "Destination ownership, occupancy or context changed")
             for source, data in captured.items():
                 require(safe_path(source).read_bytes() == data, "Reviewed input changed")
@@ -836,10 +985,11 @@ def inspect_rows(record: dict[str, Any], snapshot: Any, metadata: dict[str, Any]
     result = {}
     for row_id, entry in record["rows"].items():
         row = actual.get(row_id)
-        fingerprint = digest(canonical_json(row))
-        state = ("converted" if fingerprint == entry["after_fingerprint"] else
-                 "original" if fingerprint == entry["before_fingerprint"] else
-                 "absent" if row is None else "drift")
+        before = entry["preimage"]
+        after = {**before, "comment": entry["new_comment"]}
+        state = ("absent" if row is None else
+                 "converted" if preserved_equal(row, after) else
+                 "original" if preserved_equal(row, before) else "drift")
         pending = (entry.get("rollback_status") == "pending" or
                    entry.get("rollback_status") is None and entry["status"] == "pending")
         result[row_id] = "uncertain:" + state if pending else state
@@ -933,7 +1083,7 @@ def rollback(journal: Path, manifest: Path, manifest_sha256: str, approval: Path
         def check() -> None:
             current = {r["id"]: r for r in fresh()["activities"]}
             require(current.keys() == expected.keys() and all(
-                canonical_json(current[k]) == canonical_json(v) for k, v in expected.items()),
+                preserved_equal(current[k], v) for k, v in expected.items()),
                 "Rollback ownership, occupancy or context changed")
 
         check()
@@ -974,6 +1124,13 @@ def main() -> int:
     command = commands.add_parser("preview", help="Validate saved migration evidence offline")
     command.add_argument("--inputs", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("review", help="Stage exact historical references in the shared review file offline")
+    command.add_argument("--inputs", type=Path, required=True)
+    command.add_argument("--review", type=Path, required=True)
+    command = commands.add_parser("prepare", help="Prove the exact yes historical subset offline")
+    command.add_argument("--inputs", type=Path, required=True)
+    command.add_argument("--review", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
     command = commands.add_parser("apply", help="Apply separately approved comment replacements")
     command.add_argument("--inputs", type=Path, required=True)
     command.add_argument("--manifest", type=Path, required=True)
@@ -982,6 +1139,7 @@ def main() -> int:
     command.add_argument("--approval-sha256", required=True)
     command.add_argument("--journal", type=Path, required=True)
     command.add_argument("--host", required=True)
+    command.add_argument("--review", type=Path, required=True)
     command = commands.add_parser("inspect", help="Inspect saved resume evidence without HTTP")
     command.add_argument("--journal", type=Path, required=True)
     command.add_argument("--manifest", type=Path, required=True)
@@ -1002,6 +1160,10 @@ def main() -> int:
     try:
         if args.command == "preview":
             print(preview(args.inputs, args.output))
+        elif args.command == "review":
+            print(f"Historical reference proposals staged: {stage_review(args.inputs, args.review)}; no financial writes")
+        elif args.command == "prepare":
+            print(prepare_review(args.inputs, args.review, args.output))
         elif args.command == "inspect":
             print(canonical_json(inspect(args.journal, args.manifest, args.manifest_sha256,
                                          args.snapshot, args.snapshot_sha256)).decode(), end="")
@@ -1011,7 +1173,7 @@ def main() -> int:
             print("Rollback complete: journal-owned comments restored")
         else:
             apply(args.inputs, args.manifest, args.manifest_sha256, args.approval,
-                  args.approval_sha256, args.journal, args.host, os.environ.get("GHOST_TOKEN", ""))
+                  args.approval_sha256, args.journal, args.host, os.environ.get("GHOST_TOKEN", ""), args.review)
             print("Migration complete: reviewed comments verified")
     except (RuntimeError, ValueError, OSError, KeyError, TypeError, SyntaxError, yaml.YAMLError) as error:
         label = args.command.capitalize()
