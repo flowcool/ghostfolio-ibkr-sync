@@ -115,11 +115,15 @@ Check: `.venv/bin/python -m pytest -q tests -k 'unknown_trade_side'`.
 
 Withholding SHALL join by nonempty source account, actionID, conid, currency and payment day. Missing tax exDate SHALL be allowed; a nonempty contradictory exDate SHALL reject the group. No amount ratio, description, arbitrary allocation or missing-tax guess SHALL establish ownership. Per-action signed withholding/refunds SHALL be summed before the existing zero-fee clamp. Separate fees can therefore differ from the old group-level clamp when opposite signed tax exists; the preview SHALL expose that difference, never hide it as rounding.
 
-Each action SHALL have one payment day, one contract, one currency and one exDate within its source account. Conflicting, incomplete or negative-net action evidence SHALL reject the entire historical group, emit a reason and fail the account result without blocking independent cash or later accounts. Zero-net actions SHALL create no activity. An action seen again with changed financial values SHALL remain additive: no correction import or update is authorized. Where saved evidence exposes such a conflict, preview SHALL report it for manual review. Automatic sync is not a general financial reconciliation service. Withholding-only groups without a positive payment SHALL retain their existing not-payable outcome; report them without inventing a payment or failing solely because tax is present.
+Each action SHALL have one payment day, one contract, one currency and one exDate within its source account. Conflicting, incomplete or negative-net action evidence SHALL reject the entire historical group, emit a reason and fail the account result without blocking independent cash or later accounts. Zero-net actions SHALL create no activity. An action seen again with changed financial values SHALL NOT create a correction import. With review disabled, no update is authorized. With review enabled, only the separately approved one-to-one replacement specified in activity-correction-review SHALL update an existing action. Invalid or incomplete action evidence SHALL remain non-actionable. Where saved evidence exposes a conflict, preview SHALL report it for manual review. Withholding-only groups without a positive payment SHALL retain their existing not-payable outcome; report them without inventing a payment or failing solely because tax is present.
+
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
 
 ### Requirement: Mapping and duplicate reconciliation
 
-Mapping SHALL prefer ISIN mappings, then IBKR symbols. Trade IDs SHALL suppress reimport. Manual matching SHALL use quantity and ±2 days, including summed fills. Ambiguous split fills SHALL only be summed within the same parsed calendar day, side, resolved ticker, and ISIN; nearby mismatches SHALL warn/skip. Dividends SHALL match by account/comment (including the old symbol comment), or, for existing active YAHOO dividends of the same account and symbol whose comment does not start with `dividend#` (manual or legacy rows), at ±3 days. Connector-comment rows (`dividend#…`) SHALL NOT enter the proximity index, so a distinct payment next to an imported one is imported. A proximity skip SHALL stay a skip. The comparison SHALL use the exact source gross and the existing row's quantity × unitPrice, normalized to a common major unit (minor-unit markets as in conversion) and rounded to its minor unit; an unsupported denomination SHALL be "not comparable". Equal amounts SHALL log INFO "amounts agree" with both fee values; equal amounts do not prove the same payment. Otherwise it SHALL log one WARNING naming both dates, both gross values with currencies (or "not comparable"), both fee values, and the operator action: check IBKR and add the payment by hand if it is distinct. It SHALL NOT change exit status or notifications.
+Mapping SHALL prefer ISIN mappings, then IBKR symbols. The existing matching rules below SHALL apply when ACTIVITY_REVIEW_FILE is disabled. When enabled, activity-correction-review SHALL first inspect complete supported source events, including existing identities, and hold events with pending candidates before ordinary selection. No blank approval or deleted review entry SHALL authorize a related import. If all former candidates are proven assigned to other identified events, release the hold and repeat ordinary selection under activity-correction-review. Missing or inactive targets SHALL remain held. Review SHALL NOT combine trade fills or dividend actions into one correction. Trade IDs SHALL suppress reimport. Manual matching SHALL use quantity and ±2 days, including summed fills. Ambiguous split fills SHALL only be summed within the same parsed calendar day, side, resolved ticker, and ISIN; nearby mismatches SHALL warn/skip. Dividends SHALL match by account/comment (including the old symbol comment), or, for existing active YAHOO dividends of the same account and symbol whose comment does not start with `dividend#` (manual or legacy rows), at ±3 days. Connector-comment rows (`dividend#…`) SHALL NOT enter the proximity index, so a distinct payment next to an imported one is imported. A proximity skip SHALL stay a skip. The comparison SHALL use the exact source gross and the existing row's quantity × unitPrice, normalized to a common major unit (minor-unit markets as in conversion) and rounded to its minor unit; an unsupported denomination SHALL be "not comparable". Equal amounts SHALL log INFO "amounts agree" with both fee values; equal amounts do not prove the same payment. Otherwise it SHALL log one WARNING naming both dates, both gross values with currencies (or "not comparable"), both fee values, and the operator action: check IBKR and add the payment by hand if it is distinct. It SHALL NOT change exit status or notifications.
 
 #### Scenario: Existing entries
 - **WHEN** existing entries match
@@ -145,6 +149,10 @@ Check: `.venv/bin/python -m pytest -q tests -k dividend_proximity_canonical`.
 
 Check: `.venv/bin/python -m pytest -q tests -k dividend_proximity_amount`.
 
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
+
 ### Requirement: Position and acceptance guards
 
 Incomplete/redacted/invalid-profile listings SHALL stop startup; assetProfile SHALL override legacy SymbolProfile. Draft/excluded/non-YAHOO records SHALL not back reconciliation. Future candidates SHALL defer. Sales SHALL pass net-quantity and accepted-buy checks; unknown acceptance SHALL block later same-target queries within this run.
@@ -157,13 +165,17 @@ Evidence: `python -m pytest -q tests/test_ghostfolio.py tests/test_orchestration
 
 ### Requirement: Additive imports and independent cash
 
-Imports SHALL be additive. Unresolved symbols SHALL drop/retry the reduced batch with degradation. Accounts SHALL run sequentially despite failures. Cash SHALL be independent of import success. Clean/degraded runs SHALL exit 0/1.
+New imports SHALL remain additive. Existing activities SHALL change only through the optional yes-approved one-to-one correction flow in activity-correction-review. Disabling that flow SHALL retain the existing no-update guarantee. No review flow SHALL delete an activity. Unresolved symbols SHALL drop/retry the reduced batch with degradation. Accounts SHALL run sequentially despite failures. Cash SHALL be independent of ordinary import success. A failed or unresolved correction SHALL fence all later financial writes for its account, including cash and platform writes. An uncertain account SHALL resume writes only after exact expected-after readback resolves every unresolved request, without another PUT or an interactive reset/abandon path. Pending proposals alone SHALL NOT block independent cash. Clean/degraded runs SHALL exit 0/1.
 
 #### Scenario: Partial failure
 - **WHEN** import fails or sections are absent
 - **THEN** import failure permits cash; missing CashTransactions degrades; absent BASE_SUMMARY only warns.
 
 Evidence: README “How it works”; `python -m pytest -q tests/test_orchestration.py tests/test_ghostfolio.py -k 'test_import_failure_fails_the_account_keeps_state_untouched_but_still_updates_cash or test_missing_cash_transactions_section_fails_the_run_but_still_imports_trades or test_report_without_cash_row_is_a_warning_not_a_failure or test_unresolved_symbol_is_dropped_and_batch_retried'`.
+
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
 
 ### Requirement: Notifications
 
@@ -185,15 +197,19 @@ Successful simulation, including default/blank/truthy `DRY_RUN`, SHALL send no s
 
 ### Requirement: Current operational limits
 
-The connector SHALL retain documented boundaries: 365-day guidance; daily data; manual corporate actions/history/token renewal; additive corrections; proximity skips next to manual or legacy rows (INFO when amounts agree, WARNING otherwise, never imported; a distinct payment there needs a manual add); trust principle: a row with a connector comment (`dividend#…`) is ours and trusted by exact identity, and a user edit of such a row is out of contract; UTC dates; unconverted cash/commission currencies; Yahoo quality; net, nonchronological checks; nontransactional buy/sell phases; preview without server acceptance; buffered 10 MiB Flex responses; no overlap protection.
+The connector SHALL retain documented boundaries: 365-day guidance; daily data; manual corporate actions/history/token renewal; additive imports with optional explicitly approved corrections; proximity skips next to manual or legacy rows (INFO when amounts agree, WARNING otherwise, never imported; a distinct payment there needs a manual add); trust principle: a row with a connector comment (`dividend#…`) is ours and trusted by exact identity, and with review disabled a user edit of such a row is out of contract; enabled review SHALL expose validated per-event differences for approval; UTC dates; unconverted cash/commission currencies; Yahoo quality; net, nonchronological checks; nontransactional buy/sell phases; preview without server acceptance; buffered 10 MiB Flex responses; no general overlap protection. Enabled correction dispatch SHALL require exclusive writes and persistent recovery evidence as specified in activity-correction-review. README SHALL describe the new reader floor for notes-bearing references and the persistent-volume requirement.
 
 #### Scenario: Operator checks limits
 - **WHEN** limitations are read
 - **THEN** these boundaries are visible, and `GHOST_CURRENCY` is not documented as a setting.
 
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
+
 ### Requirement: Enriched dividend input and local rejection
 
-Processing SHALL extract cash identity without quantity checks, deduplicate by account/comment/proximity, then validate candidates. Automatic sync SHALL leave existing activities untouched and unverified. Only the separately invoked maintenance conversion can replace a proven historical comment under its stricter contract. A separate dry-run diagnostic SHALL not change selection.
+With review disabled, processing SHALL extract cash identity without quantity checks, deduplicate by account/comment/proximity, then validate candidates. Automatic sync SHALL leave existing activities untouched and unverified in that mode. With review enabled, complete supported action evidence SHALL be validated before proposing a correction, including an already stored identity. Only explicit yes approval SHALL authorize the reviewed one-to-one update. The separate bulk maintenance conversion SHALL retain its stricter contract. The dry-run diagnostic itself SHALL not change selection or authorize a correction.
 
 ChangeInDividendAccruals SHALL be mandatory. Required attributes SHALL cover candidate payment/relevant accrual keys and `quantity/code/date/payDate/reportDate`. Nonempty key mismatches SHALL exclude unrelated accruals; missing keys SHALL NOT prove irrelevance. Unrelated rows SHALL NOT block candidates. Withholding SHALL retain cash evidence without accrual-schema requirements; new action writes SHALL require the explicit tax association in Flex selection and conversion. Missing section/relevant attributes SHALL block account dividends; present-but-empty evidence SHALL reject affected groups. Empty sections without payments SHALL be valid.
 
@@ -206,6 +222,10 @@ Rejections SHALL log distinct reasons, never mark rejected payments imported, an
 #### Scenario: Partition failure isolation
 - **WHEN** `.venv/bin/python -m pytest -q tests -k v2_partition_isolation` covers a missing tax association and conflicting source actions beside valid trades, safe sales, cash and a later account
 - **THEN** the affected group emits no dividend, the account result fails, existing rows remain untouched, and independent work continues.
+
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
 
 ### Requirement: Forward dividend upgrade guidance
 
@@ -493,14 +513,14 @@ After existing cash currency guards pass, `ghost_update_cash_balance` SHALL emit
 
 ### Requirement: Versioned activity identity reader
 
-Exact lowercase `IBKR#v` SHALL reserve versioned identities. Other `IBKR#<rest>` SHALL remain legacy. Accepted forms are:
+Exact lowercase `IBKR#v` SHALL reserve versioned identities. Other `IBKR#<rest>` SHALL remain legacy. Accepted identity markers are:
 
 - `IBKR#v2#<source-account>:TRADE:<tradeID>`
 - `IBKR#v2#<source-account>:DIVIDEND:<actionID>`
 
-The common grammar SHALL be `<BROKER>#v<N>#<source-account>:<KIND>:<source-id>`. `N` SHALL match `[1-9][0-9]*`; segments SHALL match `[A-Za-z0-9._-]+`. V2 SHALL map `TRADE` only to BUY/SELL and `DIVIDEND` only to DIVIDEND. Any other reserved identity SHALL return `invalid_identity` and stop before writes. Notifications SHALL omit identities. New eligible activities SHALL write exactly these v2 forms. No new legacy identity SHALL be generated.
+The common grammar SHALL be `<BROKER>#v<N>#<source-account>:<KIND>:<source-id>`. `N` SHALL match `[1-9][0-9]*`; segments SHALL match `[A-Za-z0-9._-]+`. V2 SHALL map `TRADE` only to BUY/SELL and `DIVIDEND` only to DIVIDEND. A whole-comment marker SHALL remain valid. A canonical marker on the first line followed by one blank line and preserved user notes SHALL also be valid. Readers SHALL extract only that marker for identity and indexing; note text SHALL NOT become part of the source identity. Malformed or ambiguous first-line markers SHALL remain invalid. Any other reserved identity SHALL return `invalid_identity` and stop before writes. Notifications SHALL omit identities. New imports SHALL write exactly these v2 forms without added notes. Reviewed corrections SHALL write the same first-line marker and preserve user notes under activity-correction-review. No new legacy identity SHALL be generated.
 
-The reader SHALL globally index v2 by source account and comment, not Ghostfolio account. For mapping, dividend v2 SHALL be connector-owned and excluded from proximity and historical diagnostics.
+The reader SHALL globally index v2 by source account and extracted identity marker, not Ghostfolio account or full notes-bearing comment. For mapping, dividend v2 SHALL be connector-owned and excluded from proximity and historical diagnostics.
 
 Baseline: ADR 0002/tests prove legacy behavior; two reports repeat 49 conflict-free action IDs.
 
@@ -519,6 +539,10 @@ Accepted v2 BUY/SELL SHALL update holdings and the global v2 index. Accepted v2 
 #### Scenario: Same-run accepted state
 - **WHEN** `.venv/bin/python -m pytest -q tests -k v2_accepted_state` covers multiple accounts, repeated queries, dividends, accepted subsets and omitted buys before sells
 - **THEN** each v2 kind updates only its proper index/holdings; no second source account is suppressed by another account's v2 trade ID; omitted rows do not become existing or authorize a sale; equal tradeIDs manually matched in one source account do not suppress another account and advice uses the v2 grammar.
+
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
 
 ### Requirement: Dividend action coverage
 
@@ -613,13 +637,17 @@ Pinned source observations:
 - [Import service](https://github.com/ghostfolio/ghostfolio/blob/ef47c0d1b2c48fa4e97fb381561b514e657928cf/apps/api/src/app/import/import.service.ts) compares comment and financial fields without accountId; a changed comment can defeat server deduplication.
 - [API setup](https://github.com/ghostfolio/ghostfolio/blob/ef47c0d1b2c48fa4e97fb381561b514e657928cf/apps/api/src/main.ts) transforms and whitelists DTO fields and limits JSON bodies to 10mb. That request-size bound is separate from comment length.
 
-The writer SHALL use only ASCII `[A-Za-z0-9._-]+` in account and source-ID segments. `#` and `:` SHALL appear only as grammar separators. Full length SHALL be at most 2000 characters: `15 + len(account) + len(tradeID)` for TRADE, `18 + len(account) + len(actionID)` for DIVIDEND. Valid inputs need no trimming or Unicode length interpretation. Existing historical reader acceptance SHALL NOT acquire the writer's new length restriction.
+The writer SHALL use only ASCII `[A-Za-z0-9._-]+` in account and source-ID segments. `#` and `:` SHALL appear only as grammar separators. For bare generated identities, full length SHALL be at most 2000 characters: `15 + len(account) + len(tradeID)` for TRADE, `18 + len(account) + len(actionID)` for DIVIDEND. Valid inputs need no trimming or Unicode length interpretation. Existing historical reader acceptance SHALL NOT acquire the writer's new length restriction. Reviewed comments with preserved notes SHALL require separate exact-image round-trip qualification of the combined 2000-character limit, encoding and DTO trimming. Unicode notes SHALL NOT be treated as Unicode identity segments. Failure to preserve notes SHALL make the correction non-actionable, never truncate user text.
 
 G4 SHALL verify the image/source binding, realistic identity lengths, permitted punctuation and two-account otherwise identical payloads by exact byte-for-byte import/readback in an isolated synthetic lab. Local boundary tests SHALL cover 1999/2000/2001 against the source-backed 2000-character maximum; a lower arbitrary writer cap SHALL NOT replace that contract. Unicode, whitespace and reserved characters SHALL reject locally. Source inspection does not replace this pending round-trip gate.
 
 #### Scenario: Comment boundaries
 - **WHEN** `.venv/bin/python -m pytest -q tests -k v2_comment_limits` runs both identity kinds at 1999/2000/2001 characters with invalid separators, whitespace, Unicode and punctuation
 - **THEN** only valid ASCII identities of at most 2000 characters become payloads; no transformation or legacy fallback occurs; invalid existing reserved comments still stop globally.
+
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
 
 ### Requirement: Offline historical identity migration preview
 
@@ -649,7 +677,7 @@ No alias activity, replacement financial activity, deletion or split SHALL be pr
 
 ### Requirement: Explicit maintenance conversion and rollback boundary
 
-Historical conversion SHALL be a separate explicit maintenance action, never a sync option or an effect of `DRY_RUN=false`. The `apply` and `rollback` subcommands SHALL require the approved manifest hash and a private journal. Neither subcommand is authorized by proposal approval. A versioned, tested operation plan and separate Florent GO SHALL bind exact targets, commands, evidence, write count, batch sizes, pacing, stop rules and rollback. Batch and pacing limits SHALL come from qualification of update/background effects, not an assumed safe default. Reuse `cleanup_recovery.py` atomic YAML journal persistence and locking; adapt `cleanup_duplicates.py` explicit PUT construction only after preservation qualification. Its pair validation and delete executor SHALL NOT be reused for this comment-only operation.
+Bulk historical conversion through the migration tool SHALL remain a separate explicit maintenance action, never an implicit effect of `DRY_RUN=false`. Per-activity review under activity-correction-review SHALL have its own optional configuration and exact yes approval; it SHALL NOT reuse migration approval or loosen the migration tool's manifest, eligibility, settlement or rollback requirements. The `apply` and `rollback` subcommands SHALL require the approved manifest hash and a private journal. Neither subcommand is authorized by proposal approval. A versioned, tested operation plan and separate Florent GO SHALL bind exact targets, commands, evidence, write count, batch sizes, pacing, stop rules and rollback. Batch and pacing limits SHALL come from qualification of update/background effects, not an assumed safe default. Reuse `cleanup_recovery.py` atomic YAML journal persistence and locking; adapt `cleanup_duplicates.py` explicit PUT construction only after preservation qualification. Its pair validation and delete executor SHALL NOT be reused for this comment-only operation.
 
 Apply SHALL stop every competing writer, obtain a recoverable backup, re-read complete unredacted state and compare every planned row and identity occupancy with its manifest before the first write. Stale input, version/mapping drift, incomplete evidence or unavailable writer exclusion SHALL stop. Only the comment of listed eligible activities SHALL change; IDs, ownership, quantity, price, gross, fee, currency, date, tags and profiles SHALL remain unchanged. No insert/delete, cash/platform update or aggregate conversion is allowed.
 
@@ -663,13 +691,17 @@ Rollback SHALL restore only journal-owned converted comments after complete read
 - **WHEN** `.venv/bin/python -m pytest -q tests -k v2_migration_apply_rollback` mocks exact successful updates, stale manifests, concurrent writers, profile effects, numeric normalization, partial completion, timeouts and post-conversion edits
 - **THEN** only approved comments change; full readback proves preservation; uncertain requests are not retried; rollback restores only unchanged journal-owned comments and preserves newly imported v2 activities.
 
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.
+
 ### Requirement: Writer release order and sibling compatibility
 
 The released reader floor SHALL remain rc.5, commit `246b890d8cf2b6a58e99bbbf0169aa5f846c23bc`, image `sha256:32a034c96c2a675329e0aa38a3003a0352db8cec013ea74b6d04ac04cc8a9369`. Existing delivery evidence records 72 reader/acceptance tests, 1701 total tests, immutable publication, eight successful native lab invocations, empty first-install 142 creations, golden upgrade zero creations, zero idempotence creations and both instances stopped. This session inspected that evidence and local Git ancestry; it performed no new runtime replay.
 
 Order SHALL be: proposal approval; implementation-task creation; offline implementation/qualification and review; archive and main replay; separate GO for an unused immutable writer RC numbered rc.6 or later; publish digest; both versioned empty/golden lab scenarios PASS on that same digest; separately authorized production activation; separately authorized comment conversion after reviewed migration preview; stable promotion only under a new GO. No soak duration or daily-cycle count SHALL gate release. Reuse valid candidate evidence when its artifact, inputs and relevant environment are unchanged. A failed digest SHALL be superseded, never promoted. Lab tests SHALL include new v2 creates, repeat runs, mixed history, short/partial acceptance, bounded recovery, maintenance and rollback on isolated synthetic rows. Expected sets and counts SHALL derive from each fixed report/snapshot pair; earlier reader counts SHALL NOT be extrapolated to the writer partition. Lab credentials SHALL remain separate from production. Stop both instances after runs.
 
-Before any newly imported or converted v2 row exists, the previous validated rollback procedure remains applicable. Afterwards, safe halt SHALL stop writers and force simulation, then restore rc.5 or a newer qualified dual reader. Pre-rc.5 code SHALL NOT run against mixed history. Reader rollback preserves rows, does not repair data, and can still refuse partial dividend coverage. Re-enable writes only after exact mixed-generation preview and a separate GO. G6 SHALL prove this behavior using the actual rc.5 image, including complete and partial action sets, before production writing.
+Before any newly imported or converted v2 row exists, the previous validated rollback procedure remains applicable. After a reviewed correction writes a notes-bearing reference, rollback SHALL retain a qualified reader that supports that extended comment. Bare-v2 rc.5 support alone SHALL NOT qualify it. Afterwards, safe halt SHALL stop writers and force simulation, then restore rc.5 or a newer qualified dual reader for bare v2 history, or the new notes-compatible reader when such comments exist. Pre-rc.5 code SHALL NOT run against mixed history. Reader rollback preserves rows, does not repair data, and can still refuse partial dividend coverage. Re-enable writes only after exact mixed-generation preview and a separate GO. G6 SHALL prove this behavior using the actual rc.5 image, including complete and partial action sets, before production writing.
 
 The common grammar SHALL remain broker-specific in generation: IBKR v2 and the Bourse Direct BD v3 target contract. The inspected Bourse Direct checkout at `3193086cd0223b0bfb18a388c53f1e0c65327dce` defines v3 in its proposed notice-import spec, but its runtime still contains v1/v2 writers; no delivered v3 writer is asserted. DEGIRO at `e8908adabd5453c9b57cb2dd687dc92a81ce15b2` writes unversioned account-scoped comments. Its authoritative CORE_PROVENANCE pins the IBKR single-file source at `5749146ff297133a6a85d9006bba60b65d9f7cde`; package adoption remains separate. DEGIRO remains pinned pending its separately owned generation decision. No sibling writer changes are implied. G7 SHALL compare sibling readers and request helpers at pinned revisions. Every changed broker-agnostic import/cash/request helper SHALL flag DEGIRO propagation under ADR 0007 and require a separate downstream change. Amend ADR 0002, README and upgrade instructions with exact formats, required matching Trade accountId, historical limits, comment cap, recovery prerequisites, preview/maintenance separation and the rc.5 rollback floor. Existing cleanup tools SHALL NOT run against v2 history until separately qualified; document that restriction and their outside-image boundary; add no new ADR.
 
@@ -678,3 +710,7 @@ The common grammar SHALL remain broker-specific in generation: IBKR v2 and the B
 - **THEN** the matrix preserves reading of all historical generations, excludes pre-rc.5 rollback after v2, records pending image-backed proofs, and leaves sibling generations and pins unchanged.
 
 All G1–G7 evidence, current destination runtime/image confirmation, a complete saved migration-input replay and image-backed import/maintenance/rollback results remain necessary. None is certified by strict OpenSpec validation. Material counterexamples SHALL stop the affected work and return the proposal for approval; they SHALL NOT become implicit implementation assumptions.
+
+#### Scenario: Optional review compatibility
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_runtime_contract` exercises this requirement with review disabled, enabled and later disabled after a notes-bearing correction
+- **THEN** the disabled baseline remains valid, the explicit review exception follows activity-correction-review, and all supported historical reference generations remain readable.

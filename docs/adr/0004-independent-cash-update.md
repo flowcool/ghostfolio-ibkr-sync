@@ -26,3 +26,10 @@ Sources: `process_account` in the [`app` module](../../ghostfolio_ibkr_sync/app.
 [`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), `parse_cash_report` in the
 [`ibkr` module](../../ghostfolio_ibkr_sync/ibkr.py), and
 [How it works](../../README.md#how-it-works).
+
+Optional activity review has a stricter boundary: known or uncertain correction
+failure blocks all later writes on that account, including cash/platform writes.
+The block persists through unresolved journal entries. Other safe accounts
+continue. Pending proposals alone hold related imports and do not fail the
+account. Ordinary import failures keep the independent-cash behavior above.
+Only complete expected-after evidence resolves an uncertain update.

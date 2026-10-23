@@ -18,7 +18,7 @@ Exact lowercase `IBKR#v` reserves the namespace. An unsupported version,
 malformed segment, unknown kind, or activity-type mismatch stops the run before
 any financial write with the fixed `invalid_identity` outcome. Other
 `IBKR#<rest>` comments keep their legacy meaning. The reader indexes v2 comments
-globally by source account and exact comment, independent of the destination
+globally by source account and extracted first-line marker, independent of the destination
 Ghostfolio account. A v2 trade identity suppresses only the matching source
 account and trade ID; the same trade ID from another source account remains a
 candidate. Legacy trade comments retain their global behavior. The reader does
@@ -78,8 +78,8 @@ prove completeness. Security/day groups remain the historical matching boundary;
 new eligible groups are partitioned into actions before writing. The conflict
 guard can refuse a legitimate additional same-day event. It cannot detect every
 revision, including changes to both day and security. An existing exact identity
-does not certify unchanged financial values. Review corrections manually. No
-automatic backfill, correction or historical edit is authorized. Concurrent runs
+does not certify unchanged financial values. Use optional review for exact one-to-one corrections. No
+unapproved backfill, correction or historical edit is authorized. Concurrent runs
 with stale snapshots remain outside this protection.
 
 Broker generations stay independent. IBKR writes v2. The inspected Bourse Direct
@@ -100,3 +100,13 @@ Sources: `ghost_get_existing_orders` in the
 [`sync` module](../../ghostfolio_ibkr_sync/sync.py), `process_account` in the
 [`app` module](../../ghostfolio_ibkr_sync/app.py), and
 [conversion rules](../../README.md#how-activities-are-converted).
+
+The reader accepts a canonical v2 first line followed by exactly one blank
+separator line and preserved nonempty notes. Identity consumers compare the
+extracted marker. Notes never become identity. Malformed or multiple reserved
+markers still fail before writes. Whole-comment legacy references retain their
+meaning; legacy references followed by notes are not upgraded. Optional review
+uses exact numbers and full UTC instants, with inclusive ±2-day trade and ±3-day
+dividend proximity. Pending events are held before ordinary selection. Approved
+correction is the reviewed-update exception. Extended reading remains after
+review is disabled; rollback after notes-bearing writes must retain that reader.

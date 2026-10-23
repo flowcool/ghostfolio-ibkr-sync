@@ -116,7 +116,7 @@ def test_typed_settings_match_the_config_dictionary(env):
         "ibkr_token": "tok", "account_ids": ["U1"], "query_ids": ["q1"],
         "account_names": ["IBKR"], "ghost_token": None, "ghost_access_token": SECRET,
         "ghost_host": "http://ghost:3333", "ghost_platform_id": "", "mapping_file": "",
-        "dry_run": False}
+        "dry_run": False, "activity_review_file": None}
 
 
 def test_typed_settings_are_immutable_and_hide_credentials(env):

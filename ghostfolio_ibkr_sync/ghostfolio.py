@@ -1,7 +1,7 @@
 """Ghostfolio API access: login exchange, reads, additive imports and cash updates.
 
-Imports only ever add activities (never update or delete), and every financial
-write is skipped when `dry_run` is set. The security token and the session bearer
+Imports add activities; optional reviewed corrections use a separate whitelisted
+update request. Sync never deletes activities. Simulation skips financial writes. The security token and the session bearer
 travel only in a request body or Authorization header and are never logged; login
 failures raise fixed messages for that reason.
 """
@@ -83,7 +83,12 @@ def parse_versioned_activity_identity(
     """
     if not isinstance(comment, str) or not comment.startswith("IBKR#v"):
         return None
-    match = _VERSIONED_ACTIVITY_IDENTITY_RE.fullmatch(comment)
+    marker, separator, notes = comment.partition("\n\n")
+    if ("\n" in marker or "\r" in comment
+            or (separator and (not notes or notes.startswith("\n")
+                               or re.search(r"(?m)^(?:IBKR#|dividend#)", notes)))):
+        raise InvalidActivityIdentityError("Invalid reserved activity identity")
+    match = _VERSIONED_ACTIVITY_IDENTITY_RE.fullmatch(marker)
     if match is None or match.group(1) != "2":
         raise InvalidActivityIdentityError("Invalid reserved activity identity")
     source_account, kind, source_id = match.group(2), match.group(3), match.group(4)
@@ -245,15 +250,20 @@ def ghost_get_existing_orders(
     # Keep the original JSON numbers before the normal float-based reader runs.
     # A mock/adapter without wire bytes cannot establish exact numeric evidence.
     exact_data = None
-    if config.get("dry_run"):
+    if config.get("dry_run") or config.get("activity_review_file"):
         wire = getattr(resp, "content", None)
         if isinstance(wire, (str, bytes)) and wire:
             try:
                 exact_data = json.loads(wire, parse_float=Decimal, parse_int=Decimal)
             except (ValueError, UnicodeError, DecimalException):
                 pass  # The existing decoder below owns technical failures.
-    return index_existing_activities(resp.json(), dry_run=bool(config.get("dry_run")),
-                                     exact_data=exact_data)
+    result = index_existing_activities(resp.json(), dry_run=bool(config.get("dry_run")),
+                                       exact_data=exact_data)
+    if config.get("activity_review_file"):
+        if not isinstance(exact_data, dict):
+            raise RuntimeError("Activity review requires original destination JSON bytes")
+        result[2]["review_snapshot"] = exact_data
+    return result
 
 
 def index_existing_activities(data: dict[str, Any], *, dry_run: bool = False,
@@ -295,6 +305,7 @@ def index_existing_activities(data: dict[str, Any], *, dry_run: bool = False,
         comment = raw_comment or ""
         versioned_identity = parse_versioned_activity_identity(comment, order.get("type"))
         if versioned_identity is not None:
+            comment = comment.split("\n", 1)[0]
             positions["versioned_identities"].add((versioned_identity[0], comment))
         is_versioned_dividend = (
             versioned_identity is not None and versioned_identity[1] == "DIVIDEND"
@@ -670,3 +681,25 @@ def _existing_dividend_amounts(
     if currency is None:
         currency = profile.get("currency")
     return gross, currency if isinstance(currency, str) and currency else None, fee
+
+
+
+def ghost_update_reviewed_activity(config: Config, payload: dict[str, Any]) -> None:
+    """One whitelisted correction request. Callers journal before invoking this.
+
+    No redirects, automatic retries, response bodies or credential-bearing errors.
+    """
+    from urllib.parse import quote
+
+    validate_ghost_host(config["ghost_host"])
+    if config.get("dry_run"):
+        raise RuntimeError("Review correction dispatch refused in simulation")
+    try:
+        response = requests.put(
+            f"{config['ghost_host']}/api/v1/activities/{quote(payload['id'], safe='')}",
+            headers=ghost_headers(config["ghost_token"]), json=payload,
+            timeout=(10, 30), allow_redirects=False)
+    except requests.RequestException:
+        raise RuntimeError("Review correction outcome uncertain; retained journal") from None
+    if not 200 <= response.status_code < 300:
+        raise RuntimeError("Review correction rejected or uncertain; retained journal")

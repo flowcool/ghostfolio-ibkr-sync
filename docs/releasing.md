@@ -243,3 +243,29 @@ against v2 history until separately qualified. Use the distinct
 The maintainer cutting the tag is the final reviewer: compare the generated
 list with the head text and make sure every `breaking-change` and `compat` PR is
 explained.
+
+## Activity review qualification
+
+Review is opt-in. Offline tests do not qualify live updates. The shipped
+`activity_review.QUALIFIED_EXECUTION` is unset: preview works, dispatch is
+unavailable. Do not invent a limit/delay from mocks. A release change must bind
+finite limits and pacing to the exact destination image after isolated proof.
+No ENV setting bypasses this boundary.
+
+Prove full/reverse PUT preservation, exact numeric/date readback, notes (Unicode
+length/trimming), tags, ownership, profile/background effects, duplicate references,
+interruption at each journal transition, restart recovery and no repeat logical
+request. Failed preservation keeps affected corrections unavailable. Changed
+security profiles currently require separate preservation evidence. Current
+report windows cannot qualify historical legacy-global reference upgrades.
+
+Publication requires its recorded GO. Both versioned empty/golden lab scenarios
+must pass on the same immutable candidate digest before activation/stable
+promotion. No duration or cycle count is added. Production activation, historical
+conversion and stable publication retain separate GO. After notes-bearing writes,
+retain a qualified extended reader; bare-v2 rc.5 alone is insufficient. Software
+rollback preserves rows and does not restore data.
+
+Downstream impact under ADR 0007: exact Ghostfolio response capture, comment
+identity reading and a whitelisted update helper changed. DEGIRO stays pinned;
+adoption needs a separate downstream change. No sibling writer or pin changes.

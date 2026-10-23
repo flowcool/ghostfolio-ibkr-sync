@@ -34,6 +34,7 @@ class ConfigDict(TypedDict):
     ghost_platform_id: str
     mapping_file: str
     dry_run: bool
+    activity_review_file: str | None
 
 
 class NotificationConfigDict(TypedDict):
@@ -131,6 +132,10 @@ def load() -> Settings:
         if targets.count(target) > 1:
             raise RuntimeError(f"Duplicate Ghostfolio target '{target}': each IBKR account needs its own target")
 
+    review_file = os.environ.get("ACTIVITY_REVIEW_FILE", "").strip() or None
+    if review_file and len({account.strip() for account in account_ids}) != len(account_ids):
+        raise RuntimeError("Activity review requires distinct configured source accounts")
+
     return Settings(
         ibkr_token=os.environ["IBKR_TOKEN"],
         account_ids=tuple(a.strip() for a in account_ids),
@@ -142,6 +147,7 @@ def load() -> Settings:
         ghost_platform_id=os.environ.get("GHOST_PLATFORM_ID", ""),
         mapping_file=os.environ.get("MAPPING_FILE", "mapping.yaml"),
         dry_run=dry_run_requested(),
+        activity_review_file=review_file,
     )
 
 
@@ -159,6 +165,7 @@ def load_config() -> ConfigDict:
         "ghost_platform_id": settings.ghost_platform_id,
         "mapping_file": settings.mapping_file,
         "dry_run": settings.dry_run,
+        "activity_review_file": settings.activity_review_file,
     }
 
 

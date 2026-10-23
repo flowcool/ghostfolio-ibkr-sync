@@ -10,7 +10,7 @@ the 3.0 prerequisite policy.
 | --- | --- |
 | [0001](0001-single-file-runtime.md) | Typed modular Python runtime (superseded decision: single file) |
 | [0002](0002-comment-and-proximity-deduplication.md) | Comment identities and dividend proximity matching |
-| [0003](0003-additive-imports.md) | Additive activity imports only |
+| [0003](0003-additive-imports.md) | Additive imports and exact reviewed-update exception |
 | [0004](0004-independent-cash-update.md) | Cash updates independent of import success |
 | [0005](0005-flex-window-and-corporate-actions.md) | 365-day history and no corporate-action processing |
 | [0006](0006-latest-follows-main.md) | Latest image follows stable releases; release-candidate channel |
