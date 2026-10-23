@@ -1026,19 +1026,23 @@ def test_v2_migration_apply_rollback_changed_input(apply_case, target):
     assert not state.puts
 
 
-@pytest.mark.parametrize("target", ["source", "snapshot", "inputs", "manifest", "approval", "lock-alias"])
+@pytest.mark.parametrize("target", ["source", "snapshot", "inputs", "manifest", "approval",
+                                  "path-overlap", "lock-alias"])
 def test_v2_migration_apply_rollback_journal_input_collision(apply_case, target):
     state, permit, run, journal, original, case = apply_case
     root, config, save, inputs, source, snapshot = case
     paths = {"source": source, "snapshot": snapshot, "inputs": inputs,
              "manifest": root / "preview/manifest.json", "approval": root / "approval.json"}
-    if target == "lock-alias":
+    if target == "path-overlap":
+        destination = Path(str(inputs) + "/journal")
+    elif target == "lock-alias":
         Path(str(journal) + ".lock").hardlink_to(source)
         destination = journal
     else:
         destination = paths[target]
     before = {p: p.read_bytes() for p in (inputs, source, snapshot, root / "preview/manifest.json")}
-    with pytest.raises(RuntimeError, match="Journal overlaps evidence|Existing migration journal"):
+    expected = "Journal overlaps evidence" if target in ("path-overlap", "lock-alias") else "Existing migration journal"
+    with pytest.raises(RuntimeError, match=expected):
         run(journal=destination)
     assert not state.calls
     assert all(p.read_bytes() == data for p, data in before.items())
@@ -1658,3 +1662,17 @@ def test_shared_review_pending_journal_refuses_apply(apply_case):
     with pytest.raises(RuntimeError, match="Pending review request"):
         run()
     assert not state.calls and not journal.exists()
+
+
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+def test_v2_migration_preservation_derived_profile_fields_only(profile_key):
+    from copy import deepcopy
+    from ghostfolio_ibkr_sync.activity_preservation import preserved_equal
+    before = migration_row()
+    before[profile_key] = before.pop("assetProfile")
+    before[profile_key].update(dateOfFirstActivity="2026-01-10T12:00:00Z", watchedByCount=Decimal("1"))
+    after = deepcopy(before)
+    after[profile_key].update(dateOfFirstActivity="2026-01-01T00:00:00Z", watchedByCount=Decimal("2"))
+    assert preserved_equal(before, after)
+    after[profile_key]["unknownStoredField"] = "changed"
+    assert not preserved_equal(before, after)

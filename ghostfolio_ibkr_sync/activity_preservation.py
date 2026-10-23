@@ -11,8 +11,8 @@ IGNORED = {
     (): {"updatedAt", "value", "valueInBaseCurrency", "feeInBaseCurrency",
          "feeInAssetProfileCurrency", "unitPriceInAssetProfileCurrency"},
     ("account",): {"updatedAt"},
-    ("assetProfile",): {"updatedAt", "activitiesCount"},
-    ("SymbolProfile",): {"updatedAt", "activitiesCount"},
+    ("assetProfile",): {"updatedAt", "activitiesCount", "dateOfFirstActivity", "watchedByCount"},
+    ("SymbolProfile",): {"updatedAt", "activitiesCount", "dateOfFirstActivity", "watchedByCount"},
 }
 
 

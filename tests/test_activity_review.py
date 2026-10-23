@@ -971,3 +971,46 @@ def test_review_real_snapshot_parser_round_trip_nested_numbers(tmp_path, monkeyp
         assert review.decode_review(review.read_yaml(state["path"].read_bytes())) == state["document"]
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("field,before,after", [
+    ("dateOfFirstActivity", "2026-07-31T10:00:00Z", "2026-07-01T10:00:00Z"),
+    ("watchedByCount", Decimal("1"), Decimal("2")),
+])
+def test_review_derived_profile_changes_keep_approval(field, before, after):
+    row = destination()
+    row["assetProfile"][field] = before
+    old = preview([row])
+    key = next(iter(old))
+    old[key]["approve"] = "yes"
+    row["assetProfile"][field] = after
+    refreshed, held = review.refresh_proposals(old, source_events(), [row], {"U1": "acc"})
+    assert held
+    assert refreshed[key]["approve"] == "yes"
+    assert refreshed[key]["binding"] == old[key]["binding"]
+    assert refreshed[key]["review revision"] == old[key]["review revision"]
+
+
+def test_review_date_correction_confirms_after_derived_profile_recalculation(tmp_path, monkeypatch):
+    row = destination(date="2026-07-31T10:00:00Z")
+    row["assetProfile"].update(dateOfFirstActivity=row["date"], watchedByCount=Decimal("1"))
+    original_put = ReviewServer.put
+    def recalculate(self, url, **kwargs):
+        response = original_put(self, url, **kwargs)
+        self.rows[0]["assetProfile"].update(dateOfFirstActivity=self.rows[0]["date"],
+                                            watchedByCount=Decimal("2"))
+        return response
+    monkeypatch.setattr(ReviewServer, "put", recalculate)
+    server, state, config, blocked, held = run_review(tmp_path, monkeypatch, rows=[row])
+    try:
+        assert not blocked and not held
+        assert len(server.writes) == 1
+        assert server.rows[0]["date"] != row["date"]
+        assert server.rows[0]["assetProfile"]["dateOfFirstActivity"] == server.rows[0]["date"]
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["status"] == "confirmed"
+        assert review.instant(review.inspect_reverse(entry, server.rows[0])["date"]) == review.instant(row["date"])
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+    finally:
+        review.close_review(state)

@@ -362,8 +362,12 @@ The exclusions follow the inspected [Ghostfolio 3.90.0 activity implementation](
 and retained paired reads; they are not proof of request settlement.
 The named exclusions are activity `updatedAt`, derived `value`, `valueInBaseCurrency`,
 `feeInBaseCurrency`, `feeInAssetProfileCurrency`, `unitPriceInAssetProfileCurrency`;
-account `updatedAt`; and profile `updatedAt`
-and `activitiesCount`. Historical maintenance still compares native account balances
+account `updatedAt`; and profile `updatedAt`, `activitiesCount`, `dateOfFirstActivity`
+and `watchedByCount`. Ghostfolio derives the last two from the earliest activity
+and watchlist relationships in its [profile enrichment implementation](https://github.com/ghostfolio/ghostfolio/blob/3.90.0/apps/api/src/services/symbol-profile/symbol-profile.service.ts).
+Changing an activity date or a watchlist must not invalidate consent or readback
+through those derived fields. Other profile fields remain checked.
+Historical maintenance still compares native account balances
 when present in the capture. Normal review consent excludes independent account
 balance changes; it continues to check account identity. All other fields remain checked.
 The snapshot reader parses all response numbers as exact decimals, including nested
