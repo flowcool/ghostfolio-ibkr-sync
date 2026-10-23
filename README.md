@@ -822,11 +822,16 @@ SELL and DIVIDEND events. Blank retains the existing additive import path.
 The reader accepts a canonical v2 first line, one blank separator line and
 preserved user notes, even after review is disabled.
 
-**Offline implementation only:** correction dispatch remains unavailable.
-`activity_review.QUALIFIED_EXECUTION` is unset in the shipped configuration.
-An isolated release qualification must establish the exact destination image,
-a finite per-run correction limit and a minimum delay. No ENV setting bypasses
-this gate. A `yes` stays pending meanwhile. Synthetic tests do not qualify an image.
+Review dispatch is qualified for Ghostfolio image
+`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`
+with **at most one correction per connector run**, across all configured accounts.
+Other approved proposals remain unchanged for later runs and keep their import
+holds. The zero inter-correction delay is unused with this single-correction
+limit; it does not certify immediate repeated runs or background completion.
+Verify the destination image before enabling review. A different image requires
+renewed qualification. No ENV setting changes this budget. Production activation
+and stable publication retain their separate approval. See
+[qualification evidence and limits](docs/releasing.md#activity-review-qualification).
 
 Mount a dedicated persistent directory. The parent must exist. Files must be
 owned by the runtime user, readable and writable, mode `0600`. Symlinks, hard

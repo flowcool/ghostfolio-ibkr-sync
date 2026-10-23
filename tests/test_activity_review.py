@@ -508,9 +508,19 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     assert fetched == ["Q1"] * 4  # No second acquisition during account processing.
 
 
-@pytest.mark.parametrize("limit,delay", [(1, 0), (2, 0.5)])
+@pytest.mark.parametrize("limit,delay", [(1, 0), (2, 0.5), (None, None)])
 def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monkeypatch, limit, delay):
     from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    if limit is None:
+        # Exercise the shipped budget through the full normal-run path too.
+        assert review.QUALIFIED_EXECUTION is not None
+        image, limit, delay = review.QUALIFIED_EXECUTION
+        assert image == "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078"
+        assert (limit, delay) == (1, 0.0)
+    else:
+        # Synthetic larger budgets exercise the generic deferral and pacing logic.
+        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))
 
     days = [(1, 1), (2, 10), (3, 20)]
     xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000") for i, day in days)
@@ -538,8 +548,6 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     monkeypatch.setenv("DRY_RUN", "true")
-    # These budgets are test inputs. The shipped activation stays unset.
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))
     assert app.run_sync(new_run_outcome()) == 0
     document = review.decode_review(review.read_yaml(path.read_bytes()))
     assert len(document["proposals"]) == 3

@@ -246,11 +246,35 @@ explained.
 
 ## Activity review qualification
 
-Review is opt-in. Offline tests do not qualify live updates. The shipped
-`activity_review.QUALIFIED_EXECUTION` is unset: preview works, dispatch is
-unavailable. Do not invent a limit/delay from mocks. A release change must bind
-finite limits and pacing to the exact destination image after isolated proof.
-No ENV setting bypasses this boundary.
+Review is opt-in. `activity_review.QUALIFIED_EXECUTION` binds the initial
+execution budget to Ghostfolio image
+`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`:
+one correction per complete connector run, across all configured accounts.
+Remaining approvals and import holds stay pending for the next run. No ENV
+setting bypasses this boundary. Operators must verify that destination image;
+the connector cannot discover a server's Docker image through its activity API.
+Image drift requires renewed qualification.
+
+The 2026-10-23 isolated proof used the published v3.1.0-rc.1 package against that
+Ghostfolio image. Six TRADE/DIVIDEND full-update/reverse cases covered exact
+numeric values, UTC dates, tags, ownership, unchanged profiles and Unicode notes
+at 1999/2000 UTF-16 units. Thirteen observed PUTs each had exact financial
+readback and independently attributed new market-data and later portfolio-cache
+job completion. One matrix run stopped when its observer became unavailable;
+its FAIL is retained. A separately authorized, journal-bound inverse completed
+the final case and restored the original financial state. These observations
+qualify isolated corrections; they do not qualify a burst of corrections.
+
+The finite limit is therefore one. The configured minimum inter-correction
+delay is zero because no second correction can dispatch in that run. This does
+not certify a safe interval between separate runs, background completion at HTTP
+readback, or production throughput. Observed background chains of 6.708-9.839
+seconds are samples, not a safe-delay guarantee. Do not use repeated immediate
+runs to drain approvals. Larger limits need separate isolated qualification.
+The installed RC also passed network-denied normal-run budget/deferred-approval,
+interruption/restart, no-resend, duplicate-reference and notes-compatible-reader
+replays. Those tests prove connector behavior, not live background timing.
+Private native evidence stays outside this public repository.
 
 Prove full/reverse PUT preservation, exact numeric/date readback, notes (Unicode
 length/trimming), tags, ownership, profile/background effects, duplicate references,
