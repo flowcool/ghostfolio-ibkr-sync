@@ -369,11 +369,29 @@ def numeric(value: Any) -> Decimal:
 
 
 def values_of(row: dict[str, Any]) -> dict[str, Any]:
-    result = {**plain(row), **{key: row.get(key) for key in REPLACED}}
-    result["symbol"] = profile(row).get("symbol")
+    """Stable activity-owned evidence from the pinned Order/getActivities schema.
+
+    Account balances, profile enrichment, server timestamps and converted values
+    are not activity edits. Compare profile and tag identities, not their labels.
+    """
+    fields = ("id", "accountId", "accountUserId", "userId", "symbolProfileId", "createdAt", "isDraft")
+    result = {key: plain(row[key]) for key in fields if key in row}
+    result.update({key: plain(row.get(key)) for key in REPLACED})
+    asset = profile(row)
+    result["assetProfile"] = {key: plain(asset[key]) for key in
+                              ("id", "symbol", "dataSource", "isin", "currency") if key in asset}
+    tags = row.get("tags")
+    if (not isinstance(tags, list) or any(not isinstance(tag, dict)
+            or not isinstance(tag.get("id"), str) or not tag["id"] for tag in tags)
+            or len({tag["id"] for tag in tags}) != len(tags)):
+        raise RuntimeError("Unproven update tag identities")
+    result["tags"] = [{"id": tag_id} for tag_id in sorted(tag["id"] for tag in tags)]
+    result["symbol"] = asset.get("symbol")
     for key in NUMBERS:
         result[key] = plain(numeric(row.get(key)))
-    instant(result["date"])
+    result["date"] = instant(result["date"]).isoformat()
+    if "createdAt" in result:
+        result["createdAt"] = instant(result["createdAt"]).isoformat()
     return result
 
 
@@ -439,7 +457,8 @@ PROPOSAL_FIELDS = {"key", "source account", "source event", "destination account
 
 
 def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]],
-                      rows: list[dict[str, Any]], accounts: dict[str, str]
+                      rows: list[dict[str, Any]], accounts: dict[str, str],
+                      journal_bindings: set[tuple[str, str, str]] | None = None
                       ) -> tuple[dict[str, Any], set[str]]:
     """Rebuild evidence; file fields never become replacement input."""
     by_id = {row["id"]: row for row in rows}
@@ -447,8 +466,9 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
         raise RuntimeError("Duplicate destination activity IDs")
     for key, old in previous.items():
         if (set(old) != PROPOSAL_FIELDS or old["key"] != key
-                or old["source account"] not in accounts
-                or old["destination account"] != accounts[old["source account"]]
+                or (old["destination account"] != accounts.get(old["source account"])
+                    and (old["source event"], old["destination account"], old["activity id"])
+                    not in (journal_bindings or set()))
                 or not isinstance(old["source event"], str)
                 or not old["source event"].startswith(f"IBKR#v2#{old['source account']}:")
                 or not isinstance(old["activity id"], str)
@@ -511,7 +531,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             except (RuntimeError, ValueError, OverflowError, UnicodeError) as exc:
                 actionable, status = False, str(exc)
                 changes = sorted(REPLACED) if not current else []
-            binding = fingerprint([event, row, occupied])
+            binding = fingerprint([event, current, occupied])
             item = {"key": key, "source account": event["source account"], "source event": event_id,
                     "destination account": event["destination account"], "activity id": row["id"],
                     "match reason": reason, "current values": current, "proposed values": proposed,
@@ -604,19 +624,13 @@ def expected_row(row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
     after = plain(after)
     for key in NUMBERS:
         after[key] = plain(wire_values(payload)[key])
-    return dict(after)
+    return values_of(dict(after))
 
 
 def row_matches(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
-    """Exact full pre/post image; only numeric/date spelling may normalize."""
-    actual, expected = plain(row), deepcopy(evidence)
+    """Compare stable pre/post evidence with exact numbers and UTC instants."""
     try:
-        for key in NUMBERS:
-            actual[key] = plain(numeric(actual[key]))
-            expected[key] = plain(numeric(expected[key]))
-        actual["date"] = instant(actual["date"]).isoformat()
-        expected["date"] = instant(expected["date"]).isoformat()
-        return bool(actual == expected)
+        return bool(values_of(row) == values_of(evidence))
     except (RuntimeError, KeyError):
         return False
 
@@ -649,10 +663,9 @@ JOURNAL_FIELDS = {"source event", "destination account", "activity id", "host", 
                   "after", "request", "status", "verified result", "proposal key", "review revision"}
 
 
-def validate_journal(state: ReviewState, config: dict[str, Any], accounts: dict[str, str]) -> None:
+def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
     for key, entry in state["journal"]["entries"].items():
         if (set(entry) != JOURNAL_FIELDS or entry["host"] != config["ghost_host"]
-                or entry["destination account"] not in accounts.values()
                 or entry["status"] not in ("pending", "confirmed")
                 or not isinstance(entry["before"], dict) or not isinstance(entry["after"], dict)
                 or entry["before"].get("id") != entry["activity id"]
@@ -678,11 +691,15 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                    accounts: dict[str, str]) -> tuple[set[str], set[str]]:
     """Recover, refresh and dispatch sequentially before any ordinary writes."""
     assert_unchanged(state)
-    validate_journal(state, config, accounts)
+    validate_journal(state, config)
     original = state["document"]["proposals"]
+    # Journal-owned historical proposals may outlive a configured account.
+    # This does not permit dispatch without a fresh source and matching target.
+    journal_bindings = {(entry["source event"], entry["destination account"], entry["activity id"])
+                        for entry in state["journal"]["entries"].values()}
     rows = snapshot_rows(config)
     # Validate every file binding before any journal completion or correction.
-    refreshed, held = refresh_proposals(original, events, rows, accounts)
+    refreshed, held = refresh_proposals(original, events, rows, accounts, journal_bindings)
     _, invalid_accounts = approved_proposals(original)
     approved, blocked = approved_proposals(refreshed)
     blocked |= invalid_accounts
@@ -692,6 +709,12 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     for entry in state["journal"]["entries"].values():
         if entry["status"] == "confirmed":
             # A confirmed journal never overrides current source/target evidence.
+            continue
+        if entry["destination account"] not in accounts.values():
+            unresolved.add(entry["destination account"])
+            unresolved_events.add(entry["source event"])
+            log.error("Pending review activity %s has no configured destination account %s; writes blocked",
+                      entry["activity id"], entry["destination account"])
             continue
         matched, _ = recovery_read(config, entry)
         if matched and not simulated:
@@ -706,7 +729,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                 for entry in state["journal"]["entries"].values() if entry["status"] == "confirmed"}
     remaining_previous = {key: item for key, item in original.items()
                           if (key, item["review revision"]) not in consumed}
-    refreshed, held = refresh_proposals(remaining_previous, events, snapshot_rows(config), accounts)
+    refreshed, held = refresh_proposals(remaining_previous, events, snapshot_rows(config), accounts, journal_bindings)
     approved, refreshed_blocked = approved_proposals(refreshed)
     blocked |= refreshed_blocked
     # Simulation cannot consume a proposal whose pending request now appears applied.
@@ -737,7 +760,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             time.sleep(delay)
         assert_unchanged(state)
         fresh_rows = snapshot_rows(config)
-        fresh, _ = refresh_proposals(refreshed, events, fresh_rows, accounts)
+        fresh, _ = refresh_proposals(refreshed, events, fresh_rows, accounts, journal_bindings)
         current = fresh.get(item["key"])
         if current is None or current["approve"] != "yes" or not current["actionable"]:
             log.error("Review evidence changed before dispatch; account %s blocked", account)
@@ -760,7 +783,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             continue
         entry = {"review revision": current["review revision"], "proposal key": item["key"], "source event": item["source event"], "destination account": account,
                  "activity id": row["id"], "host": config["ghost_host"], "binding": current["binding"],
-                 "before": plain(row), "after": after, "request": plain(wire_values(payload)),
+                 "before": values_of(row), "after": after, "request": plain(wire_values(payload)),
                  "status": "pending", "verified result": None}
         state["journal"]["entries"][request_key] = entry
         publish_journal(state)
@@ -783,7 +806,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         publish_review(state, {"version": 1, "proposals": refreshed})
     # Rediscover new context and release reassigned alternatives after confirmed PUTs.
     if not simulated and executed:
-        refreshed, _ = refresh_proposals(refreshed, events, snapshot_rows(config), accounts)
+        refreshed, _ = refresh_proposals(refreshed, events, snapshot_rows(config), accounts, journal_bindings)
     publish_review(state, {"version": 1, "proposals": refreshed})
     held = {item["source event"] for item in refreshed.values()} | unresolved_events
     if held:

@@ -83,6 +83,12 @@ def destination(comment=None, **changes):
     row = {"id": "row1", "accountId": "acc", "userId": "owner", "type": "BUY",
            "date": "2026-08-01T10:00:00Z", "currency": "USD", "quantity": Decimal("1"),
            "unitPrice": Decimal("60"), "fee": Decimal("1"), "comment": comment,
+           "createdAt": "2026-08-01T12:00:00.000Z", "updatedAt": "2026-08-01T12:00:00.000Z",
+           "accountUserId": "owner", "symbolProfileId": "profile1",
+           "account": {"id": "acc", "balance": Decimal("123"), "updatedAt": "2026-08-01T12:00:00Z"},
+           "value": Decimal("60"), "valueInBaseCurrency": Decimal("54"),
+           "feeInBaseCurrency": Decimal("0.9"), "feeInAssetProfileCurrency": Decimal("1"),
+           "unitPriceInAssetProfileCurrency": Decimal("60"),
            "tags": [{"id": "tag1", "name": "Keep"}],
            "assetProfile": {"id": "profile1", "symbol": "KO", "isin": ISIN_KO, "dataSource": "YAHOO"}}
     row.update(changes)
@@ -221,6 +227,12 @@ class ReviewServer:
             row.update({key: Decimal(str(value)) if key in review.NUMBERS else value
                         for key, value in payload.items() if key in review.REPLACED and key != "symbol"})
             row["assetProfile"]["symbol"] = payload["symbol"]
+            row["updatedAt"] = "2026-08-02T00:00:00Z"
+            row["value"] = row["quantity"] * row["unitPrice"]
+            row["valueInBaseCurrency"] = row["value"] * Decimal("0.91")
+            row["feeInBaseCurrency"] = row["fee"] * Decimal("0.91")
+            row["unitPriceInAssetProfileCurrency"] = row["unitPrice"]
+            row["feeInAssetProfileCurrency"] = row["fee"]
         if self.outcome in ("timeout", "unchanged"):
             raise requests.Timeout("synthetic timeout")
         response = requests.Response()
@@ -707,3 +719,114 @@ def test_review_runtime_contract_missing_dividend_section_keeps_trade_and_cash(t
     assert [item["comment"] for item in imports] == ["IBKR#v2#U1:TRADE:T2"]
     assert not server.writes
     assert path.exists() and review.read_yaml(path.read_bytes())["proposals"] == {}
+
+
+@pytest.mark.parametrize("drift", ["updatedAt", "account", "value", "valueInBaseCurrency",
+                                   "feeInBaseCurrency", "unitPriceInAssetProfileCurrency",
+                                   "feeInAssetProfileCurrency"])
+def test_review_stale_server_changes_keep_approval_and_reverse_evidence(tmp_path, monkeypatch, drift):
+    rows = [destination()]
+    proposals = preview(rows)
+    item = next(iter(proposals.values()))
+    item["approve"] = "yes"
+    changed = deepcopy(rows)
+    changed[0][drift] = {"balance": Decimal("999")} if drift == "account" else "changed"
+    refreshed, _ = review.refresh_proposals(proposals, source_events(), changed, {"U1": "acc"})
+    assert refreshed[item["key"]]["approve"] == "yes"
+    assert refreshed[item["key"]]["review revision"] == item["review revision"]
+    server, state, _, blocked, held = run_review(tmp_path, monkeypatch, rows=changed)
+    try:
+        assert not blocked and not held and len(server.writes) == 1
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["status"] == "confirmed"
+        assert review.inspect_reverse(entry, server.rows[0])["quantity"] == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("field,value", [("accountId", "other"), ("accountUserId", "other"),
+    ("userId", "other"), ("symbolProfileId", "other"), ("comment", "changed"),
+    ("quantity", Decimal("2")), ("date", "2026-08-01T10:00:01Z"), ("tags", []),
+    ("assetProfile", {"id": "other", "symbol": "KO", "dataSource": "YAHOO"})])
+def test_review_stale_activity_owned_changes_clear_approval(field, value):
+    proposals = preview()
+    next(iter(proposals.values()))["approve"] = "yes"
+    refreshed, _ = review.refresh_proposals(proposals, source_events(), [destination(**{field: value})], {"U1": "acc"})
+    assert refreshed and all(item["approve"] is None for item in refreshed.values())
+    assert not review.row_matches(destination(**{field: value}), review.values_of(destination()))
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_review_recovery_removed_account_keeps_journal_and_other_account(tmp_path, monkeypatch, pending, caplog):
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, outcome="unchanged" if pending else "success")
+    try:
+        journal_before = state["journal_path"].read_bytes()
+        other = destination("IBKR#v2#U2:TRADE:T1", id="row2", accountId="other", quantity=Decimal("10"))
+        server.rows.append(other)
+        events = source_events(report(trade_xml("T1"), source_account="U2"), account="U2", target="other")
+        blocked, held = review.process_review(state, config, events, {"U2": "other"})
+        assert blocked == ({"acc"} if pending else set())
+        assert "other" not in blocked
+        assert held == ({"IBKR#v2#U1:TRADE:T1"} if pending else set())
+        assert state["journal_path"].read_bytes() == journal_before
+        assert len(server.writes) == 1
+        if pending:
+            assert "no configured destination account acc" in caplog.text
+            assert next(iter(state["document"]["proposals"].values()))["approve"] == "yes"
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("error", [RuntimeError, OSError])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_review_runtime_contract_unrelated_errors_keep_traceback(tmp_path, monkeypatch, caplog, error, enabled):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    app, _ = runtime_environment(tmp_path, monkeypatch)
+    if enabled:
+        monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(tmp_path / "review.yaml"))
+    def fail(*args):
+        raise error("synthetic unrelated failure")
+    monkeypatch.setattr(app, "run_configured_sync", fail)
+    monkeypatch.setattr(app, "finalize_run", lambda outcome, code: None)
+    assert app.main() == 1
+    record = next(record for record in caplog.records if record.getMessage() == "Sync failed with an unhandled error")
+    assert record.exc_info is not None
+    # Direct invocation preserves the exception for the main() boundary.
+    with pytest.raises(error):
+        app.run_sync(new_run_outcome())
+
+
+def test_review_config_failure_has_review_outcome(tmp_path, monkeypatch):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    app, _ = runtime_environment(tmp_path, monkeypatch)
+    monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(tmp_path / "absent" / "review.yaml"))
+    outcome = new_run_outcome()
+    assert app.run_sync(outcome) == 1
+    assert outcome["failures"] == [{"stage": "review", "reason": "review_unavailable", "ordinal": None}]
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypatch, pending):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    app, _ = runtime_environment(tmp_path, monkeypatch)
+    rows = [destination(), destination("IBKR#v2#U2:TRADE:T2", id="row2", accountId="other", quantity=Decimal("10"))]
+    server = RuntimeServer(monkeypatch, rows, "unchanged" if pending else "success", [
+        {"id": "acc", "name": "Account", "currency": "USD"},
+        {"id": "other", "name": "Other", "currency": "USD"}])
+    monkeypatch.setattr(app, "fetch_flex_report", lambda token, query:
+        report(trade_xml("T1" if query == "Q1" else "T2"), source_account="U1" if query == "Q1" else "U2"))
+    path = tmp_path / "review.yaml"
+    monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
+    assert app.run_sync(new_run_outcome()) == 0
+    document = review.read_yaml(path.read_bytes())
+    next(iter(document["proposals"].values()))["approve"] = "yes"
+    path.write_text(__import__("yaml").safe_dump(document))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    assert app.run_sync(new_run_outcome()) == (1 if pending else 0)
+    monkeypatch.setenv("IBKR_ACCOUNT_IDS", "U2")
+    monkeypatch.setenv("IBKR_QUERY_IDS", "Q2")
+    monkeypatch.setenv("GHOST_ACCOUNT_NAMES", "Other")
+    server.cash.clear()
+    assert app.run_sync(new_run_outcome()) == 0
+    assert [cash["id"] for cash in server.cash] == ["other"]
+    assert len(server.writes) == 1

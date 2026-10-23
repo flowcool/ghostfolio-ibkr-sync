@@ -516,13 +516,14 @@ def run_sync(outcome: RunOutcome) -> int:
     state: ReviewState | None = None
     try:
         if config.get("activity_review_file"):
-            state = open_review(config["activity_review_file"], [config["mapping_file"]])
+            try:
+                state = open_review(config["activity_review_file"], [config["mapping_file"]])
+            except (RuntimeError, OSError) as exc:
+                log.error("Review prerequisite failed: %s", exc)
+                record_failure(outcome, "review", "review_unavailable")
+                return 1
             config["_review_state"] = state
         return run_configured_sync(config, outcome)
-    except (RuntimeError, OSError) as exc:
-        log.error("Sync prerequisite failed: %s", exc)
-        record_failure(outcome, "review", "review_unavailable")
-        return 1
     finally:
         if state is not None:
             close_review(state)
@@ -638,8 +639,13 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
             and (any(xml is not None for xml in config["_review_reports"].values())
                  or config["_review_state"]["original"] is not None
                  or config["_review_state"]["journal_original"] is not None)):
-        blocked, held = process_review(config["_review_state"], config,
-                                       config["_review_events"], config["_review_accounts"])
+        try:
+            blocked, held = process_review(config["_review_state"], config,
+                                           config["_review_events"], config["_review_accounts"])
+        except (RuntimeError, OSError) as exc:
+            log.error("Review prerequisite failed: %s", exc)
+            record_failure(outcome, "review", "review_unavailable")
+            return 1
         config["_review_blocked_accounts"], config["_review_holds"] = blocked, held
         # A replacement changes positions once. Never add its full quantity to
         # the earlier holdings. Rebuild every account from verified destination.
