@@ -804,7 +804,16 @@ def apply_case(case, monkeypatch):
     rows = [migration_row(userId="owner", tags=[{"id": "tag-1", "name": "Keep"}]),
             migration_row(id="row-2", comment="IBKR#456", userId="owner")]
     migration_run(case, rows=rows, trades=[migration_trade(), migration_trade(tradeID="456")])
+    from ghostfolio_ibkr_sync import activity_review as review
+    review_file = root / "activities.yaml"
+    migration.stage_review(inputs, review_file)
+    review_document = review.read_yaml(review_file.read_bytes())
+    for item in review_document["reference_updates"].values():
+        item["approve"] = "yes"
+    review_file.write_text(yaml.safe_dump(review_document))
+    migration.prepare_review(inputs, review_file, root / "approved-subset")
     manifest = root / "preview/manifest.json"
+    manifest.write_bytes((root / "approved-subset/manifest.json").read_bytes())
     manifest_hash = digest(manifest.read_bytes())
     permit = {
         "schema": "ibkr-migration-approval-v1", "host": "https://ghostfolio.example.test",
@@ -862,7 +871,7 @@ def apply_case(case, monkeypatch):
         approval.write_text(json.dumps(permit))
         arguments = dict(inputs=inputs, manifest=manifest, manifest_sha256=manifest_hash,
                          approval=approval, approval_sha256=digest(approval.read_bytes()),
-                         journal=journal, host=permit["host"], token="synthetic-token")
+                         journal=journal, host=permit["host"], token="synthetic-token", review_file=review_file)
         arguments.update(overrides)
         migration.apply(**arguments)
 
@@ -1017,19 +1026,23 @@ def test_v2_migration_apply_rollback_changed_input(apply_case, target):
     assert not state.puts
 
 
-@pytest.mark.parametrize("target", ["source", "snapshot", "inputs", "manifest", "approval", "lock-alias"])
+@pytest.mark.parametrize("target", ["source", "snapshot", "inputs", "manifest", "approval",
+                                  "path-overlap", "lock-alias"])
 def test_v2_migration_apply_rollback_journal_input_collision(apply_case, target):
     state, permit, run, journal, original, case = apply_case
     root, config, save, inputs, source, snapshot = case
     paths = {"source": source, "snapshot": snapshot, "inputs": inputs,
              "manifest": root / "preview/manifest.json", "approval": root / "approval.json"}
-    if target == "lock-alias":
+    if target == "path-overlap":
+        destination = Path(str(inputs) + "/journal")
+    elif target == "lock-alias":
         Path(str(journal) + ".lock").hardlink_to(source)
         destination = journal
     else:
         destination = paths[target]
     before = {p: p.read_bytes() for p in (inputs, source, snapshot, root / "preview/manifest.json")}
-    with pytest.raises(RuntimeError, match="Journal overlaps evidence"):
+    expected = "Journal overlaps evidence" if target in ("path-overlap", "lock-alias") else "Existing migration journal"
+    with pytest.raises(RuntimeError, match=expected):
         run(journal=destination)
     assert not state.calls
     assert all(p.read_bytes() == data for p, data in before.items())
@@ -1042,6 +1055,7 @@ def test_v2_migration_apply_rollback_cli_replay(apply_case, monkeypatch, capsys)
     approval.write_text(json.dumps(permit))
     monkeypatch.setenv("GHOST_TOKEN", "synthetic-token")
     monkeypatch.setattr(sys, "argv", ["identity_migration.py", "apply", "--inputs", str(inputs),
+        "--review", str(root / "activities.yaml"),
         "--manifest", str(root / "preview/manifest.json"), "--manifest-sha256", permit["manifest_sha256"],
         "--approval", str(approval), "--approval-sha256", digest(approval.read_bytes()),
         "--journal", str(journal), "--host", permit["host"]])
@@ -1066,17 +1080,17 @@ def test_v2_migration_apply_rollback_pending_persistence_failure(apply_case, mon
     assert yaml.safe_load(journal.read_bytes())["rows"]["row-1"]["status"] == "prepared"
 
 
-def test_v2_migration_apply_rollback_numeric_representation_drift(apply_case):
+def test_v2_migration_preservation_numeric_representation_is_equal(apply_case):
     state, permit, run, journal, original, case = apply_case
 
     def normalized(payload):
-        state.rows[0]["comment"] = payload["comment"]
-        state.rows[0]["quantity"] = 1.0
+        row = next(row for row in state.rows if row["id"] == payload["id"])
+        row["comment"] = payload["comment"]
+        row["quantity"] = 1.0
     state.put_effect = normalized
-    with pytest.raises(RuntimeError, match="context changed"):
-        run()
-    assert len(state.puts) == 1
-    assert yaml.safe_load(journal.read_bytes())["rows"]["row-1"]["status"] == "pending"
+    run()
+    assert len(state.puts) == 2
+    assert yaml.safe_load(journal.read_bytes())["status"] == "complete"
 
 
 def test_v2_migration_apply_rollback_lock_excludes_writer(apply_case):
@@ -1181,7 +1195,7 @@ def test_v2_release_compatibility_comment_reversal_keeps_dual_reader_floor(rollb
 
 
 @pytest.mark.parametrize("field,value", [
-    ("comment", "edited"), ("quantity", 1.0), ("unitPrice", 8), ("fee", 2),
+    ("comment", "edited"), ("quantity", 2.0), ("unitPrice", 8), ("fee", 2),
     ("date", "2026-01-11T12:00:00Z"), ("accountId", "other"), ("userId", "other"),
     ("currency", "EUR"), ("type", "SELL"), ("tags", []), ("isDraft", True),
     ("assetProfile", {"symbol": "CHANGED", "dataSource": "YAHOO"}),
@@ -1240,7 +1254,7 @@ def test_v2_migration_apply_rollback_only_partial_settlement(rollback_case, outc
     assert inspect_saved()["row-1"] == "original"
 
 
-@pytest.mark.parametrize("effect", ["timeout", "normalization", "profile"])
+@pytest.mark.parametrize("effect", ["timeout", "financial", "profile"])
 def test_v2_migration_apply_rollback_only_reverse_uncertainty(rollback_case, effect):
     state, run, reverse, inspect_saved, journal, original = rollback_case
     run()
@@ -1248,8 +1262,8 @@ def test_v2_migration_apply_rollback_only_reverse_uncertainty(rollback_case, eff
         if effect == "timeout":
             raise requests.Timeout()
         state.rows[0]["comment"] = payload["comment"]
-        if effect == "normalization":
-            state.rows[0]["quantity"] = 1.0
+        if effect == "financial":
+            state.rows[0]["quantity"] = 2.0
         else:
             state.rows[0]["assetProfile"]["currency"] = "EUR"
     state.put_effect = fail
@@ -1419,3 +1433,246 @@ def test_v2_migration_apply_rollback_only_invalid_approval_root(rollback_case, v
     assert "Rollback refused (RuntimeError)" in capsys.readouterr().err
     assert journal.read_bytes() == before
     assert len(state.puts) == 2
+
+
+@pytest.mark.parametrize("choice", [None, "no", "Yes", True, "yes"])
+def test_shared_review_selects_only_yes_and_preserves_stored_instant(case, choice):
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, config, save, inputs, source, snapshot = case
+    migration_run(case, rows=[migration_row(), migration_row(id="row-2", comment="IBKR#456")],
+                  trades=[migration_trade(), migration_trade(tradeID="456")])
+    path = root / "activities.yaml"
+    assert migration.stage_review(inputs, path) == 2
+    document = review.read_yaml(path.read_bytes())
+    assert document["version"] == 2 and not document["activity_corrections"]
+    items = list(document["reference_updates"].values())
+    assert all(item["changed fields"] == ["comment"] for item in items)
+    assert items[0]["proposed values"]["date"] == items[0]["current values"]["date"]
+    assert all(item["execution path"] == "historical maintenance" for item in items)
+    items[0]["approve"] = "yes"
+    items[1]["approve"] = choice
+    path.write_text(yaml.safe_dump(document))
+    migration.prepare_review(inputs, path, root / "selected")
+    manifest = json.loads((root / "selected/manifest.json").read_bytes())
+    assert len(manifest["replacements"]) == (2 if choice == "yes" else 1)
+    assert manifest["selection_proof"]["planned_replacements"] == manifest["replacements"]
+    assert manifest["selection_proof"]["equal"] is True
+    assert manifest["review_selection"]["sha256"] == digest(path.read_bytes())
+    assert len(manifest["review_selection"]["keys"]) == len(manifest["replacements"])
+
+
+def test_shared_review_subset_needs_its_own_proof(case, monkeypatch):
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, _, _, inputs, _, _ = case
+    migration_run(case)
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.read_yaml(path.read_bytes())
+    next(iter(document["reference_updates"].values()))["approve"] = "yes"
+    path.write_text(yaml.safe_dump(document))
+    calls = []
+    original = migration.prove_selection
+    def refused(reports, rows, config, replacements):
+        calls.append([item["id"] for item in replacements])
+        result = original(reports, rows, config, replacements)
+        return {**result, "equal": False, "reason": "selection-changed"}
+    monkeypatch.setattr(migration, "prove_selection", refused)
+    with pytest.raises(RuntimeError, match="subset changes"):
+        migration.prepare_review(inputs, path, root / "selected")
+    assert calls == [["row-1"]] and not (root / "selected").exists()
+
+
+@pytest.mark.parametrize("field,value", [("changed fields", ["quantity"]),
+    ("proposed values", {}), ("evidence level", "probable"), ("binding", "edited")])
+def test_shared_review_tampered_selection_refused(case, field, value):
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, _, _, inputs, _, _ = case
+    migration_run(case)
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.read_yaml(path.read_bytes())
+    item = next(iter(document["reference_updates"].values()))
+    item["approve"] = "yes"
+    item[field] = value
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(RuntimeError, match="proposal changed"):
+        migration.prepare_review(inputs, path, root / "selected")
+    assert not (root / "selected").exists()
+
+
+def test_shared_review_apply_revalidates_selected_file(apply_case):
+    from ghostfolio_ibkr_sync import activity_review as review
+    state, permit, run, journal, original, case = apply_case
+    root, _, _, inputs, _, _ = case
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.read_yaml(path.read_bytes())
+    item = next(iter(document["reference_updates"].values()))
+    item["approve"] = "yes"
+    path.write_text(yaml.safe_dump(document))
+    migration.prepare_review(inputs, path, root / "selected")
+    manifest = root / "selected/manifest.json"
+    permit.update(manifest_sha256=digest(manifest.read_bytes()), write_count=1)
+    run(manifest=manifest, manifest_sha256=permit["manifest_sha256"], review_file=path)
+    assert [payload["id"] for payload in state.puts] == [item["activity id"]]
+    assert yaml.safe_load(journal.read_bytes())["status"] == "complete"
+
+
+@pytest.mark.parametrize("field,value", [("updatedAt", "2026-01-12T00:00:00Z"),
+    ("valueInBaseCurrency", 99), ("unknownStoredField", "added"), ("fee", 2)])
+def test_v2_migration_preservation_metadata_vs_unknown_fields(apply_case, field, value):
+    state, _, run, journal, _, _ = apply_case
+    def effect(payload):
+        row = next(row for row in state.rows if row["id"] == payload["id"])
+        row.update(comment=payload["comment"], **{field: value})
+    state.put_effect = effect
+    if field in {"updatedAt", "valueInBaseCurrency"}:
+        run()
+        assert len(state.puts) == 2
+        assert yaml.safe_load(journal.read_bytes())["status"] == "complete"
+    else:
+        with pytest.raises(RuntimeError, match="context changed"):
+            run()
+        assert len(state.puts) == 1
+        assert yaml.safe_load(journal.read_bytes())["rows"]["row-1"]["status"] == "pending"
+
+
+def test_shared_review_apply_refuses_file_edit_before_requests(apply_case):
+    from ghostfolio_ibkr_sync import activity_review as review
+    state, permit, run, journal, original, case = apply_case
+    root, _, _, inputs, _, _ = case
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.read_yaml(path.read_bytes())
+    next(iter(document["reference_updates"].values()))["approve"] = "yes"
+    path.write_text(yaml.safe_dump(document))
+    migration.prepare_review(inputs, path, root / "selected")
+    manifest = root / "selected/manifest.json"
+    permit.update(manifest_sha256=digest(manifest.read_bytes()), write_count=1)
+    path.write_text(path.read_text() + "# edit after preparation\n")
+    with pytest.raises(RuntimeError, match="manifest changed"):
+        run(manifest=manifest, manifest_sha256=permit["manifest_sha256"], review_file=path)
+    assert not state.calls and not journal.exists()
+
+
+def test_shared_review_pending_journal_blocks_stage_and_prepare(case):
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, _, _, inputs, _, _ = case
+    migration_run(case)
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.read_yaml(path.read_bytes())
+    next(iter(document["reference_updates"].values()))["approve"] = "yes"
+    path.write_text(yaml.safe_dump(document))
+    before = path.read_bytes()
+    journal = Path(str(path) + ".journal.yaml")
+    journal.write_text(yaml.safe_dump({"version": 1, "entries": {"request": {"status": "pending"}}}))
+    journal.chmod(0o600)
+    with pytest.raises(RuntimeError, match="Pending review request"):
+        migration.stage_review(inputs, path)
+    with pytest.raises(RuntimeError, match="Pending review request"):
+        migration.prepare_review(inputs, path, root / "selected")
+    assert path.read_bytes() == before and not (root / "selected").exists()
+
+
+def test_v2_migration_preservation_rollback_metadata_and_unknown_drift(rollback_case):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    run()
+    for row in state.rows:
+        row.update(updatedAt="2026-01-12T00:00:00Z", valueInBaseCurrency=99)
+    assert set(inspect_saved().values()) == {"converted"}
+    reverse()
+    assert set(inspect_saved().values()) == {"original"}
+    state.rows[0]["unknownStoredField"] = "changed"
+    assert inspect_saved()["row-1"] == "drift"
+
+
+def test_shared_review_consumed_yes_is_removed_and_restage_requires_new_consent(apply_case):
+    from ghostfolio_ibkr_sync import activity_review as review
+    state, permit, run, journal, original, case = apply_case
+    root, _, _, inputs, _, _ = case
+    path = root / "activities.yaml"
+    approved_bytes = path.read_bytes()
+    run()
+    assert not review.read_yaml(path.read_bytes())["reference_updates"]
+    # Simulate a stale user copy after a separately authorized rollback. The
+    # stage still uses the original saved legacy snapshot, never live state.
+    path.write_bytes(approved_bytes)
+    migration.stage_review(inputs, path)
+    proposals = review.read_yaml(path.read_bytes())["reference_updates"]
+    assert len(proposals) == 2 and all(item["approve"] is None for item in proposals.values())
+
+
+def test_v2_migration_preservation_nested_exact_decimal_journal():
+    from ghostfolio_ibkr_sync.activity_preservation import preserved_equal
+    from copy import deepcopy
+    live = {**migration_row(), "quantity": Decimal("1.0"),
+            "assetProfile": {"symbol": "TEST", "countries": [
+                {"name": "Example", "weight": Decimal("0.50"), "extra": Decimal("1E+2")}],
+                "negative": Decimal("-0.25"), "nullable": None}}
+    journal = json.loads(migration.canonical_json(live))
+    assert preserved_equal(live, journal)
+    equivalent = deepcopy(live)
+    equivalent["assetProfile"]["countries"][0]["weight"] = Decimal("0.5000")
+    assert preserved_equal(equivalent, journal)
+    equivalent["assetProfile"]["countries"][0]["weight"] = Decimal("0.51")
+    assert not preserved_equal(equivalent, journal)
+
+
+def test_shared_review_legacy_apply_without_file_is_refused(apply_case):
+    state, permit, run, journal, original, case = apply_case
+    with pytest.raises(RuntimeError, match="requires the shared review"):
+        run(review_file=None)
+    assert not state.calls and not journal.exists()
+
+
+def test_shared_review_conflicting_yes_across_paths_is_refused(case):
+    from copy import deepcopy
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, _, _, inputs, _, _ = case
+    migration_run(case)
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.read_yaml(path.read_bytes())
+    original = next(iter(document["reference_updates"].values()))
+    original["approve"] = "yes"
+    other = deepcopy(original)
+    other.update(section="activity_corrections", **{"execution path": "normal run", "activity id": "other-row"})
+    other["key"] = review.fingerprint([other["source event"], other["destination account"], other["activity id"]])
+    document["activity_corrections"][other["key"]] = other
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(RuntimeError, match="Conflicting shared review approvals"):
+        migration.prepare_review(inputs, path, root / "selected")
+    assert not (root / "selected").exists()
+
+
+def test_v2_migration_preservation_native_account_balance_is_not_metadata():
+    from ghostfolio_ibkr_sync.activity_preservation import preserved_equal
+    before = {**migration_row(), "account": {"id": "dest", "balance": Decimal("100.00")}}
+    after = {**before, "account": {"id": "dest", "balance": Decimal("99.99")}}
+    assert not preserved_equal(before, after)
+
+
+def test_shared_review_pending_journal_refuses_apply(apply_case):
+    state, permit, run, journal, original, case = apply_case
+    root = case[0]
+    path = root / "activities.yaml.journal.yaml"
+    path.write_text(yaml.safe_dump({"version": 1, "entries": {"pending": {"status": "pending"}}}))
+    path.chmod(0o600)
+    with pytest.raises(RuntimeError, match="Pending review request"):
+        run()
+    assert not state.calls and not journal.exists()
+
+
+@pytest.mark.parametrize("profile_key", ["assetProfile", "SymbolProfile"])
+def test_v2_migration_preservation_derived_profile_fields_only(profile_key):
+    from copy import deepcopy
+    from ghostfolio_ibkr_sync.activity_preservation import preserved_equal
+    before = migration_row()
+    before[profile_key] = before.pop("assetProfile")
+    before[profile_key].update(dateOfFirstActivity="2026-01-10T12:00:00Z", watchedByCount=Decimal("1"))
+    after = deepcopy(before)
+    after[profile_key].update(dateOfFirstActivity="2026-01-01T00:00:00Z", watchedByCount=Decimal("2"))
+    assert preserved_equal(before, after)
+    after[profile_key]["unknownStoredField"] = "changed"
+    assert not preserved_equal(before, after)

@@ -23,6 +23,7 @@ from uuid import uuid4
 
 import yaml
 
+from ghostfolio_ibkr_sync.activity_preservation import preserved_values
 from ghostfolio_ibkr_sync.ghostfolio import (
     activity_date_is_current,
     activity_is_active,
@@ -69,7 +70,7 @@ def read_yaml(data: bytes) -> dict[str, Any]:
     Compose scalar nodes directly: this avoids global SafeLoader mutations and
     preserves literal yes without interpreting true as operator authority.
     """
-    def value(node: yaml.Node) -> Any:
+    def value(node: yaml.Node, approval: bool = False) -> Any:
         if isinstance(node, yaml.MappingNode):
             result: dict[str, Any] = {}
             for key_node, item in node.value:
@@ -78,7 +79,7 @@ def read_yaml(data: bytes) -> dict[str, Any]:
                 key = key_node.value
                 if key in result:
                     raise RuntimeError("Duplicate review YAML key")
-                result[key] = value(item)
+                result[key] = value(item, key == "approve")
             return result
         if isinstance(node, yaml.SequenceNode):
             return [value(item) for item in node.value]
@@ -90,9 +91,13 @@ def read_yaml(data: bytes) -> dict[str, Any]:
             return {"true": True, "false": False}.get(node.value, node.value)
         if node.tag.endswith(":int"):
             if not re.fullmatch(r"[0-9]+", node.value):
+                if approval:
+                    return node.value
                 raise RuntimeError("Unsupported review integer")
             return int(node.value)
         if not node.tag.endswith(":str"):
+            if approval and node.tag.endswith((":float", ":timestamp")):
+                return node.value
             raise RuntimeError("Review numbers must use quoted plain-decimal text")
         return node.value
 
@@ -139,6 +144,45 @@ def validate_document(document: dict[str, Any], collection: str) -> None:
         raise RuntimeError("Invalid keyed review records")
 
 
+SECTIONS = ("reference_updates", "activity_corrections")
+
+
+def decode_review(document: dict[str, Any]) -> dict[str, Any]:
+    """Read both public versions; keep the existing journal and internal map."""
+    if type(document.get("version")) is int and document["version"] == 1:
+        validate_document(document, "proposals")
+        result = deepcopy(document)
+        for item in result["proposals"].values():
+            item["approve"] = None
+        return result
+    if (set(document) != {"version", *SECTIONS}
+            or type(document.get("version")) is not int or document["version"] != 2):
+        raise RuntimeError("Invalid review document schema")
+    proposals: dict[str, Any] = {}
+    for section in SECTIONS:
+        records = document[section]
+        if not isinstance(records, dict):
+            raise RuntimeError("Invalid keyed review section")
+        for key, item in records.items():
+            if (not isinstance(key, str) or not isinstance(item, dict)
+                    or key in proposals or item.get("section") != section):
+                raise RuntimeError("Duplicate or misplaced review proposal")
+            proposals[key] = item
+    return {"version": 1, "proposals": proposals}
+
+
+def encode_review(document: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {"version": 2, **{section: {} for section in SECTIONS}}
+    for key, item in document["proposals"].items():
+        section = item.get("section", "activity_corrections")
+        if section not in SECTIONS:
+            raise RuntimeError("Invalid review section")
+        result[section][key] = {"section": section,
+                                "evidence level": "blocked" if not item.get("actionable") else "probable",
+                                "execution path": "normal run", **item}
+    return result
+
+
 def open_review(filename: str, input_files: Sequence[str]) -> ReviewState:
     path = Path(filename).absolute()
     journal_path = Path(str(path) + ".journal.yaml")
@@ -153,7 +197,7 @@ def open_review(filename: str, input_files: Sequence[str]) -> ReviewState:
         document = read_yaml(original) if original is not None else {"version": 1, "proposals": {}}
         journal = (read_yaml(journal_original) if journal_original is not None
                    else {"version": 1, "entries": {}})
-        validate_document(document, "proposals")
+        document = decode_review(document)
         validate_document(journal, "entries")
         return {"path": path, "journal_path": journal_path, "inputs": inputs, "lock": fd,
                 "original": original, "journal_original": journal_original,
@@ -197,7 +241,7 @@ def atomic_yaml(path: Path, document: dict[str, Any]) -> bytes:
 
 def publish_review(state: ReviewState, document: dict[str, Any]) -> None:
     assert_unchanged(state)
-    state["original"] = atomic_yaml(state["path"], document)
+    state["original"] = atomic_yaml(state["path"], encode_review(document))
     state["document"] = document
 
 
@@ -392,6 +436,28 @@ def values_of(row: dict[str, Any]) -> dict[str, Any]:
     result["date"] = instant(result["date"]).isoformat()
     if "createdAt" in result:
         result["createdAt"] = instant(result["createdAt"]).isoformat()
+    if "preserved fields" in row:
+        if not isinstance(row["preserved fields"], dict):
+            raise RuntimeError("Invalid preserved review fields")
+        result["preserved fields"] = row["preserved fields"]
+    else:
+        stable = preserved_values(row)
+        known = {*fields, *REPLACED, "assetProfile", "SymbolProfile", "tags", "account"}
+        extra = {key: plain(value) for key, value in stable.items() if key not in known}
+        for name in ("account", "assetProfile", "SymbolProfile"):
+            if name in stable and isinstance(stable[name], dict):
+                nested = dict(stable[name])
+                if name == "account":
+                    # Normal review consent is activity-owned. Independent
+                    # cash updates must not invalidate an unchanged proposal.
+                    nested.pop("balance", None)
+                    nested.pop("balanceInBaseCurrency", None)
+                else:
+                    for identity in ("id", "symbol", "dataSource", "isin", "currency"):
+                        nested.pop(identity, None)
+                if nested:
+                    extra[name] = plain(nested)
+        result["preserved fields"] = extra
     return result
 
 
@@ -454,6 +520,7 @@ def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: b
 PROPOSAL_FIELDS = {"key", "source account", "source event", "destination account", "activity id",
                    "match reason", "current values", "proposed values", "changed fields", "status",
                    "approve", "actionable", "binding", "date context", "review revision"}
+DISPLAY_FIELDS = {"section", "evidence level", "execution path"}
 
 
 def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]],
@@ -465,7 +532,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     if len(by_id) != len(rows):
         raise RuntimeError("Duplicate destination activity IDs")
     for key, old in previous.items():
-        if (set(old) != PROPOSAL_FIELDS or old["key"] != key
+        if (set(old) not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
                 or (old["destination account"] != accounts.get(old["source account"])
                     and (old["source event"], old["destination account"], old["activity id"])
                     not in (journal_bindings or set()))
@@ -538,11 +605,15 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     "changed fields": changes, "status": status, "approve": None,
                     "actionable": actionable, "binding": binding, "review revision": uuid4().hex,
                     "date context": "Full UTC instants; proximity uses UTC calendar dates"}
+            item.update(section="reference_updates" if changes == ["comment"] else "activity_corrections",
+                        **{"evidence level": ("blocked" if not actionable else
+                                             "exact" if reason == "exact reference" else "probable"),
+                           "execution path": "normal run"})
             old = previous.get(key)
             if old:
                 comparison = {k: v for k, v in old.items() if k not in ("approve", "status", "review revision")}
                 if comparison == {k: v for k, v in item.items() if k not in ("approve", "status", "review revision")}:
-                    item["approve"] = old["approve"]
+                    item["approve"] = old["approve"] if actionable else None
                     item["review revision"] = old["review revision"]
                 else:
                     item["status"] = "changed evidence; approval cleared" if actionable else status
@@ -581,11 +652,11 @@ def approved_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
         choice = item["approve"]
         if choice is None:
             continue
-        if type(choice) is not str or choice != "yes":
-            blocked.add(item["destination account"])
-            log.error("Invalid review approval for account %s; financial writes blocked", item["destination account"])
-        else:
+        if type(choice) is str and choice == "yes":
             approved.append(item)
+        else:
+            log.warning("Review choice skipped for account %s activity %s; only literal yes approves",
+                        item["destination account"], item["activity id"])
     for item in approved:
         if (sum(other["source event"] == item["source event"] for other in approved) > 1
                 or sum(other["activity id"] == item["activity id"] for other in approved) > 1):
@@ -630,7 +701,13 @@ def expected_row(row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
 def row_matches(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
     """Compare stable pre/post evidence with exact numbers and UTC instants."""
     try:
-        return bool(values_of(row) == values_of(evidence))
+        actual, expected = values_of(row), values_of(evidence)
+        # Already-issued journals retain their original comparison contract.
+        # New intents include strict additional stored-field evidence.
+        if "preserved fields" not in evidence and "account" not in evidence:
+            actual.pop("preserved fields", None)
+            expected.pop("preserved fields", None)
+        return bool(actual == expected)
     except (RuntimeError, KeyError):
         return False
 
@@ -706,9 +783,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     rows = snapshot_rows(config)
     # Validate every file binding before any journal completion or correction.
     refreshed, held = refresh_proposals(original, events, rows, accounts, journal_bindings)
-    _, invalid_accounts = approved_proposals(original)
-    approved, blocked = approved_proposals(refreshed)
-    blocked |= invalid_accounts
+    blocked: set[str] = set()
     simulated = bool(config.get("dry_run"))
     unresolved: set[str] = set()
     unresolved_events: set[str] = set()
@@ -747,7 +822,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     for item in sorted(approved, key=lambda item: item["key"]):
         account = item["destination account"]
         if (account in blocked or item["source event"] not in events or not item["actionable"]
-                or item["key"] not in refreshed):
+                or item["key"] not in refreshed or item.get("execution path") != "normal run"):
             continue
         if simulated:
             log.info("DRY RUN reviewed correction account %s activity %s: %s", account,

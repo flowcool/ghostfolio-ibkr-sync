@@ -176,11 +176,11 @@ def test_review_candidate_release_requires_positive_assignment_and_new_discovery
 
 
 @pytest.mark.parametrize("approval", [True, False, "true", "no", "y", "YES", 1, ""])
-def test_review_approval_invalid_choice_fences_bound_account(approval):
+def test_review_approval_non_yes_choice_skips_bound_account(approval):
     old = preview()
     next(iter(old.values()))["approve"] = approval
     approved, blocked = review.approved_proposals(old)
-    assert approved == [] and blocked == {"acc"}
+    assert approved == [] and blocked == set()
 
 
 def test_review_approval_one_source_two_targets_refused_before_dispatch():
@@ -246,7 +246,7 @@ def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_
     proposals = preview(rows)
     for item in proposals.values():
         item["approve"] = approval
-    path.write_text(__import__("yaml").safe_dump({"version": 1, "proposals": proposals}))
+    path.write_text(__import__("yaml").safe_dump(review.encode_review({"version": 1, "proposals": proposals})))
     path.chmod(0o600)
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "secret", "dry_run": dry_run,
@@ -423,7 +423,7 @@ def test_review_execution_budget_sequential_limit_delay_and_deferred_yes(tmp_pat
     for item in proposals.values():
         item["approve"] = "yes"
     path = tmp_path / "review.yaml"
-    path.write_text(__import__("yaml").safe_dump({"version": 1, "proposals": proposals}))
+    path.write_text(__import__("yaml").safe_dump(review.encode_review({"version": 1, "proposals": proposals})))
     path.chmod(0o600)
     state = review.open_review(str(path), [])
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0.5))
@@ -493,11 +493,11 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     assert not path.exists() and not server.writes
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.read_yaml(path.read_bytes())
+    document = review.decode_review(review.read_yaml(path.read_bytes()))
     assert len(document["proposals"]) == 1
     item = next(iter(document["proposals"].values()))
     item["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(document))
+    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
     assert app.run_sync(new_run_outcome()) == 0
     assert len(server.writes) == 1 and len(server.cash) == 3
@@ -525,9 +525,9 @@ def test_review_acceptance_failure_fences_cash_other_account_continues(tmp_path,
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.read_yaml(path.read_bytes())
+    document = review.decode_review(review.read_yaml(path.read_bytes()))
     next(iter(document["proposals"].values()))["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(document))
+    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
     server.cash.clear()
     outcome = new_run_outcome()
@@ -718,7 +718,7 @@ def test_review_runtime_contract_missing_dividend_section_keeps_trade_and_cash(t
     assert [cash["id"] for cash in server.cash] == ["acc"]
     assert [item["comment"] for item in imports] == ["IBKR#v2#U1:TRADE:T2"]
     assert not server.writes
-    assert path.exists() and review.read_yaml(path.read_bytes())["proposals"] == {}
+    assert path.exists() and review.decode_review(review.read_yaml(path.read_bytes()))["proposals"] == {}
 
 
 @pytest.mark.parametrize("drift", ["updatedAt", "account", "value", "valueInBaseCurrency",
@@ -730,7 +730,10 @@ def test_review_stale_server_changes_keep_approval_and_reverse_evidence(tmp_path
     item = next(iter(proposals.values()))
     item["approve"] = "yes"
     changed = deepcopy(rows)
-    changed[0][drift] = {"balance": Decimal("999")} if drift == "account" else "changed"
+    if drift == "account":
+        changed[0]["account"]["balance"] = Decimal("999")
+    else:
+        changed[0][drift] = "changed"
     refreshed, _ = review.refresh_proposals(proposals, source_events(), changed, {"U1": "acc"})
     assert refreshed[item["key"]]["approve"] == "yes"
     assert refreshed[item["key"]]["review revision"] == item["review revision"]
@@ -818,9 +821,9 @@ def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypa
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.read_yaml(path.read_bytes())
+    document = review.decode_review(review.read_yaml(path.read_bytes()))
     next(iter(document["proposals"].values()))["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(document))
+    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
     assert app.run_sync(new_run_outcome()) == (1 if pending else 0)
     monkeypatch.setenv("IBKR_ACCOUNT_IDS", "U2")
@@ -848,3 +851,166 @@ def test_review_recovery_diagnostic_reports_only_stable_drift(monkeypatch, caplo
     assert not matched and observed is row
     diagnostic = next(record for record in caplog.records if "observed differences" in record.msg)
     assert diagnostic.args[-1] == (["unavailable activity evidence"] if invalid else ["quantity"])
+
+
+def test_review_schema_two_sections_and_legacy_approval_clear(tmp_path):
+    proposals = preview()
+    key = next(iter(proposals))
+    proposals[key]["approve"] = "yes"
+    path = tmp_path / "activities.yaml"
+    path.write_text(__import__("yaml").safe_dump({"version": 1, "proposals": proposals}))
+    path.chmod(0o600)
+    state = review.open_review(str(path), [])
+    try:
+        assert state["document"]["proposals"][key]["approve"] is None
+        review.publish_review(state, state["document"])
+        disk = review.read_yaml(path.read_bytes())
+        assert set(disk) == {"version", *review.SECTIONS} and disk["version"] == 2
+        assert key in disk["activity_corrections"] and not disk["reference_updates"]
+        assert disk["activity_corrections"][key]["evidence level"] == "probable"
+    finally:
+        review.close_review(state)
+
+
+def test_review_schema_two_section_move_and_duplicate_are_refused():
+    document = review.encode_review({"version": 1, "proposals": preview()})
+    key, item = next(iter(document["activity_corrections"].items()))
+    document["reference_updates"][key] = item
+    with pytest.raises(RuntimeError, match="misplaced"):
+        review.decode_review(document)
+
+
+def test_review_blocked_yes_cannot_become_approval():
+    events = source_events()
+    row = destination("IBKR#T1")
+    old, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    key = next(iter(old))
+    old[key]["approve"] = "yes"
+    assert old[key]["evidence level"] == "blocked"
+    next(iter(events.values()))["legacy safe"] = True
+    fresh, _ = review.refresh_proposals(old, events, [row], {"U1": "acc"})
+    assert fresh[key]["actionable"] is True and fresh[key]["approve"] is None
+
+
+def test_review_replacement_unknown_stored_field_drift_is_visible():
+    row = destination(unknownStoredField={"value": "keep"})
+    before = review.values_of(row)
+    assert review.row_matches(row, before)
+    row["unknownStoredField"]["value"] = "changed"
+    assert not review.row_matches(row, before)
+
+
+def test_review_pending_request_survives_display_revision_change(tmp_path, monkeypatch):
+    server, state, config, blocked, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
+    assert blocked == {"acc"} and len(server.writes) == 1
+    document = deepcopy(state["document"])
+    item = next(iter(document["proposals"].values()))
+    item["review revision"] = "f" * 32
+    item["section"] = "reference_updates"
+    item["evidence level"] = "blocked"
+    item["approve"] = "yes"
+    review.publish_review(state, document)
+    path = state["path"]
+    review.close_review(state)
+    state = review.open_review(str(path), [])
+    try:
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert blocked == {"acc"} and held and len(server.writes) == 1
+        assert next(iter(state["journal"]["entries"].values()))["status"] == "pending"
+    finally:
+        review.close_review(state)
+
+
+def test_review_non_yes_warns_without_releasing_hold(caplog):
+    proposals = preview()
+    item = next(iter(proposals.values()))
+    item["approve"] = "no"
+    approved, blocked = review.approved_proposals(proposals)
+    assert not approved and not blocked
+    refreshed, held = review.refresh_proposals(proposals, source_events(), [destination()], {"U1": "acc"})
+    assert held and next(iter(refreshed.values()))["approve"] == "no"
+    assert "only literal yes approves" in caplog.text
+
+
+@pytest.mark.parametrize("scalar", ["-1", "1.2", "1e0", "0x10", ".inf", "2026-01-01", "true", "no", "Yes", "on"])
+def test_review_approval_other_scalar_values_skip_without_file_error(scalar):
+    proposals = preview()
+    item = next(iter(proposals.values()))
+    item["approve"] = review.read_yaml(("approve: " + scalar).encode())["approve"]
+    assert review.approved_proposals(proposals) == ([], set())
+
+
+def test_review_schema_round_trip_nested_signed_decimal_values(tmp_path):
+    row = destination()
+    row["assetProfile"].update(countries=[{"weight": Decimal("0.50"), "name": "Example"}],
+                               negative=Decimal("-0.25"), nullable=None)
+    proposals = preview([row])
+    path = tmp_path / "activities.yaml"
+    state = review.open_review(str(path), [])
+    try:
+        review.publish_review(state, {"version": 1, "proposals": proposals})
+        decoded = review.decode_review(review.read_yaml(path.read_bytes()))
+        assert decoded == state["document"]
+    finally:
+        review.close_review(state)
+
+
+def test_review_real_snapshot_parser_round_trip_nested_numbers(tmp_path, monkeypatch):
+    row = destination()
+    row["assetProfile"].update(countries=[{"weight": Decimal("0.50")}], negative=Decimal("-0.25"))
+    ReviewServer(monkeypatch, [row])
+    config = {"ghost_host": "http://ghost", "ghost_token": "secret",
+              "activity_review_file": str(tmp_path / "activities.yaml")}
+    rows = review.snapshot_rows(config)
+    assert isinstance(rows[0]["assetProfile"]["negative"], Decimal)
+    assert isinstance(rows[0]["assetProfile"]["countries"][0]["weight"], Decimal)
+    proposals = review.refresh_proposals({}, source_events(), rows, {"U1": "acc"})[0]
+    state = review.open_review(str(tmp_path / "activities.yaml"), [])
+    try:
+        review.publish_review(state, {"version": 1, "proposals": proposals})
+        assert review.decode_review(review.read_yaml(state["path"].read_bytes())) == state["document"]
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("field,before,after", [
+    ("dateOfFirstActivity", "2026-07-31T10:00:00Z", "2026-07-01T10:00:00Z"),
+    ("watchedByCount", Decimal("1"), Decimal("2")),
+])
+def test_review_derived_profile_changes_keep_approval(field, before, after):
+    row = destination()
+    row["assetProfile"][field] = before
+    old = preview([row])
+    key = next(iter(old))
+    old[key]["approve"] = "yes"
+    row["assetProfile"][field] = after
+    refreshed, held = review.refresh_proposals(old, source_events(), [row], {"U1": "acc"})
+    assert held
+    assert refreshed[key]["approve"] == "yes"
+    assert refreshed[key]["binding"] == old[key]["binding"]
+    assert refreshed[key]["review revision"] == old[key]["review revision"]
+
+
+def test_review_date_correction_confirms_after_derived_profile_recalculation(tmp_path, monkeypatch):
+    row = destination(date="2026-07-31T10:00:00Z")
+    row["assetProfile"].update(dateOfFirstActivity=row["date"], watchedByCount=Decimal("1"))
+    original_put = ReviewServer.put
+    def recalculate(self, url, **kwargs):
+        response = original_put(self, url, **kwargs)
+        self.rows[0]["assetProfile"].update(dateOfFirstActivity=self.rows[0]["date"],
+                                            watchedByCount=Decimal("2"))
+        return response
+    monkeypatch.setattr(ReviewServer, "put", recalculate)
+    server, state, config, blocked, held = run_review(tmp_path, monkeypatch, rows=[row])
+    try:
+        assert not blocked and not held
+        assert len(server.writes) == 1
+        assert server.rows[0]["date"] != row["date"]
+        assert server.rows[0]["assetProfile"]["dateOfFirstActivity"] == server.rows[0]["date"]
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["status"] == "confirmed"
+        assert review.instant(review.inspect_reverse(entry, server.rows[0])["date"]) == review.instant(row["date"])
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+    finally:
+        review.close_review(state)

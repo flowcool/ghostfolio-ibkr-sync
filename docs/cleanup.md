@@ -270,6 +270,114 @@ the tool does not undo imported activities. Never delete accepted actions as an
 automatic rollback. Retain an rc.5-or-newer reader after v2 history exists.
 
 
+## Historical maintenance with the shared review file
+
+Use this path for exact historical comment replacements. Use normal activity
+review for one-to-one financial corrections. Both paths use the same private
+`ACTIVITY_REVIEW_FILE`; their request journals and execution authority differ.
+A yes in this file never starts historical maintenance during normal sync.
+These commands run from the versioned checkout, outside the container image.
+Use the development environment for the selected checkout.
+
+1. Stop the connector and other writers of the shared review file. Obtain complete
+   saved source reports and an unredacted destination snapshot. Build the
+   [migration inputs](#offline-historical-identity-evidence-preview) below.
+2. Stage exact historical proposals into the same file:
+
+   ```sh
+   .venv/bin/python identity_migration.py review \
+     --inputs private/inputs.yaml --review private/activities.yaml
+   ```
+
+   The command is offline. It keeps other proposals. It stages only exact eligible
+   comment changes in `reference_updates`, with `execution path: historical maintenance`
+   and `evidence level: exact`. It preserves the stored timestamp and every financial
+   value. It does not repair a discrepant amount or split an aggregate. A pending
+   request in the companion review journal refuses staging and preparation.
+   Staging again starts a new historical review: it clears previous maintenance
+   approvals and removes stale maintenance candidates.
+3. Inspect the generated current/proposed values and full comment. Edit only
+   `approve: yes` for the desired entries. Plain or quoted lowercase yes is accepted.
+   Leave the rest blank or use any other value to skip it. There is no rejection
+   store and no correspondence table. Skipping does not release an import hold.
+4. Prepare the exact approved historical subset:
+
+   ```sh
+   .venv/bin/python identity_migration.py prepare \
+     --inputs private/inputs.yaml --review private/activities.yaml \
+     --output private/selected-maintenance
+   ```
+
+   This is still offline. It reconstructs each selected proposal. It refuses edited
+   values or changed evidence. It replays full import selection and holdings before
+   and after exactly that subset. It does not reuse the proof for the full candidate
+   set. No selected yes or a failed proof produces no apply manifest. The output is
+   a private manifest and its SHA-256. The manifest binds the review-file bytes.
+5. Obtain a separate approved operation plan. Follow the
+   [guarded maintenance requirements](#explicit-application-of-reviewed-historical-comments)
+   below and use the selected manifest, its hash and exact write count. Include
+   the same review file in apply:
+
+   ```sh
+   .venv/bin/python identity_migration.py apply \
+     --inputs private/inputs.yaml --review private/activities.yaml \
+     --manifest private/selected-maintenance/manifest.json \
+     --manifest-sha256 '<selected-manifest-sha256>' \
+     --approval private/migration-approval.json \
+     --approval-sha256 '<operation-approval-sha256>' \
+     --journal private/migration-apply.yaml \
+     --host https://ghostfolio.example.test
+   ```
+
+   Preparation and apply hold the same review lock as the connector.
+   The example host and hashes are placeholders. Apply reads `GHOST_TOKEN` from ENV.
+   It rebuilds the selected manifest and rechecks the review bytes before dispatch.
+   Successful apply removes its confirmed selections from the review file. If file
+   cleanup fails after a completed journal, stop and inspect that journal; do not
+   retry apply. Staging again requires fresh yes choices, including after rollback.
+   Any file edit requires a new preparation and operation approval. Consent does
+   not replace backup, exact-image preservation qualification, measured pacing,
+   destination writer exclusion or proof that previous requests have settled.
+   Keep all writers stopped until exact financial readback and the operation's
+   normal-import selection checks pass. Resume the connector only under that plan.
+
+`reference_updates` means comment only. `activity_corrections` means a displayed
+replacement that can change financial values. `exact` and `probable` describe
+association evidence, not acceptance of an amount. `blocked` never executes,
+even with yes. The daily connector still refuses legacy-global trade upgrades
+without historical proof. The maintenance path does not weaken that runtime rule.
+
+Keep the schema-2 review file and both journals private. Preserve pending intent;
+never delete a journal to resume. Existing [inspection and rollback](#guarded-comment-rollback-and-resume-inspection)
+operate on the maintenance journal and require their own unchanged-row checks.
+An older connector refuses schema 2. The first upgrade from schema 1 clears old
+approvals once. Keep a private pre-upgrade copy and retain the compatible reader.
+
+### Preservation comparison
+
+Raw snapshots, preimages and fingerprints remain exact tamper evidence. Live
+preservation compares business values rather than raw response bytes. Equivalent
+numeric spellings and timezone offsets are equal, with no monetary tolerance.
+The exclusions follow the inspected [Ghostfolio 3.90.0 activity implementation](https://github.com/ghostfolio/ghostfolio/blob/3.90.0/apps/api/src/app/activities/activities.service.ts)
+and retained paired reads; they are not proof of request settlement.
+The named exclusions are activity `updatedAt`, derived `value`, `valueInBaseCurrency`,
+`feeInBaseCurrency`, `feeInAssetProfileCurrency`, `unitPriceInAssetProfileCurrency`;
+account `updatedAt`; and profile `updatedAt`, `activitiesCount`, `dateOfFirstActivity`
+and `watchedByCount`. Ghostfolio derives the last two from the earliest activity
+and watchlist relationships in its [profile enrichment implementation](https://github.com/ghostfolio/ghostfolio/blob/3.90.0/apps/api/src/services/symbol-profile/symbol-profile.service.ts).
+Changing an activity date or a watchlist must not invalidate consent or readback
+through those derived fields. Other profile fields remain checked.
+Historical maintenance still compares native account balances
+when present in the capture. Normal review consent excludes independent account
+balance changes; it continues to check account identity. All other fields remain checked.
+The snapshot reader parses all response numbers as exact decimals, including nested
+profile weights. Unknown fields are not discarded. Business or unknown-field drift stops further
+writes. A changed implementation invalidates earlier previews; prepare them again.
+A pending result remains uncertain even when a read shows the original comment.
+The isolated image qualification must test background profile enrichment after PUT.
+A change outside the named exclusions remains a refusal; offline comparison tests
+do not establish that the live background jobs have settled.
+
 ## Offline historical identity evidence preview
 
 Run from the versioned checkout, outside the runtime image:
@@ -485,8 +593,8 @@ no credentials. Run only the command authorized by the operation plan:
 
 ```sh
 .venv/bin/python identity_migration.py apply \
-  --inputs private/inputs.yaml \
-  --manifest private/review/manifest.json \
+  --inputs private/inputs.yaml --review private/activities.yaml \
+  --manifest private/selected-maintenance/manifest.json \
   --manifest-sha256 <reviewed-manifest-sha256> \
   --approval private/migration-approval.json \
   --approval-sha256 <reviewed-approval-sha256> \
@@ -494,8 +602,9 @@ no credentials. Run only the command authorized by the operation plan:
   --host https://ghostfolio.example.com
 ```
 
-The command rebuilds the complete offline preview and requires byte equality with
-the reviewed manifest. Preview remains `actionable: false`: approval of its content
+The command requires the shared review file and rebuilds the exact selected
+manifest from `prepare`. A plain `preview` manifest cannot authorize apply. It
+requires byte equality with the reviewed selected manifest. Preview remains `actionable: false`: approval of its content
 alone never grants GO. Changed inputs, mapping, inventory, selection, implementation
 bytes or target bindings require a new review. A preview with no replacements or
 an unresolved selection gate is refused.
@@ -555,7 +664,7 @@ The command prints one state per journal-owned activity: `original`, `converted`
 Inspection does not modify the journal. Old-comment, absent-row and converted-row
 readbacks never clear uncertainty. The snapshot must contain the complete,
 unredacted activity list and its matching count. Preserve original JSON numbers
-and all fields. Even a changed numeric representation blocks reversal.
+and all fields. Equivalent numeric representations do not block reversal; changed values do.
 
 Rollback uses the original reviewed manifest and the existing private journal:
 
