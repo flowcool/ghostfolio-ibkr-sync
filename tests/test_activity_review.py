@@ -671,6 +671,136 @@ def test_review_persistence_confirmed_before_cleanup_cannot_reuse_consumed_yes(t
         review.close_review(state)
 
 
+@pytest.mark.parametrize("boundary", [
+    "before_intent", "after_intent", "before_dispatch", "after_apply",
+    "after_confirmation", "after_cleanup",
+])
+def test_review_runtime_sigkill_restart_never_repeats_request(tmp_path, monkeypatch, boundary):
+    """Kill a real process; retain only its durable files and synthetic server state.
+
+    This proves offline runtime recovery. It does not qualify a destination image
+    or replace the installed-image lab gate. The test-only budget is never shipped.
+    """
+    import signal
+    import socket
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    def no_network(*args, **kwargs):
+        pytest.fail("Offline recovery attempted network access")
+
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+    monkeypatch.setattr(socket.socket, "connect_ex", no_network)
+    app, _ = runtime_environment(tmp_path, monkeypatch)
+    server = RuntimeServer(monkeypatch, [destination("My café 🐢")])
+    path = tmp_path / "review.yaml"
+    monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
+    assert app.run_sync(new_run_outcome()) == 0
+    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    next(iter(document["proposals"].values()))["approve"] = "yes"
+    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
+    remote = tmp_path / "synthetic-server.json"
+    requests_file = tmp_path / "synthetic-requests"
+    remote.write_text(json.dumps(server.rows, default=float))
+
+    def kill():
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            original_journal = review.publish_journal
+            original_review = review.publish_review
+            original_put = server.put
+
+            def journal(state):
+                status = next(iter(state["journal"]["entries"].values()))["status"]
+                if boundary == "before_intent" and status == "pending":
+                    kill()
+                original_journal(state)
+                if ((boundary == "after_intent" and status == "pending")
+                        or (boundary == "after_confirmation" and status == "confirmed")):
+                    kill()
+
+            def publish(state, document):
+                original_review(state, document)
+                if (boundary == "after_cleanup" and not document["proposals"]
+                        and state["journal"]["entries"]):
+                    kill()
+
+            def put(url, **kwargs):
+                if "/api/v1/activities/" not in url:
+                    return original_put(url, **kwargs)
+                if boundary == "before_dispatch":
+                    kill()
+                # A separate file represents a server-side durable receipt.
+                with requests_file.open("a") as receipt:
+                    receipt.write("PUT\n")
+                    receipt.flush()
+                    os.fsync(receipt.fileno())
+                response = original_put(url, **kwargs)
+                with remote.open("w") as saved:
+                    json.dump(server.rows, saved, default=float)
+                    saved.flush()
+                    os.fsync(saved.fileno())
+                if boundary == "after_apply":
+                    kill()
+                return response
+
+            review.publish_journal = journal
+            review.publish_review = publish
+            monkeypatch.setattr(requests, "put", put)
+            app.run_sync(new_run_outcome())
+        finally:
+            os._exit(99)  # A missed boundary must fail in the parent.
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    rows = json.loads(remote.read_text(), parse_float=Decimal, parse_int=Decimal)
+    restarted = RuntimeServer(monkeypatch, rows)
+    outcome = new_run_outcome()
+    code = app.run_sync(outcome)
+    pending_before = boundary in ("after_intent", "before_dispatch")
+    assert code == (1 if pending_before else 0)
+    assert len(restarted.writes) == (1 if boundary == "before_intent" else 0)
+    sent = len(requests_file.read_text().splitlines()) if requests_file.exists() else 0
+    assert sent + len(restarted.writes) == (0 if pending_before else 1)
+    journal = review.read_yaml(path.with_suffix(".yaml.journal.yaml").read_bytes())
+    entry = next(iter(journal["entries"].values()))
+    assert entry["status"] == ("pending" if pending_before else "confirmed")
+    if pending_before:
+        assert not restarted.cash
+        # Repeated restarts cannot turn a saved approval into a resend.
+        assert app.run_sync(new_run_outcome()) == 1
+        assert not restarted.writes and not restarted.cash
+    else:
+        assert restarted.rows[0]["comment"].endswith("\n\nMy café 🐢")
+        assert app.run_sync(new_run_outcome()) == 0
+        assert len(restarted.writes) == (1 if boundary == "before_intent" else 0)
+
+
+def test_review_runtime_duplicate_reference_approval_never_dispatches(tmp_path, monkeypatch):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    app, _ = runtime_environment(tmp_path, monkeypatch)
+    marker = "IBKR#v2#U1:TRADE:T1"
+    rows = [destination(marker), destination(marker, id="duplicate")]
+    server = RuntimeServer(monkeypatch, rows)
+    path = tmp_path / "review.yaml"
+    monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
+    assert app.run_sync(new_run_outcome()) == 0
+    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    assert document["proposals"]
+    for proposal in document["proposals"].values():
+        proposal["approve"] = "yes"
+    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
+    assert app.run_sync(new_run_outcome()) == 0
+    assert not server.writes and server.rows == rows
+    refreshed = review.decode_review(review.read_yaml(path.read_bytes()))
+    assert all(not item["actionable"] for item in refreshed["proposals"].values())
+    assert not path.with_suffix(".yaml.journal.yaml").exists()
+
+
 @pytest.mark.parametrize("drift", ["quantity", "userId", "tags", "comment", "missing"])
 def test_review_acceptance_readback_drift_fences_account(tmp_path, monkeypatch, drift):
     server, state, config, _, _ = run_review(tmp_path, monkeypatch, dry_run=True)
