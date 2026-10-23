@@ -548,7 +548,7 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
     path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
     monkeypatch.setenv("DRY_RUN", "false")
     expected_pending = {key: deepcopy(value) for key, value in document["proposals"].items()}
-    server.cash.clear()
+    assert not imports and not server.cash and not server.writes  # Seed run is a true DRY_RUN.
 
     passes = 0
     while expected_pending:
