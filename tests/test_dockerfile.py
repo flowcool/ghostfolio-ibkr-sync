@@ -69,12 +69,12 @@ def test_supercronic_download_requires_https_and_tls_minimum():
 
 
 @pytest.mark.parametrize('arch,checksum', [
-    ('amd64', 'a53ae236602c7338aba3fbaff40bda6300eae3b9fedb8261eb06cfe3724430c1'),
-    ('arm64', '02aa0cb229ba09050cba6638059dadb9eedc2276632ea43d6a57a2f8c1629dd5'),
+    ('amd64', 'cc232108374e8e2b537045f2d5eaa1229f619db314c3ba6a14d38b35dc0aa123'),
+    ('arm64', '4ae22576a78223d8ccdf5f3b3660a5cbb5288416bf0ca96afc4a36d195932b94'),
 ])
 def test_existing_architecture_checksum_gate_is_preserved(arch, checksum):
     source = dockerfile()
-    assert 'ARG SUPERCRONIC_VERSION=v0.2.49' in source
+    assert 'ARG SUPERCRONIC_VERSION=v0.2.51' in source
     assert f'ARG SUPERCRONIC_SHA256SUM_{arch}={checksum}' in source
     assert f'{arch}) EXPECTED="${{SUPERCRONIC_SHA256SUM_{arch}}}" ;;' in source
     assert 'echo "${EXPECTED}  supercronic-linux-${TARGETARCH}" | sha256sum -c - &&' in source
