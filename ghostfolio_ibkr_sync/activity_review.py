@@ -665,10 +665,14 @@ def approved_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
     return [item for item in approved if item["destination account"] not in blocked], blocked
 
 
-# No exact-image qualification exists for this change yet. Qualification must
-# supply (immutable destination image, finite run limit, minimum delay seconds)
-# in a reviewed release change. ENV cannot override this activation boundary.
-QUALIFIED_EXECUTION: tuple[str, int, float] | None = None
+# Isolated full-update/readback/background proof covers one correction at a time.
+# No intra-run spacing applies with a limit of one. This is not a cross-run
+# background-completion guarantee; see docs/releasing.md. ENV cannot override it.
+QUALIFIED_EXECUTION: tuple[str, int, float] | None = (
+    "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078",
+    1,
+    0.0,
+)
 RECOVERY_WAITS = (0, 2, 5, 10)
 
 
