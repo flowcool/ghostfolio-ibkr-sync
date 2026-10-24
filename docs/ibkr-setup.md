@@ -26,7 +26,7 @@
    >
    > - **Missing trades**: trades older than the period are never seen, and a sell whose
    >   buy is outside the window is imported only if Ghostfolio already holds that buy
-   >   (see [What the tool skips automatically](../README.md#what-the-tool-skips-automatically)).
+   >   (see [What the tool skips automatically](configuration.md#what-the-tool-skips-automatically)).
    > - **New historical candidates when widening the period**: trade-ID dedup still
    >   recognises previously synced activities, but older manual entries or activities
    >   from another importer may need reconciliation before importing the wider report.
@@ -81,7 +81,7 @@ Select these fields for a predictable report. **ClientAccountID** (`accountId`) 
 - TradeMoney
 - TradePrice
 
-New trade comments are `IBKR#v2#<source-account>:TRADE:<tradeID>`. New dividend comments are `IBKR#v2#<source-account>:DIVIDEND:<actionID>`, one per proven action. Each segment permits only `[A-Za-z0-9._-]+`, without transformation or fallback. Historical comments remain readable. See the [conversion rules](../README.md#how-activities-are-converted) for limits and rollback requirements.
+New trade comments are `IBKR#v2#<source-account>:TRADE:<tradeID>`. New dividend comments are `IBKR#v2#<source-account>:DIVIDEND:<actionID>`, one per proven action. Each segment permits only `[A-Za-z0-9._-]+`, without transformation or fallback. Historical comments remain readable. See the [conversion rules](configuration.md#how-activities-are-converted) for limits and rollback requirements.
 
 **Cash Transactions:**
 
@@ -228,7 +228,7 @@ this does not undo financial writes.
    account succeeds. Successful default/blank/truthy simulations send nothing,
    including expiry-only reminders and previews. Failed simulations send Failure.
 4. Upgrade the image and run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` and no `CRON`,
-   using the [README preview command](../README.md#dry-run-first). Read the
+   using the [README preview command](configuration.md#dry-run-first). Read the
    container logs. Verify no forced-preview WARNING or account suffix failure.
    Review proposed imports, cash, anomaly blocks and failed-check counts before
    enabling writes. The source business day is compared with the destination

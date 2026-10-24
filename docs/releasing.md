@@ -42,21 +42,32 @@ Put this hand-written head in a `head.md` file outside the repo. GitHub appends
 the generated PR list below it.
 
 ```markdown
-## Breaking changes and migration
-- <what changes, who is affected, what to do>   (write "None." if none)
+## What's new
+<One short paragraph: what changed and why a user should care.>
 
-## Upgrade checklist
-1. <backup / dry-run / inspection steps>
+## Important changes
+- Breaking change or new prerequisite: <who is affected and what to do>
+- Compatibility or behavior change: <details or "None.">
+
+## Upgrade guide
+1. Back up Ghostfolio.
+2. Run the preview with `DRY_RUN=true` and inspect the logs.
+3. <version-specific migration step, or link to a guide>
+
+## Technical details
+- Qualification scope: <image, lab scenario, and restrictions>
+- Validation: <tests, reviews, and acceptance evidence>
+- Known issues: <none, or link>
 
 ## Rollback
 - Previous image digest: `ghcr.io/flowcool/ghostfolio-ibkr-sync@sha256:<digest>` (<version>)
-- <what rollback does NOT undo, e.g. data already written>
-
-## Validation
-- <tests, reviews, anything not tested>
+- Runtime rollback does not undo activities or cash updates.
 
 ## Published artifacts
-- <image tags and digests, build run links, once published>
+- <image tags, verified manifest digest, and build run link>
+
+## Full changelog
+<GitHub generated PR list and comparison link are appended here.>
 ```
 
 ## Publish

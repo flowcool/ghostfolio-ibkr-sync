@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">Ghostfolio IBKR Sync</title>
+  <desc id="desc">A controlled data path from Interactive Brokers to a self-hosted Ghostfolio portfolio.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#132b3f"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" x2="1">
+      <stop offset="0" stop-color="#56d6c9"/>
+      <stop offset="1" stop-color="#8ed1ff"/>
+    </linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="6" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="320" rx="24" fill="url(#bg)"/>
+  <path d="M0 255 C220 210 290 300 480 246 S790 172 1200 224 V320 H0Z" fill="#0a1b2a" opacity=".72"/>
+  <g fill="none" stroke="url(#line)" stroke-width="3" opacity=".88" filter="url(#glow)">
+    <path d="M760 74h90v62h-90zM760 198h90v62h-90zM1035 136h90v62h-90z"/>
+    <path d="M850 105h110v62h75M850 229h110v-62"/>
+    <path d="M960 167h75"/>
+  </g>
+  <g fill="#56d6c9"><circle cx="850" cy="105" r="6"/><circle cx="850" cy="229" r="6"/><circle cx="1035" cy="167" r="6"/></g>
+  <g fill="#f4f7fb" font-family="Inter,Segoe UI,Arial,sans-serif">
+    <text x="72" y="126" font-size="46" font-weight="700" letter-spacing="-.8">Ghostfolio IBKR Sync</text>
+    <text x="76" y="171" font-size="22" fill="#b9d2e3">Controlled portfolio synchronization for self-hosted Ghostfolio</text>
+    <text x="76" y="218" font-size="16" fill="#77d8cc">IBKR Flex Query  →  validate  →  preview  →  write deliberately</text>
+  </g>
+</svg>

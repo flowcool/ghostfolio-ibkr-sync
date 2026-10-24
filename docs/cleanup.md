@@ -7,7 +7,7 @@ For recovery after a shortened Flex query, first read the
 The cleanup tools are operator maintenance commands, outside the container image.
 They do not log in by themselves: they read only `GHOST_TOKEN` and `GHOST_HOST`, even if the
 sync uses `GHOST_ACCESS_TOKEN`. Before a cleanup session, get a session token with the curl
-command in [Ghostfolio Setup](../README.md#1-choose-how-the-sync-authenticates) and export it as `GHOST_TOKEN`.
+command in [Ghostfolio Setup](configuration.md#configuration-reference) and export it as `GHOST_TOKEN`.
 Heuristic pair matching still requires a reviewed dry-run, verified backup and quiet
 portfolio writers. The recovery feature does not authorize financial repair by itself.
 
