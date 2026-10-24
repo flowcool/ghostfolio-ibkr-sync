@@ -18,7 +18,7 @@ services:
       GHOST_HOST: ${GHOST_HOST:-http://ghostfolio:3333}
       GHOST_ACCOUNT_NAMES: ${GHOST_ACCOUNT_NAME_INDIVIDUAL:?Set GHOST_ACCOUNT_NAME_INDIVIDUAL}
       MAPPING_FILE: /app/mapping.yaml
-      CRON: ${CRON_INDIVIDUAL:-}
+      CRON: ${CRON_INDIVIDUAL:-0 6 * * *}
     volumes:
       - ./mapping.yaml:/app/mapping.yaml:ro
     networks:
@@ -43,7 +43,7 @@ services:
       GHOST_HOST: ${GHOST_HOST:-http://ghostfolio:3333}
       GHOST_ACCOUNT_NAMES: ${GHOST_ACCOUNT_NAME_JOINT:?Set GHOST_ACCOUNT_NAME_JOINT}
       MAPPING_FILE: /app/mapping.yaml
-      CRON: ${CRON_JOINT:-}
+      CRON: ${CRON_JOINT:-5 6 * * *}
     volumes:
       - ./mapping.yaml:/app/mapping.yaml:ro
     networks:

@@ -66,6 +66,7 @@ The fastest safe path is a Docker Compose preview. Prepare the prerequisites fir
 cp .env.example .env
 cp mapping.yaml.example mapping.yaml
 chmod 600 .env mapping.yaml
+sudo chown 10001:10001 mapping.yaml
 ```
 
 2. Set the IBKR account and query IDs, Ghostfolio account names, and tokens in `.env`. Remove the unused joint service from `compose.yaml` if you have one account.
