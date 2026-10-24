@@ -57,7 +57,7 @@ dividend rows raises neither error, so it cannot show that the dividend fields a
 **What changes.** A missing or invalid IANA `TZ` forces the whole run into `DRY_RUN`: no
 activity, cash balance or platform write for any account.
 
-**Action.** Set `TZ` to an IANA zone such as `Europe/Warsaw` (not `EST` or `CET`) and recreate
+**Action.** Set `TZ` to an IANA zone such as `Europe/Paris` (not `EST` or `CET`) and recreate
 the container. The image sets no default.
 
 **Symptom if not done.** Nothing is imported, and the log shows

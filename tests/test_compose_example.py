@@ -1,4 +1,4 @@
-"""Offline checks for the README's scheduled Compose example."""
+"""Offline checks for the canonical scheduled Compose example."""
 from pathlib import Path
 import re
 
@@ -7,34 +7,27 @@ import yaml
 
 
 def compose_example():
-    readme = (Path(__file__).resolve().parents[1] / 'README.md').read_text(encoding='utf-8')
-    heading = '## Docker Compose / Portainer\n'
-    assert heading in readme, 'README Compose section not found'
-    section = readme.split(heading, 1)[1].split('\n## ', 1)[0]
+    compose = (Path(__file__).resolve().parents[1] / 'compose.yaml').read_text(encoding='utf-8')
     expected = {'ibkr-sync-individual', 'ibkr-sync-joint'}
-    for fenced in section.split('```yaml\n')[1:]:
-        parsed = yaml.safe_load(fenced.split('```', 1)[0])
-        services = parsed.get('services') if isinstance(parsed, dict) else None
-        if isinstance(services, dict) and expected <= set(services):
-            return parsed
-    raise AssertionError('README scheduled Compose YAML block not found')
+    parsed = yaml.safe_load(compose)
+    services = parsed.get('services') if isinstance(parsed, dict) else None
+    if isinstance(services, dict) and expected <= set(services):
+        return parsed
+    raise AssertionError('canonical scheduled Compose YAML not found')
 
 
 def test_compose_helper_selects_scheduled_services_not_first_block(monkeypatch):
-    readme = ('## Docker Compose / Portainer\n'
-              '```yaml\nservices: {unrelated: {}}\n```\n'
-              '```yaml\nservices: {ibkr-sync-individual: {}, ibkr-sync-joint: {}}\n```\n')
-    monkeypatch.setattr(Path, 'read_text', lambda *args, **kwargs: readme)
+    compose = 'services: {ibkr-sync-individual: {}, ibkr-sync-joint: {}}\n'
+    monkeypatch.setattr(Path, 'read_text', lambda *args, **kwargs: compose)
     assert set(compose_example()['services']) == {'ibkr-sync-individual', 'ibkr-sync-joint'}
 
 
-@pytest.mark.parametrize('readme', [
-    '', '## Docker Compose / Portainer\n```yaml\n[]\n```\n',
-    '## Docker Compose / Portainer\n```yaml\nservices: {unrelated: {}}\n```\n',
+@pytest.mark.parametrize('compose', [
+    '', '[]\n', 'services: {unrelated: {}}\n',
 ])
-def test_compose_helper_rejects_missing_scheduled_example(monkeypatch, readme):
-    monkeypatch.setattr(Path, 'read_text', lambda *args, **kwargs: readme)
-    with pytest.raises(AssertionError, match='README .* not found'):
+def test_compose_helper_rejects_missing_scheduled_example(monkeypatch, compose):
+    monkeypatch.setattr(Path, 'read_text', lambda *args, **kwargs: compose)
+    with pytest.raises(AssertionError, match='canonical .* not found'):
         compose_example()
 
 
@@ -62,7 +55,7 @@ def test_compose_credentials_require_operator_values_not_inline_secrets():
 # The suffix is optional so a bare reference (implicit tag) is caught and rejected.
 IMAGE_REF = re.compile(r'ghcr\.io/flowcool/ghostfolio-ibkr-sync(?![\w./-])([:@][^\s`\'"]*)?')
 # Release CI moves :latest only to the current stable release, so it never needs a
-# bump PR; a digest pins one exact artifact. A version tag in the README would age.
+# bump PR; a digest pins one exact artifact. A version tag in the Compose file would age.
 ALLOWED_REF = re.compile(r':latest|@sha256:(?:[0-9a-f]{64}|\.\.\.|<[^>]+>)')
 
 

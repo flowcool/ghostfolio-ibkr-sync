@@ -88,29 +88,32 @@ After the first sync, go to **Admin** - **Market Data** and click **Gather All D
 
 All configuration is done via environment variables:
 
-| Variable | Required | Description | Example |
-|---|---|---|---|
-| `IBKR_TOKEN` | Yes | IBKR Flex Web Service token | `replace-with-your-ibkr-token` |
-| `IBKR_ACCOUNT_IDS` | Yes | Comma-separated IBKR account IDs | `U1234567` |
-| `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs (one per account) | `123456` |
-| `GHOST_ACCESS_TOKEN` | One of these two | Ghostfolio security token, exchanged for a session token at the start of each run (recommended; see [Ghostfolio Setup](#1-choose-how-the-sync-authenticates)) | `replace-with-your-ghostfolio-token` |
-| `GHOST_TOKEN` | One of these two | Ghostfolio session bearer token, used as is (legacy; expires) | `replace-with-your-session-token` |
-| `GHOST_TOKEN_EXPIRY_WARNING_DAYS` | No | Legacy token reminder window, integer 0-365 days (default `14`; `0` disables). Invalid values warn and use `14`. Ignored with `GHOST_ACCESS_TOKEN` | `14` |
-| `GHOST_HOST` | Yes | Ghostfolio base URL | `http://ghostfolio:3333` |
-| `GHOST_PLATFORM_ID` | No | Platform ID for IBKR in Ghostfolio | `abc123-def456` |
-| `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names (must match account count). Two accounts cannot share one name: the run stops at start-up (exit 1) before any network call. Without names, the IBKR account IDs are the targets and must also be distinct | `IBKR Individual` |
-| `MAPPING_FILE` | No | Path to symbol mapping YAML (default: `mapping.yaml`). The run stops (exit 1) if the file is missing or invalid; set it to an empty value (`MAPPING_FILE=""`) to run without mappings on purpose | `/app/mapping.yaml` |
-| `ACTIVITY_REVIEW_FILE` | No | Optional writable YAML path on a persistent volume. Blank disables review. See [activity review](activity-review.md). | `/review/activities.yaml` |
-| `CRON` | No | Five numeric cron fields for recurring runs (Docker only); validated before startup | `0 6 * * *` |
-| `TZ` | For writes | Valid IANA timezone for historical dividend dates and cron scheduling. Missing or invalid values force the whole run into `DRY_RUN`, with a WARNING. Explicit false `DRY_RUN` retains the configured forced-preview notification, even on success | `Europe/Warsaw` |
-| `LOG_LEVEL` | No | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | `DEBUG` |
-| `APPRISE_URLS` | No | JSON list of [Apprise](https://github.com/caronc/apprise/wiki) URLs for failures, legacy token expiry reminders and TZ-forced previews (blank or `[]` = off); see [Failure notifications](#failure-notifications-apprise) | `["ntfys://ntfy.sh/my-topic"]` |
-| `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
-| `DRY_RUN` | No | Since rc.2, absent/blank or `1`/`true`/`yes`/`on` simulates; only `0`/`false`/`no`/`off` requests writes. Spaces and case are ignored. Other values exit 1 before HTTP; only configured Apprise Failure delivery may follow. Simulation keeps login, reads and preview, without activity, cash or platform writes | `1` |
+| Variable | Required | Explanation | Example | Default when unset |
+| --- | --- | --- | --- | --- |
+| `IBKR_TOKEN` | Yes | IBKR Flex Web Service token. | `replace-with-your-ibkr-flex-token` | None; startup fails |
+| `IBKR_ACCOUNT_IDS` | Yes | Comma-separated IBKR account IDs. | `U1234567,U7654321` | None; startup fails |
+| `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs, one per account. | `123456,654321` | None; startup fails |
+| `GHOST_ACCESS_TOKEN` | One of these two | Recommended Ghostfolio security token, exchanged for a session token at each run. | `replace-with-your-ghostfolio-security-token` | None; one token mode is required |
+| `GHOST_TOKEN` | One of these two | Legacy Ghostfolio session bearer token. | `replace-with-your-session-token` | None; one token mode is required |
+| `GHOST_TOKEN_EXPIRY_WARNING_DAYS` | No | Legacy token reminder window. `0` disables the reminder. | `14` | `14` |
+| `GHOST_HOST` | Yes | Ghostfolio base URL. | `http://ghostfolio:3333` | None; startup fails |
+| `GHOST_PLATFORM_ID` | No | Ghostfolio platform ID used when an account has no platform. | `replace-with-platform-id` | Empty; platform update skipped |
+| `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names, in IBKR account order. | `IBKR Individual,IBKR Joint` | IBKR account IDs |
+| `MAPPING_FILE` | No | ISIN-to-Yahoo ticker mapping YAML path. | `/app/mapping.yaml` | `mapping.yaml` |
+| `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
+| `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
+| `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
+| `LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. | `INFO` | `INFO` |
+| `APPRISE_URLS` | No | JSON list of Apprise notification URLs. | `[]` | Empty; notifications disabled |
+| `APPRISE_TIMEOUT` | No | Notification timeout in seconds, from 1 to 30. | `10` | `10` |
+| `DRY_RUN` | No | Simulation mode. Only `false`, `0`, `no`, or `off` request writes. | `true` | Simulation |
 
-## Mapping File
 
-The mapping file maps ISINs to Yahoo Finance ticker symbols. This is necessary because IBKR identifies securities by ISIN while Ghostfolio uses Yahoo Finance tickers for price data.
+## Mapping and reconciliation
+
+The mapping file maps ISINs to Yahoo Finance ticker symbols. It does not learn new mappings or rewrite itself. IBKR identifies securities by ISIN while Ghostfolio uses Yahoo Finance tickers for price data, so European listings often need a reviewed entry.
+
+Reconciliation is a separate runtime step. The connector uses source identities, existing activities, same-ISIN manual-entry matching, proximity rules, and a holdings gate before it selects imports. An unresolved ticker produces a warning or a failed activity subset; it does not silently create a mapping. Optional `ACTIVITY_REVIEW_FILE` can generate exact or probable one-to-one correction proposals, but a correction requires an explicit approval and qualified readback.
 
 ### Format
 
@@ -212,7 +215,7 @@ If you trade on `.JO` or `.TA` and amounts look 100 times off, check this table 
 ```bash
 docker run --rm --network your-ghostfolio-network \
   -e DRY_RUN=true \
-  -e TZ=Europe/Warsaw \
+  -e TZ=Europe/Paris \
   -e IBKR_TOKEN=your_token \
   -e IBKR_ACCOUNT_IDS=U1234567 \
   -e IBKR_QUERY_IDS=123456 \
@@ -249,7 +252,7 @@ write occurs. Other safety guards still apply.
 
 Set `DRY_RUN=1` explicitly for the preview. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
 
-Set a valid IANA `TZ`, such as `Europe/Warsaw`, even for one-off Docker runs.
+Set a valid IANA `TZ`, such as `Europe/Paris`, even for one-off Docker runs.
 Missing or invalid `TZ` forces every account into `DRY_RUN` before processing,
 with one WARNING explaining the reason. No activities, cash or platform are
 written. With explicit false `DRY_RUN`, the final notification includes the
@@ -338,7 +341,7 @@ failures still fail the run; diagnostic findings do not send notifications.
 
 ```bash
 docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
-  -e TZ=Europe/Warsaw \
+  -e TZ=Europe/Paris \
   -e IBKR_TOKEN=your_token -e IBKR_ACCOUNT_IDS=U1234567 -e IBKR_QUERY_IDS=123456 \
   -e GHOST_ACCESS_TOKEN=your_ghost_security_token -e GHOST_HOST=http://ghostfolio:3333 \
   -e GHOST_ACCOUNT_NAMES="IBKR Main" \
@@ -441,131 +444,24 @@ behaves exactly as without the feature. Older images ignore the variable.
 
 ## Docker Compose / Portainer
 
-For scheduled runs with multiple sub-accounts, run a separate container per account with staggered cron times. The `CRON` environment variable uses [supercronic](https://github.com/aptible/supercronic) internally.
+The repository root contains the canonical hardened [`compose.yaml`](../compose.yaml) and a safe [`.env.example`](../.env.example). Copy the environment file, edit the account-specific values, and validate the resolved model with `docker compose config --quiet` before starting a service.
 
-The image runs as the stable non-root UID/GID `10001:10001`. Before starting
-the container, make the host mapping file readable by that owner:
+For a first preview, run one account without its schedule:
+
+```bash
+docker compose run --rm -e CRON= ibkr-sync-individual
+```
+
+Keep `DRY_RUN=true` until the preview is understood. Set `DRY_RUN=false` only after a backup and a deliberate review. For recurring runs, set `CRON_INDIVIDUAL` and `CRON_JOINT` in `.env`, then run `docker compose up -d`. Use `10001:10001`, mode `0600`, and a read-only mapping mount as shown in the canonical file. Stagger schedules when several sub-accounts share one Ghostfolio instance.
+
+The image runs as the stable non-root UID/GID `10001:10001`. The mapping file must be readable by that user:
 
 ```bash
 chmod 0600 mapping.yaml
 sudo chown 10001:10001 mapping.yaml
 ```
 
-This works with the hardened profile's `cap_drop: [ALL]` and a read-only bind
-mount. `chmod o+r mapping.yaml` is an alternative only when no matching named user
-or group ACL entry denies read access. On POSIX ACL volumes, the ACL mask does
-not apply to `ACL_OTHER`; matching entries with no effective read permission
-deny access without falling through to `ACL_OTHER`. Check `getfacl mapping.yaml`.
-Running as UID 0 does not bypass those permissions after all capabilities are
-dropped. Use the same ownership for one-off Docker runs that bind-mount the file.
-
-Use exactly five fields separated by a single space or tab, containing only
-digits and `*`, `/`, `,`, `-` (for example `0 6 * * *` or `*/15 * * * *`).
-Named days/months, macros such as `@daily`, seconds fields and embedded commands
-are rejected. The entrypoint checks the grammar, then runs `supercronic -test`
-before starting the scheduler. Invalid schedules exit 1 with a fixed diagnostic;
-the supplied value and validator output are not logged. An unset or empty `CRON`
-still runs the sync once immediately.
-
-```yaml
-services:
-  ibkr-sync-individual:
-    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-    user: "10001:10001"
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-    environment:
-      TZ: Europe/Warsaw
-      DRY_RUN: "true"
-      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
-      IBKR_ACCOUNT_IDS: U1234567
-      IBKR_QUERY_IDS: 123456
-      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
-      GHOST_HOST: http://ghostfolio:3333
-      GHOST_ACCOUNT_NAMES: "IBKR Individual"
-      MAPPING_FILE: /app/mapping.yaml
-      CRON: "0 6 * * *"
-      # Optional: Failure in any mode; expiry/TZ summaries in explicit live mode.
-      # APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic"]'
-    volumes:
-      - ./mapping.yaml:/app/mapping.yaml:ro
-    networks:
-      - ghostfolio
-
-  ibkr-sync-joint:
-    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-    user: "10001:10001"
-    container_name: ghostfolio-ibkr-sync-joint
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-    environment:
-      TZ: Europe/Warsaw
-      DRY_RUN: "true"
-      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
-      IBKR_ACCOUNT_IDS: U7654321
-      IBKR_QUERY_IDS: 654321
-      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
-      GHOST_HOST: http://ghostfolio:3333
-      GHOST_ACCOUNT_NAMES: "IBKR Joint"
-      MAPPING_FILE: /app/mapping.yaml
-      CRON: "5 6 * * *"
-    volumes:
-      - ./mapping.yaml:/app/mapping.yaml:ro
-    networks:
-      - ghostfolio
-
-networks:
-  ghostfolio:
-    external: true
-```
-
-Both services select simulation explicitly. Review each preview, then change
-`DRY_RUN` to `"false"` in each service and recreate the containers to permit
-writes. Keep valid `TZ`; other safety guards still apply.
-
-Use `http://ghostfolio:3333` (internal Docker network hostname) rather than an external IP or localhost. Stagger the cron times by a few minutes so the two containers do not run simultaneously.
-
-Supply `IBKR_TOKEN` and `GHOST_ACCESS_TOKEN` through the environment used by
-Compose, a private `.env` file beside the Compose file, or Portainer stack
-environment variables. Do not put real credentials into the YAML. For a local
-`.env`, restrict permissions to its owner (`chmod 600 .env`) and keep it out of
-version control and shared backups/artifacts. Required-value interpolation
-refuses startup configuration when either credential is missing or empty.
-`docker compose config` can print resolved secrets: prefer `config --quiet`
-for validation and never share resolved output. Environment values are not a
-secret vault; administrators with Docker access can inspect them.
-Both services share these variables when their credentials are the same. If
-they differ, use separate required variables per service, for example
-`IBKR_TOKEN: ${IBKR_TOKEN_JOINT:?Set IBKR_TOKEN_JOINT}` and
-`GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN_JOINT:?Set GHOST_ACCESS_TOKEN_JOINT}`
-for the joint account, and supply those values through the same private sources.
-
-This example uses the recommended access-token mode. For legacy session-token
-mode, replace the `GHOST_ACCESS_TOKEN` line in **both** services with
-`GHOST_TOKEN: ${GHOST_TOKEN:?Set GHOST_TOKEN}` and do not set both modes.
-
-The read-only root keeps application code immutable. The private runtime
-crontab is generated under `/tmp`; its 16 MiB tmpfs is writable, non-executable
-and ephemeral. The sync itself does not write persistent files. Optional
-notification plugins may have their own storage requirements; verify your
-configured notifier before adopting a read-only root filesystem.
-Use a **published** image containing the `/tmp` crontab change: older images
-writing `/app/crontab` cannot run this hardened example. Merging the runtime
-change is not enough: wait for its image publication workflow to succeed, then
-pull and recreate the container. `:latest` remains the example's choice and
-follows the current stable release after the next-stable cutover; operators may
-instead select an available full version or a recorded digest for controlled
-upgrades. No deployment is changed automatically.
-
-This is a standalone sync stack for an existing Ghostfolio instance. Replace the credentials, account names and network name before deploying. In Portainer, use an absolute host path for `mapping.yaml` and give it owner `10001:10001` with mode `0600` as described above. The mount is read-only. A scheduled container waits for its first cron tick; remove `CRON` for an immediate one-off run. A separate stack does not wait for Ghostfolio readiness.
+The `CRON` value uses exactly five numeric fields. Named days/months, macros, seconds fields, and embedded commands are rejected before the scheduler starts. An empty `CRON` runs one sync immediately.
 
 ### Run once by hand in a scheduled container
 

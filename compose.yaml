@@ -1,0 +1,54 @@
+services:
+  ibkr-sync-individual:
+    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+      DRY_RUN: ${DRY_RUN:-true}
+      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
+      IBKR_ACCOUNT_IDS: ${IBKR_ACCOUNT_IDS_INDIVIDUAL:?Set IBKR_ACCOUNT_IDS_INDIVIDUAL}
+      IBKR_QUERY_IDS: ${IBKR_QUERY_IDS_INDIVIDUAL:?Set IBKR_QUERY_IDS_INDIVIDUAL}
+      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
+      GHOST_HOST: ${GHOST_HOST:-http://ghostfolio:3333}
+      GHOST_ACCOUNT_NAMES: ${GHOST_ACCOUNT_NAME_INDIVIDUAL:?Set GHOST_ACCOUNT_NAME_INDIVIDUAL}
+      MAPPING_FILE: /app/mapping.yaml
+      CRON: ${CRON_INDIVIDUAL:-0 6 * * *}
+    volumes:
+      - ./mapping.yaml:/app/mapping.yaml:ro
+    networks:
+      - ghostfolio
+
+  ibkr-sync-joint:
+    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+      DRY_RUN: ${DRY_RUN:-true}
+      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
+      IBKR_ACCOUNT_IDS: ${IBKR_ACCOUNT_IDS_JOINT:?Set IBKR_ACCOUNT_IDS_JOINT}
+      IBKR_QUERY_IDS: ${IBKR_QUERY_IDS_JOINT:?Set IBKR_QUERY_IDS_JOINT}
+      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
+      GHOST_HOST: ${GHOST_HOST:-http://ghostfolio:3333}
+      GHOST_ACCOUNT_NAMES: ${GHOST_ACCOUNT_NAME_JOINT:?Set GHOST_ACCOUNT_NAME_JOINT}
+      MAPPING_FILE: /app/mapping.yaml
+      CRON: ${CRON_JOINT:-5 6 * * *}
+    volumes:
+      - ./mapping.yaml:/app/mapping.yaml:ro
+    networks:
+      - ghostfolio
+
+networks:
+  ghostfolio:
+    external: true

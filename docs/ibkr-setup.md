@@ -220,7 +220,7 @@ this does not undo financial writes.
    cash rows for timezone-qualified `dateTime` values. Keep the accrual fields
    described above.
 3. Set `TZ` to the IANA timezone used to interpret Ghostfolio historical dates,
-   for example `Europe/Warsaw`. This is required for writes even without cron.
+   for example `Europe/Paris`. This is required for writes even without cron.
    Flex abbreviations such as `EST` and `EDT` are provenance, not the IANA `TZ`.
    Missing or invalid `TZ` forces the whole run into `DRY_RUN` before accounts
    run. One WARNING names the reason. The final notification also names it
