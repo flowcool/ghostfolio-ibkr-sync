@@ -8,14 +8,14 @@ Real IBKR records establish two forward splits and one reverse split with an ISI
 
 - Detect, explain and propose handling for corporate actions. Keep all corporate-action writes unavailable.
 - **BREAKING:** hold BUY/SELL for affected securities when identity or effective quantity is unproven. Hold all account BUY/SELL when the affected set cannot be bounded. Continue independent cash and unrelated work under existing guards.
-- **BREAKING:** require private persistent corporate-action state, initialized in simulation.
+- **BREAKING:** require CorporateActions in Flex and private persistent state initialized in simulation. A missing source section holds account BUY/SELL.
 - Release holds from fresh financial evidence, never acknowledgment. Cost/date differences alone do not require a quantity hold.
 - Report each run. Notify active holds each run, other findings on first appearance or change, and verified resumption.
 - Require observed stable Ghostfolio 3.91.0 minimum before accepting native split evidence. Version alone does not prove a case.
 
 ## Flex Record Scope
 
-This table comes from the saved real XML reports inspected on 2026-10-24. Container elements carry no additional financial meaning.
+This table comes from the saved real XML reports inspected on 2026-10-24. An empty CorporateActions section differs from a missing section.
 
 | Record | In scope | Out of scope |
 |---|---|---|
@@ -39,8 +39,8 @@ This table comes from the saved real XML reports inspected on 2026-10-24. Contai
 
 ## Impact
 
-Typed parsing, orchestration, effective holdings, private YAML state, authenticated reads and README configuration. Reuse current identity, cash and write-uncertainty guards. Shared Ghostfolio helper changes require a separate downstream propagation decision.
+Typed parsing, orchestration, effective holdings, retained source evidence, private YAML state, authenticated reads and setup guidance. Reuse current identity, cash and write-uncertainty guards. Shared Ghostfolio helper changes require a separate downstream propagation decision.
 
 ## Non-goals
 
-No split registration, activity repair, identifier remapping, historical conversion, new export acquisition, production action or sibling implementation. Proposal approval authorizes implementation planning only. Existing activity-review approvals cannot authorize corporate-action treatment or bypass its holds.
+No split registration, activity repair, identifier remapping, historical conversion, additional export format, mandatory OpenPositions, production action or sibling implementation. Proposal approval authorizes implementation planning only. Existing activity-review approvals cannot authorize corporate-action treatment or bypass its holds.
