@@ -14,7 +14,7 @@ The query lacks an attribute the connector requires, or the Change in Dividend A
 
 ## "TZ is missing" or "TZ is not a valid IANA timezone"
 
-The run logs `<reason>: whole run forced to DRY_RUN, no Ghostfolio writes`. Nothing is written for any account, and the run sends one notification naming the reason when `APPRISE_URLS` is set. Set `TZ` to an IANA zone such as `Europe/Warsaw` and recreate the container. The image sets no default `TZ`.
+The run logs `<reason>: whole run forced to DRY_RUN, no Ghostfolio writes`. Nothing is written for any account, and the run sends one notification naming the reason when `APPRISE_URLS` is set. Set `TZ` to an IANA zone such as `Europe/Paris` and recreate the container. The image sets no default `TZ`.
 
 ## "Duplicate Ghostfolio target"
 

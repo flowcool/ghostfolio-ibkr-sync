@@ -9,7 +9,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     environment:
-      TZ: ${TZ:-Europe/Zurich}
+      TZ: ${TZ:-Europe/Paris}
       DRY_RUN: ${DRY_RUN:-true}
       IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
       IBKR_ACCOUNT_IDS: ${IBKR_ACCOUNT_IDS_INDIVIDUAL:?Set IBKR_ACCOUNT_IDS_INDIVIDUAL}
@@ -34,7 +34,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     environment:
-      TZ: ${TZ:-Europe/Zurich}
+      TZ: ${TZ:-Europe/Paris}
       DRY_RUN: ${DRY_RUN:-true}
       IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
       IBKR_ACCOUNT_IDS: ${IBKR_ACCOUNT_IDS_JOINT:?Set IBKR_ACCOUNT_IDS_JOINT}

@@ -122,19 +122,29 @@ The landing page keeps only the settings needed to start. The complete reference
 - [Activity correction review](docs/activity-review.md)
 - [Cleanup and separately authorized maintenance](docs/cleanup.md)
 
-### Essential settings
+### Full settings
 
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `IBKR_TOKEN` | Flex Web Service token. | `replace-with-your-ibkr-flex-token` |
-| `IBKR_ACCOUNT_IDS`, `IBKR_QUERY_IDS` | One account/query pair per sub-account. | `U1234567` / `123456` |
-| `GHOST_ACCESS_TOKEN`, `GHOST_HOST` | Recommended Ghostfolio authentication and endpoint. Use exactly one token mode. | `replace-with-your-ghostfolio-security-token` / `http://ghostfolio:3333` |
-| `GHOST_ACCOUNT_NAMES` | Ghostfolio account names, in IBKR account order. | `IBKR Individual` |
-| `MAPPING_FILE` | Mapping YAML path. | `/app/mapping.yaml` |
-| `TZ` | Valid IANA timezone. Required to permit writes and scheduling. | `Europe/Zurich` |
-| `DRY_RUN` | Simulation by default. Set `false` deliberately to permit writes. | `true` |
-| `CRON` | Optional five-field Docker schedule. | `0 6 * * *` |
-| `ACTIVITY_REVIEW_FILE` | Optional persistent review file. Blank disables review. | `/review/activities.yaml` |
+The application reads these environment variables. `Required` describes startup or write requirements. `Default when unset` describes the application behavior; the Compose example may provide its own safe value.
+
+| Variable | Required | Explanation | Example | Default when unset |
+| --- | --- | --- | --- | --- |
+| `IBKR_TOKEN` | Yes | IBKR Flex Web Service token. | `replace-with-your-ibkr-flex-token` | None; startup fails |
+| `IBKR_ACCOUNT_IDS` | Yes | Comma-separated IBKR account IDs. | `U1234567,U7654321` | None; startup fails |
+| `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs, one per account. | `123456,654321` | None; startup fails |
+| `GHOST_ACCESS_TOKEN` | One of these two | Recommended Ghostfolio security token. The connector exchanges it for a session token at each run. | `replace-with-your-ghostfolio-security-token` | None; one token mode is required |
+| `GHOST_TOKEN` | One of these two | Legacy Ghostfolio session bearer token. It expires and needs renewal. | `replace-with-your-session-token` | None; one token mode is required |
+| `GHOST_TOKEN_EXPIRY_WARNING_DAYS` | No | Legacy token reminder window. `0` disables the reminder. | `14` | `14` |
+| `GHOST_HOST` | Yes | Ghostfolio base URL. | `http://ghostfolio:3333` | None; startup fails |
+| `GHOST_PLATFORM_ID` | No | Ghostfolio platform ID used when an account has no platform. | `replace-with-platform-id` | Empty; platform update skipped |
+| `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names, in IBKR account order. | `IBKR Individual,IBKR Joint` | IBKR account IDs |
+| `MAPPING_FILE` | No | ISIN-to-Yahoo ticker mapping YAML path. | `/app/mapping.yaml` | `mapping.yaml` |
+| `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
+| `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
+| `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
+| `LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. | `INFO` | `INFO` |
+| `APPRISE_URLS` | No | JSON list of Apprise notification URLs. | `[]` | Empty; notifications disabled |
+| `APPRISE_TIMEOUT` | No | Notification timeout in seconds, from 1 to 30. | `10` | `10` |
+| `DRY_RUN` | No | Simulation mode. Only `false`, `0`, `no`, or `off` request writes. | `true` | Simulation |
 
 Secrets belong in the environment or a private `.env` file with restricted permissions. Do not place them in Compose committed to Git. Use `docker compose config --quiet` for validation; resolved output can expose secrets.
 

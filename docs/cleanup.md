@@ -402,7 +402,7 @@ The following example uses synthetic identifiers and placeholder hashes:
 ```yaml
 schema: ibkr-migration-inputs-v1
 tool_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-timezone: Europe/Zurich
+timezone: Europe/Paris
 window: ["2026-01-01", "2026-01-31"]
 inventory_complete: true
 accounts:
