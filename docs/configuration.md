@@ -108,9 +108,11 @@ All configuration is done via environment variables:
 | `APPRISE_TIMEOUT` | No | Seconds allowed for one notification, integer 1-30 (default `10`) | `10` |
 | `DRY_RUN` | No | Since rc.2, absent/blank or `1`/`true`/`yes`/`on` simulates; only `0`/`false`/`no`/`off` requests writes. Spaces and case are ignored. Other values exit 1 before HTTP; only configured Apprise Failure delivery may follow. Simulation keeps login, reads and preview, without activity, cash or platform writes | `1` |
 
-## Mapping File
+## Mapping and reconciliation
 
-The mapping file maps ISINs to Yahoo Finance ticker symbols. This is necessary because IBKR identifies securities by ISIN while Ghostfolio uses Yahoo Finance tickers for price data.
+The mapping file maps ISINs to Yahoo Finance ticker symbols. It does not learn new mappings or rewrite itself. IBKR identifies securities by ISIN while Ghostfolio uses Yahoo Finance tickers for price data, so European listings often need a reviewed entry.
+
+Reconciliation is a separate runtime step. The connector uses source identities, existing activities, same-ISIN manual-entry matching, proximity rules, and a holdings gate before it selects imports. An unresolved ticker produces a warning or a failed activity subset; it does not silently create a mapping. Optional `ACTIVITY_REVIEW_FILE` can generate exact or probable one-to-one correction proposals, but a correction requires an explicit approval and qualified readback.
 
 ### Format
 

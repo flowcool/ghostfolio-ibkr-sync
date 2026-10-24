@@ -113,6 +113,7 @@ The connector needs Docker, Ghostfolio 2.248.0 or newer, IBKR Flex Web Service, 
 
 The landing page keeps only the settings needed to start. The complete reference covers authentication modes, every environment variable, mapping behavior, retries, notifications, Compose hardening, and one-off execution:
 
+- [Mapping and reconciliation](docs/configuration.md#mapping-and-reconciliation)
 - [Configuration reference](docs/configuration.md)
 - [IBKR Flex Query setup](docs/ibkr-setup.md)
 - [Troubleshooting and exit codes](docs/troubleshooting.md)
