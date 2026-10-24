@@ -42,11 +42,11 @@ def test_documentation_local_links_resolve(name):
 
 def test_readme_retains_onboarding_and_links_each_guide():
     text = (ROOT / 'README.md').read_text(encoding='utf-8')
-    for heading in ('Get started', 'Prerequisites', 'Configuration', 'Limitations'):
+    for heading in ('Quick start', 'Configuration', 'Limitations'):
         assert f'## {heading}\n' in text
     for guide in GUIDES:
         assert f'](docs/{guide})' in text
-    for moved_heading in ('### 2. Create a Flex Query', '### Exit codes'):
+    for moved_heading in ('## Get started', '## Prerequisites', '## Docker Compose / Portainer', '### Full settings', '### 2. Create a Flex Query', '### Exit codes'):
         assert moved_heading not in text
     assert 'python cleanup_duplicates.py --resume' not in text
 
