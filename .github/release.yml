@@ -6,8 +6,10 @@ changelog:
     - title: "Breaking changes and migration"
       labels:
         - breaking-change
+    - title: "Important compatibility changes"
+      labels:
         - compat
-    - title: "Features"
+    - title: "What's new"
       labels:
         - feature
     - title: "Fixes"

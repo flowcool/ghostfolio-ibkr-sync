@@ -30,7 +30,7 @@ The Flex report has a trade whose Buy/Sell value is not exactly `BUY` or `SELL`,
 
 ## "Not importing buy ... matches a manual Ghostfolio buy"
 
-An IBKR buy was **not** imported because Ghostfolio already has a buy of the same quantity within 2 days that has no `IBKR#` comment, so it is most likely the same purchase entered by hand. Importing it would double the position. Put `IBKR#<tradeID>` (the ID shown in the warning) in the comment of that manual entry and the warning goes away. If it was a different purchase, add the missing buy by hand. See [What the tool skips automatically](../README.md#what-the-tool-skips-automatically).
+An IBKR buy was **not** imported because Ghostfolio already has a buy of the same quantity within 2 days that has no `IBKR#` comment, so it is most likely the same purchase entered by hand. Importing it would double the position. Put `IBKR#<tradeID>` (the ID shown in the warning) in the comment of that manual entry and the warning goes away. If it was a different purchase, add the missing buy by hand. See [What the tool skips automatically](configuration.md#what-the-tool-skips-automatically).
 
 ## "Mapping file ... not found"
 
@@ -61,7 +61,7 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Flex query without the time-zone suffix or the required dividend fields, a refused cash balance (currency mismatch or no base currency), an unknown trade side, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
-With [failure notifications](../README.md#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run chosen with `DRY_RUN`, which never notifies. A run forced into `DRY_RUN` by a missing or invalid `TZ` does notify, even when every account succeeds. Delivery never changes the exit code.
+With [failure notifications](configuration.md#failure-notifications-apprise) configured, every exit-1 run sends one notification after all accounts were processed, except a dry run chosen with `DRY_RUN`, which never notifies. A run forced into `DRY_RUN` by a missing or invalid `TZ` does notify, even when every account succeeds. Delivery never changes the exit code.
 
 Unmapped ISINs are **not** a failure - they are reported at the end of the run as a prompt to update your mapping file, and the run still exits 0. Activities that Ghostfolio itself detects as duplicates are not a failure either. The tool logs `Ghostfolio created X of Y` and counts only submitted rows matched to the server-created activity list as imported. An unknown or unverifiable import outcome fails the account and blocks subsequent imports and processing of later queries targeting that account for the rest of the run.
 
@@ -81,7 +81,7 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
-With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](../README.md#1-choose-how-the-sync-authenticates) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
+With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](configuration.md#configuration-reference) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
 
 In legacy mode, startup reads the JWT's `exp` claim locally. Within **14 days** of
 expiry (including an already expired token), it logs a `WARNING` with the days

@@ -17,4 +17,4 @@ the 3.0 prerequisite policy.
 | [0007](0007-pinned-degiro-core.md) | Reviewed propagation to the pinned DEGIRO core |
 | [0008](0008-fail-account-on-missing-flex-prerequisite.md) | Missing Flex prerequisites fail the account; currency is checked after imports |
 
-[Back to development guidance](../../README.md#development).
+[Back to development guidance](../../README.md#development-and-contribution).

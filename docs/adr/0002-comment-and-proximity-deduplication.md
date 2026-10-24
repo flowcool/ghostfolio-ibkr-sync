@@ -99,7 +99,7 @@ Sources: `ghost_get_existing_orders` in the
 [`ghostfolio` module](../../ghostfolio_ibkr_sync/ghostfolio.py), `_dividend_date_matches` in the
 [`sync` module](../../ghostfolio_ibkr_sync/sync.py), `process_account` in the
 [`app` module](../../ghostfolio_ibkr_sync/app.py), and
-[conversion rules](../../README.md#how-activities-are-converted).
+[conversion rules](../configuration.md#how-activities-are-converted).
 
 The reader accepts a canonical v2 first line followed by exactly one blank
 separator line and preserved nonempty notes. Identity consumers compare the

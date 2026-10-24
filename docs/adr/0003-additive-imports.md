@@ -23,4 +23,4 @@ fresh ownership/occupancy checks, durable before/after intent and exact readback
 Preserve ID, account, owner, tags and notes. No fill aggregation, deletion or
 unreviewed repair is authorized. Correction failure fences later account writes,
 including cash/platform writes. Simulation consumes no approval and resolves no
-real journal. See the [workflow](../../README.md#activity-correction-review).
+real journal. See the [workflow](../activity-review.md).

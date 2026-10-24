@@ -35,4 +35,4 @@ behavior. The runtime is now the installed package
 
 DEGIRO keeps its pin on the last single-file source. See
 [0007](0007-pinned-degiro-core.md) for the propagation rule. See
-[Development](../../README.md#development).
+[Development](../../README.md#development-and-contribution).

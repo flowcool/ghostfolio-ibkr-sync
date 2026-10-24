@@ -15,8 +15,8 @@ Before you start:
   never moves `:latest`, `:X.Y.Z` or `:X.Y`. To test it on a scheduled Compose install, follow
   [Try a release candidate](#try-a-release-candidate).
 - Run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` after each change below, using the
-  [README preview command](../README.md#dry-run-first) (no `CRON`), or
-  [one manual run in your scheduled container](../README.md#run-once-by-hand-in-a-scheduled-container).
+  [README preview command](configuration.md#dry-run-first) (no `CRON`), or
+  [one manual run in your scheduled container](configuration.md#run-once-by-hand-in-a-scheduled-container).
 - Pause scheduled imports if the container runs live. On rc.2 or later, live
   mode requires explicit false `DRY_RUN`. Older images can also write when it
   is unset. With `DRY_RUN=true`, nothing is written, so keep the schedule running.
@@ -215,7 +215,7 @@ Trade <id> cannot be converted safely; excluded before holdings checks
   maintenance preservation or the actual rc.5 rollback image.
 - **Longer Flex waits.** A transient IBKR SendRequest error is retried (up to five attempts, 18 minutes of
   scheduled waits) and GetStatement polls up to 60 times (300 seconds). A failing run can take longer.
-  No ENV change is needed. See [Flex retry policy](../README.md#flex-retry-policy).
+  No ENV change is needed. See [Flex retry policy](configuration.md#flex-retry-policy).
 - **Dry-run dividend report wording.** Findings are plain English with a summary line
   `[DRY RUN] Dividend report: N to check, N informational, N noise` and a "Proposed match" section. If a
   script parses these logs, update it. Exit codes and notifications do not change. The report only
@@ -243,7 +243,7 @@ With `DRY_RUN` true, the candidate writes nothing.
    ```
 
 3. Run once by hand, with the same environment as the cron
-   ([README](../README.md#run-once-by-hand-in-a-scheduled-container)):
+   ([README](configuration.md#run-once-by-hand-in-a-scheduled-container)):
 
    ```bash
    docker exec <container> python -m ghostfolio_ibkr_sync
