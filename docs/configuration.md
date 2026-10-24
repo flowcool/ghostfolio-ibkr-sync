@@ -100,6 +100,8 @@ All configuration is done via environment variables:
 | `GHOST_PLATFORM_ID` | No | Ghostfolio platform ID used when an account has no platform. | `replace-with-platform-id` | Empty; platform update skipped |
 | `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names, in IBKR account order. | `IBKR Individual,IBKR Joint` | IBKR account IDs |
 | `MAPPING_FILE` | No | ISIN-to-Yahoo ticker mapping YAML path. | `/app/mapping.yaml` | `mapping.yaml` |
+| `CORPORATE_ACTION_STATE_FILE` | For BUY/SELL | Private persistent state, initialized in simulation. | `/state/corporate-actions.yaml` | Missing: trade hold and exit 1 |
+| `CORPORATE_ACTION_EVIDENCE_FILE` | No | Private official effective-date document bindings. | `/state/effective-dates.yaml` | Dates remain unproven |
 | `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
 | `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
 | `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
@@ -492,7 +494,7 @@ without a compatibility launcher, so update any script or note that calls it.
 - **No options support** - Ghostfolio does not support options as an asset class; options trades are skipped entirely
 - **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
-- **Stock splits and other corporate actions are not handled** - Ghostfolio keeps your transactions as they were, while Yahoo returns split-adjusted prices, so a split makes the valuation wrong until the old transactions are corrected by hand (multiply the quantity and divide the unit price by the ratio, and fix the stored market data). The Corporate Actions section of Flex reports is not parsed; it does not create split or merger activities.
+- **Corporate actions** - detection holds unsafe BUY/SELL. Treatment remains manual. See [persistent evidence, date proof and recovery](../README.md#corporate-action-safety).
 - **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. The Ghostfolio account must have the same currency as the IBKR base currency (see [Create accounts](#3-create-accounts)); the sync refuses to write the balance otherwise.
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.

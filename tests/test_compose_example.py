@@ -34,13 +34,15 @@ def test_compose_helper_rejects_missing_scheduled_example(monkeypatch, compose):
 def test_compose_services_use_read_only_hardening_and_tmpfs():
     services = compose_example()['services']
     assert len(services) == 2
-    for service in services.values():
+    for name, service in services.items():
         assert service['user'] == '10001:10001'
         assert service['read_only'] is True
         assert service['cap_drop'] == ['ALL']
         assert service['security_opt'] == ['no-new-privileges:true']
         assert service['tmpfs'] == ['/tmp:rw,noexec,nosuid,size=16m,mode=1777']
-        assert service['volumes'] == ['./mapping.yaml:/app/mapping.yaml:ro']
+        assert service['volumes'] == ['./mapping.yaml:/app/mapping.yaml:ro',
+                                      './state/' + ('joint' if name.endswith('joint') else 'individual') + ':/state']
+        assert service['environment']['CORPORATE_ACTION_STATE_FILE'] == '/state/corporate-actions.yaml'
         assert service['image'] == 'ghcr.io/flowcool/ghostfolio-ibkr-sync:latest'
 
 

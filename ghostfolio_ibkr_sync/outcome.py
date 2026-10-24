@@ -1,6 +1,6 @@
-"""Run outcome: fixed failure codes, counts and account ordinals, never error text."""
+"""Run-local failures and delivery bookkeeping; external summaries use fixed codes."""
 
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import requests
 
@@ -18,15 +18,17 @@ class RunOutcome(TypedDict):
     accounts_failed: int
     token_expiry_days: NotRequired[int]
     forced_preview: NotRequired[str]
+    corporate_notification: NotRequired[dict[str, Any]]
 
 
-# Allowed failure reasons per stage.  An outcome holds only these fixed codes,
-# counts and 1-based account ordinals - never an error text, URL, identifier or
-# amount - so it can be summarised outside the logs.
+# Allowed failure reasons per stage. External summaries use only these codes,
+# counts and 1-based ordinals. The corporate_notification field is private
+# delivery bookkeeping; its paths and fingerprints must never enter a summary.
 OUTCOME_REASONS = {
     "config": ("invalid_configuration",),
     "mapping": ("invalid_mapping",),
     "review": ("review_unavailable",),
+    "corporate_actions": ("trade_hold",),
     "ghost_auth": ("login_failed",),
     "ghost_startup": ("activities_unavailable", "token_rejected", "invalid_identity"),
     "account": ("account_failed", "unexpected_error"),

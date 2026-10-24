@@ -377,7 +377,7 @@ def test_evidence_incomplete_source_quantity_is_uncertain(monkeypatch, mode):
     ('fromDate="20260801" toDate="20260731"', None),
 ])
 def test_evidence_window_requires_explicit_valid_bounds(bounds, expected):
-    xml = report().replace("<FlexStatement>", f"<FlexStatement {bounds}>")
+    xml = report().replace('fromDate="20200101" toDate="20261231"', bounds)
     assert ibkr.historical_dividend_report_window(xml) == expected
 
 

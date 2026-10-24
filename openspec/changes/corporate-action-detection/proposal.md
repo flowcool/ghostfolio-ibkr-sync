@@ -9,6 +9,7 @@ Real IBKR records establish two forward splits and one reverse split with an ISI
 - Detect, explain and propose handling for corporate actions. Keep all corporate-action writes unavailable.
 - **BREAKING:** hold BUY/SELL for affected securities when identity or effective quantity is unproven. Hold all account BUY/SELL when the affected set cannot be bounded. Continue independent cash and unrelated work under existing guards.
 - **BREAKING:** require CorporateActions in Flex and private persistent state initialized in simulation. A missing source section holds account BUY/SELL.
+- Accept optional private, operator-verified effective-date evidence bound to an official source document and hash.
 - Release holds from fresh financial evidence, never acknowledgment. Cost/date differences alone do not require a quantity hold.
 - Report each run. Notify active holds each run, other findings on first appearance or change, and verified resumption.
 - Require observed stable Ghostfolio 3.91.0 minimum before accepting native split evidence. Version alone does not prove a case.

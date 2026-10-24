@@ -815,6 +815,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     remaining_previous = {key: item for key, item in original.items()
                           if (key, item["review revision"]) not in consumed}
     refreshed, held = refresh_proposals(remaining_previous, events, snapshot_rows(config), accounts, journal_bindings)
+    apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     approved, refreshed_blocked = approved_proposals(refreshed)
     blocked |= refreshed_blocked
     # Simulation cannot consume a proposal whose pending request now appears applied.
@@ -846,6 +847,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         assert_unchanged(state)
         fresh_rows = snapshot_rows(config)
         fresh, _ = refresh_proposals(refreshed, events, fresh_rows, accounts, journal_bindings)
+        apply_corporate_review_holds(config, fresh, fresh_rows)
         current = fresh.get(item["key"])
         if current is None or current["approve"] != "yes" or not current["actionable"]:
             log.error("Review evidence changed before dispatch; account %s blocked", account)
@@ -892,8 +894,26 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     # Rediscover new context and release reassigned alternatives after confirmed PUTs.
     if not simulated and executed:
         refreshed, _ = refresh_proposals(refreshed, events, snapshot_rows(config), accounts, journal_bindings)
+    apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     publish_review(state, {"version": 1, "proposals": refreshed})
     held = {item["source event"] for item in refreshed.values()} | unresolved_events
     if held:
         log.warning("Activity review holds %d source event(s); pending approvals remain in %s", len(held), state["path"])
     return blocked, held
+
+
+def apply_corporate_review_holds(config: dict[str, Any], proposals: dict[str, Any],
+                                rows: list[dict[str, Any]]) -> None:
+    # Import here because corporate_actions reuses the private-file primitives.
+    from ghostfolio_ibkr_sync.corporate_actions import candidate_held
+
+    reconcile = config.get("_corporate_reconcile")
+    if reconcile is None:
+        return
+    reconcile(rows)
+    for item in proposals.values():
+        decision = config.get("_corporate_decisions", {}).get(item.get("source account"))
+        proposed = item.get("proposed values")
+        if decision is not None and isinstance(proposed, dict) and candidate_held(decision, proposed):
+            item["actionable"] = False
+            item["status"] = "corporate-action evidence holds BUY/SELL"
