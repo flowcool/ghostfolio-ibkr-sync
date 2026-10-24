@@ -53,35 +53,38 @@ The pipeline reads the existing Ghostfolio activity set before selecting imports
 
 ### Quick start
 
-The fastest safe path is a Docker preview. Prepare the prerequisites first:
+The fastest safe path is a Docker Compose preview. Prepare the prerequisites first:
 
-- Ghostfolio **2.248.0 or newer**, reachable from the container.
+- Ghostfolio **2.248.0 or newer**, reachable from the Docker network.
 - An IBKR account with Flex Web Service enabled.
 - One Flex Query per IBKR sub-account, with a 365-day window and the fields listed in the [IBKR setup guide](docs/ibkr-setup.md).
 - A private Ghostfolio access token, a valid IANA `TZ`, and a reviewed `mapping.yaml`.
 
-1. Create one Ghostfolio account per IBKR sub-account. Match its name and base currency to the report. Follow [Ghostfolio setup](docs/configuration.md).
-2. Copy [`mapping.yaml.example`](mapping.yaml.example) to `mapping.yaml` and review every European or otherwise unmapped security.
-3. Run a preview with `DRY_RUN=1`:
+1. Copy the examples and edit the private environment file:
 
 ```bash
-docker run --rm --network your-ghostfolio-network \
-  -e DRY_RUN=1 \
-  -e TZ=Europe/Zurich \
-  -e IBKR_TOKEN=replace-with-your-ibkr-token \
-  -e IBKR_ACCOUNT_IDS=U1234567 \
-  -e IBKR_QUERY_IDS=123456 \
-  -e GHOST_ACCESS_TOKEN=replace-with-your-ghostfolio-security-token \
-  -e GHOST_HOST=http://ghostfolio:3333 \
-  -e GHOST_ACCOUNT_NAMES="IBKR Main" \
-  -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
-  ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
+cp .env.example .env
+cp mapping.yaml.example mapping.yaml
+chmod 600 .env mapping.yaml
 ```
 
-4. Inspect the logs. Confirm mappings, skipped rows, sell gates, dividend diagnostics, and the proposed cash balance.
-5. Back up Ghostfolio. Set `DRY_RUN=false` only after the preview is understood, then run once.
-6. For recurring imports, use the [Compose and Portainer example](docs/configuration.md). Keep writes explicit in every service.
+2. Set the IBKR account and query IDs, Ghostfolio account names, and tokens in `.env`. Remove the unused joint service from `compose.yaml` if you have one account.
+3. Validate the resolved Compose model without printing secrets:
 
+```bash
+docker compose config --quiet
+```
+
+4. Run one account in simulation and inspect the logs:
+
+```bash
+docker compose run --rm -e CRON= ibkr-sync-individual
+```
+
+5. Back up Ghostfolio. Set `DRY_RUN=false` only after the preview is understood, then run the same command once.
+6. For recurring imports, set `CRON_INDIVIDUAL` and `CRON_JOINT` in `.env`, then start the services with `docker compose up -d`. Use the [Compose and Portainer guide](docs/configuration.md) for permissions, scheduling, and multi-account details.
+
+The committed [`compose.yaml`](compose.yaml) and [`.env.example`](.env.example) are the canonical onboarding files. They use separate services for sub-accounts and keep credentials outside Git.
 The image starts with a simulation when `DRY_RUN` is absent or blank. Only `0`, `false`, `no`, or `off` request financial writes. Invalid values fail before HTTP calls. A missing or invalid `TZ` forces simulation. Read [upgrading to 3.0](docs/upgrading-to-3.0.md) before upgrading older installations.
 
 ## Docker image
@@ -120,16 +123,17 @@ The landing page keeps only the settings needed to start. The complete reference
 
 ### Essential settings
 
-| Variable | Purpose |
-| --- | --- |
-| `IBKR_TOKEN`, `IBKR_ACCOUNT_IDS`, `IBKR_QUERY_IDS` | Flex Web Service credentials and one account/query pair per sub-account. |
-| `GHOST_ACCESS_TOKEN` and `GHOST_HOST` | Recommended Ghostfolio authentication and endpoint. Use exactly one of `GHOST_ACCESS_TOKEN` or legacy `GHOST_TOKEN`. |
-| `GHOST_ACCOUNT_NAMES` | Optional comma-separated Ghostfolio account names, in the same order as IBKR accounts. |
-| `MAPPING_FILE` | Mapping YAML path. Default: `mapping.yaml`. |
-| `TZ` | Valid IANA timezone. Required to permit writes and used by scheduling. |
-| `DRY_RUN` | Default simulation. Set `false` deliberately to permit writes. |
-| `CRON` | Optional five-field schedule for Docker runs. |
-| `ACTIVITY_REVIEW_FILE` | Optional persistent review file. Blank disables activity review. |
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `IBKR_TOKEN` | Flex Web Service token. | `replace-with-your-ibkr-flex-token` |
+| `IBKR_ACCOUNT_IDS`, `IBKR_QUERY_IDS` | One account/query pair per sub-account. | `U1234567` / `123456` |
+| `GHOST_ACCESS_TOKEN`, `GHOST_HOST` | Recommended Ghostfolio authentication and endpoint. Use exactly one token mode. | `replace-with-your-ghostfolio-security-token` / `http://ghostfolio:3333` |
+| `GHOST_ACCOUNT_NAMES` | Ghostfolio account names, in IBKR account order. | `IBKR Individual` |
+| `MAPPING_FILE` | Mapping YAML path. | `/app/mapping.yaml` |
+| `TZ` | Valid IANA timezone. Required to permit writes and scheduling. | `Europe/Zurich` |
+| `DRY_RUN` | Simulation by default. Set `false` deliberately to permit writes. | `true` |
+| `CRON` | Optional five-field Docker schedule. | `0 6 * * *` |
+| `ACTIVITY_REVIEW_FILE` | Optional persistent review file. Blank disables review. | `/review/activities.yaml` |
 
 Secrets belong in the environment or a private `.env` file with restricted permissions. Do not place them in Compose committed to Git. Use `docker compose config --quiet` for validation; resolved output can expose secrets.
 
@@ -148,64 +152,7 @@ See the [detailed limitations and behavior reference](docs/configuration.md) and
 
 ## Docker Compose / Portainer
 
-Use one hardened service per IBKR sub-account. Stagger schedules. Keep `DRY_RUN` set to `"true"` until each preview is understood. The complete explanation is in the [configuration reference](docs/configuration.md).
-
-```yaml
-services:
-  ibkr-sync-individual:
-    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-    user: "10001:10001"
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-    environment:
-      TZ: Europe/Zurich
-      DRY_RUN: "true"
-      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
-      IBKR_ACCOUNT_IDS: U1234567
-      IBKR_QUERY_IDS: 123456
-      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
-      GHOST_HOST: http://ghostfolio:3333
-      GHOST_ACCOUNT_NAMES: "IBKR Individual"
-      MAPPING_FILE: /app/mapping.yaml
-      CRON: "0 6 * * *"
-    volumes:
-      - ./mapping.yaml:/app/mapping.yaml:ro
-    networks: [ghostfolio]
-
-  ibkr-sync-joint:
-    image: ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
-    user: "10001:10001"
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
-    environment:
-      TZ: Europe/Zurich
-      DRY_RUN: "true"
-      IBKR_TOKEN: ${IBKR_TOKEN:?Set IBKR_TOKEN}
-      IBKR_ACCOUNT_IDS: U7654321
-      IBKR_QUERY_IDS: 654321
-      GHOST_ACCESS_TOKEN: ${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}
-      GHOST_HOST: http://ghostfolio:3333
-      GHOST_ACCOUNT_NAMES: "IBKR Joint"
-      MAPPING_FILE: /app/mapping.yaml
-      CRON: "5 6 * * *"
-    volumes:
-      - ./mapping.yaml:/app/mapping.yaml:ro
-    networks: [ghostfolio]
-
-networks:
-  ghostfolio:
-    external: true
-```
-
-Supply credentials through a private environment or `.env` file. Do not commit resolved secrets. Change `DRY_RUN` to `"false"` only after reviewing both previews.
+The repository provides a hardened [`compose.yaml`](compose.yaml) and a safe [`.env.example`](.env.example). Copy the environment example, edit account-specific values, validate with `docker compose config --quiet`, and run the preview command from [Quick start](#quick-start). Keep `DRY_RUN=true` until each account preview is understood. The [configuration reference](docs/configuration.md) explains file ownership, scheduling, and Portainer deployment.
 
 ## Releases and project status
 
