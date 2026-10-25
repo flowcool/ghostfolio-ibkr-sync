@@ -53,7 +53,7 @@
     {
       "description": "Python interpreter migrations remain a separate reviewed change.",
       "matchManagers": ["pep621"],
-      "matchPackageNames": ["python"],
+      "matchDepTypes": ["requires-python"],
       "enabled": false
     },
     {
