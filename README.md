@@ -49,12 +49,11 @@ flowchart LR
 
 The pipeline reads the existing Ghostfolio activity set before selecting imports. A simulation still authenticates, fetches reports, and evaluates the complete decision. It sends no activity, cash, platform, or correction write.
 
-## Get started
+## Quick start
 
-### Quick start
+The fastest safe path is a Docker Compose preview. Prepare these prerequisites:
 
-The fastest safe path is a Docker Compose preview. Prepare the prerequisites first:
-
+- Docker Compose, with the repository [`compose.yaml`](compose.yaml).
 - Ghostfolio **2.248.0 or newer**, reachable from the Docker network.
 - An IBKR account with Flex Web Service enabled.
 - One Flex Query per IBKR sub-account, with a 365-day window and the fields listed in the [IBKR setup guide](docs/ibkr-setup.md).
@@ -86,10 +85,9 @@ docker compose run --rm -e CRON= ibkr-sync-individual
 ```
 
 5. Confirm that the simulation initialized corporate-action state and has no unresolved hold. Review its bounded event inventory; available report windows cannot prove lifetime coverage. Back up Ghostfolio. Set `DRY_RUN=false` only after the preview is understood, then run the same command once.
-6. For recurring imports, set `CRON_INDIVIDUAL` and `CRON_JOINT` in `.env`, then start the services with `docker compose up -d`. Use the [Compose and Portainer guide](docs/configuration.md) for permissions, scheduling, and multi-account details.
+6. For recurring imports, set `CRON_INDIVIDUAL` and `CRON_JOINT` in `.env`, then start the services with `docker compose up -d`. The [configuration reference](docs/configuration.md) covers permissions, scheduling, Portainer deployment, and multi-account details.
 
-The committed [`compose.yaml`](compose.yaml) and [`.env.example`](.env.example) are the canonical onboarding files. They use separate services for sub-accounts and keep credentials outside Git.
-The image starts with a simulation when `DRY_RUN` is absent or blank. Only `0`, `false`, `no`, or `off` request financial writes. Invalid values fail before HTTP calls. A missing or invalid `TZ` forces simulation. Read [upgrading to 3.0](docs/upgrading-to-3.0.md) before upgrading older installations.
+The committed [`compose.yaml`](compose.yaml) and [`.env.example`](.env.example) are the canonical onboarding files. They use separate services for sub-accounts and keep credentials outside Git. The image starts with a simulation when `DRY_RUN` is absent or blank. Only `0`, `false`, `no`, or `off` request financial writes. Invalid values fail before HTTP calls. A missing or invalid `TZ` forces simulation. Read [upgrading to 3.0](docs/upgrading-to-3.0.md) before upgrading older installations.
 
 ## Docker image
 
@@ -109,9 +107,6 @@ Financial records can change. Back up Ghostfolio before the first import and bef
 
 Read [activity correction review](docs/activity-review.md) and [release qualification](docs/releasing.md#activity-review-qualification) before enabling that optional workflow.
 
-## Prerequisites
-
-The connector needs Docker, Ghostfolio 2.248.0 or newer, IBKR Flex Web Service, one 365-day Flex Query per sub-account, a valid IANA timezone, and a reviewed mapping file. See [IBKR setup](docs/ibkr-setup.md) and [Ghostfolio setup](docs/configuration.md).
 
 ## Configuration
 
@@ -126,31 +121,21 @@ The landing page keeps only the settings needed to start. The complete reference
 - [Activity correction review](docs/activity-review.md)
 - [Cleanup and separately authorized maintenance](docs/cleanup.md)
 
-### Full settings
+### Essential settings
 
-The application reads these environment variables. `Required` describes startup or write requirements. `Default when unset` describes the application behavior; the Compose example may provide its own safe value.
+Set the required credentials and target details in `.env`. The [full configuration reference](docs/configuration.md#configuration-reference) lists every variable, default, notification option, review setting, and operational detail.
 
-| Variable | Required | Explanation | Example | Default when unset |
-| --- | --- | --- | --- | --- |
-| `IBKR_TOKEN` | Yes | IBKR Flex Web Service token. | `replace-with-your-ibkr-flex-token` | None; startup fails |
-| `IBKR_ACCOUNT_IDS` | Yes | Comma-separated IBKR account IDs. | `U1234567,U7654321` | None; startup fails |
-| `IBKR_QUERY_IDS` | Yes | Comma-separated Flex Query IDs, one per account. | `123456,654321` | None; startup fails |
-| `GHOST_ACCESS_TOKEN` | One of these two | Recommended Ghostfolio security token. The connector exchanges it for a session token at each run. | `replace-with-your-ghostfolio-security-token` | None; one token mode is required |
-| `GHOST_TOKEN` | One of these two | Legacy Ghostfolio session bearer token. It expires and needs renewal. | `replace-with-your-session-token` | None; one token mode is required |
-| `GHOST_TOKEN_EXPIRY_WARNING_DAYS` | No | Legacy token reminder window. `0` disables the reminder. | `14` | `14` |
-| `GHOST_HOST` | Yes | Ghostfolio base URL. | `http://ghostfolio:3333` | None; startup fails |
-| `GHOST_PLATFORM_ID` | No | Ghostfolio platform ID used when an account has no platform. | `replace-with-platform-id` | Empty; platform update skipped |
-| `GHOST_ACCOUNT_NAMES` | No | Comma-separated Ghostfolio account names, in IBKR account order. | `IBKR Individual,IBKR Joint` | IBKR account IDs |
-| `MAPPING_FILE` | No | ISIN-to-Yahoo ticker mapping YAML path. | `/app/mapping.yaml` | `mapping.yaml` |
-| `CORPORATE_ACTION_STATE_FILE` | For BUY/SELL | Private persistent corporate-action state path. Initialize in simulation. | `/state/corporate-actions.yaml` | Missing: BUY/SELL held, exit 1 |
-| `CORPORATE_ACTION_EVIDENCE_FILE` | No | Private effective-date facts linked to official source documents. | `/state/effective-dates.yaml` | Missing dates remain unproven |
-| `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
-| `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
-| `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
-| `LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. | `INFO` | `INFO` |
-| `APPRISE_URLS` | No | JSON list of Apprise notification URLs. | `[]` | Empty; notifications disabled |
-| `APPRISE_TIMEOUT` | No | Notification timeout in seconds, from 1 to 30. | `10` | `10` |
-| `DRY_RUN` | No | Simulation mode. Only `false`, `0`, `no`, or `off` request writes. | `true` | Simulation |
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `IBKR_TOKEN` | IBKR Flex Web Service token. | `replace-with-your-ibkr-flex-token` |
+| `IBKR_ACCOUNT_IDS` / `IBKR_QUERY_IDS` | Comma-separated account and Flex Query IDs, in matching order. | `U1234567` / `123456` |
+| `GHOST_ACCESS_TOKEN` | Recommended Ghostfolio security token. | `replace-with-your-ghostfolio-security-token` |
+| `GHOST_HOST` | Ghostfolio base URL reachable by the container. | `http://ghostfolio:3333` |
+| `GHOST_ACCOUNT_NAMES` | Target account names, in IBKR account order. | `IBKR Individual` |
+| `MAPPING_FILE` | ISIN-to-Yahoo ticker mapping file. | `/app/mapping.yaml` |
+| `CORPORATE_ACTION_STATE_FILE` | Persistent private state required for BUY/SELL. Initialize it in simulation. | `/state/corporate-actions.yaml` |
+| `TZ` | IANA timezone required for writes and scheduling. | `Europe/Paris` |
+| `DRY_RUN` | Simulation by default; set `false` deliberately to request writes. | `true` |
 
 Secrets belong in the environment or a private `.env` file with restricted permissions. Do not place them in Compose committed to Git. Use `docker compose config --quiet` for validation; resolved output can expose secrets.
 
@@ -288,9 +273,6 @@ revert alone cannot undo rotation or restore financial data.
 
 See the [detailed limitations and behavior reference](docs/configuration.md) and [troubleshooting](docs/troubleshooting.md).
 
-## Docker Compose / Portainer
-
-The repository provides a hardened [`compose.yaml`](compose.yaml) and a safe [`.env.example`](.env.example). Copy the environment example, edit account-specific values, validate with `docker compose config --quiet`, and run the preview command from [Quick start](#quick-start). Keep `DRY_RUN=true` until each account preview is understood. The [configuration reference](docs/configuration.md) explains file ownership, scheduling, and Portainer deployment.
 
 ## Releases and project status
 
