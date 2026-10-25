@@ -530,6 +530,13 @@ def test_retention_reporting_cleanup_warning_is_not_a_financial_failure(tmp_path
 def test_retention_longevity_ten_year_daily_and_high_frequency(tmp_path, monkeypatch, daily):
     from datetime import UTC, datetime, timedelta
     from ghostfolio_ibkr_sync import corporate_actions as ca
+    import yaml
+
+    # Only accelerate YAML token parsing/emission in this endurance scenario.
+    # Keep custom node validation, every iteration, real files and all fsyncs.
+    # The other recovery/serialization tests use the production Python codec.
+    monkeypatch.setattr(yaml, "SafeLoader", getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+    monkeypatch.setattr(yaml, "SafeDumper", getattr(yaml, "CSafeDumper", yaml.SafeDumper))
 
     tmp_path.chmod(0o700)
     origin = datetime(2026, 1, 1, tzinfo=UTC)

@@ -84,9 +84,11 @@ Release triggers `release-image.yml`. It requires an exact `vX.Y.Z` tag without
 leading zeros on main and refuses an existing `:X.Y.Z` or an uncertain registry
 response. Select an unused version; do not replace an already published tag.
 
-Check the release workflow logs: both native runtime checks and security gates
-must pass, published configuration digests must match the tested images, and
-both architectures must match the assembled manifest. Only the current stable
+Check the release workflow logs: a new build must pass both native runtime and
+security gates, with published configuration digests matching the checked images.
+Promotion from an RC must verify its signed artifact and accepted lab record,
+then copy the exact index. The original RC run must supply the native build
+checks. Both architectures must match. Only the current stable
 release advances `:latest`. Check that the release notes show the head text and
 generated list. Fill in "Published artifacts" with the workflow link, version
 and verified manifest digest from its `release-manifest` artifact.
@@ -134,6 +136,58 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
      --title "vX.Y.Z — <short summary>" --notes-file head.md --generate-notes
    ```
 
+### Preserve the qualified digest
+
+For stable publication with an RC, the workflow copies the highest RC index.
+Stable and latest must have the same digest as that qualified RC. It does not
+rebuild either architecture. `APP_VERSION` and OCI version labels retain the RC
+tag. Changing those values would change the accepted image bytes.
+
+Before publishing stable, a maintainer reviews both lab result files and attaches
+one `lab-qualification.json` asset to the RC prerelease. This record attests the
+maintainer's acceptance. The workflow can verify the record and its binding to
+the signed image. It cannot independently prove that a lab run occurred. Keep the
+private runner evidence. Use this exact schema; replace every placeholder:
+
+```json
+{
+  "schema": 1,
+  "repository": "flowcool/ghostfolio-ibkr-sync",
+  "rc_tag": "vX.Y.Z-rc.N",
+  "commit": "<40-character release commit>",
+  "digest": "sha256:<qualified index hash>",
+  "native": {
+    "amd64": "sha256:<amd64 manifest hash>",
+    "arm64": "sha256:<arm64 manifest hash>"
+  },
+  "labs": {
+    "empty": {"status": "PASS", "cleanup": "stopped", "evidence_sha256": "<result.json SHA-256>"},
+    "golden": {"status": "PASS", "cleanup": "stopped", "evidence_sha256": "<result.json SHA-256>"}
+  }
+}
+```
+
+Hash the retained final `result.json` from each versioned lab runner invocation.
+Require both results to name this image digest, report successful acceptance,
+and confirm stopped cleanup. Do not attest a failed or incomplete run. Copy the
+native manifest hashes from the signed index. Do not include credentials,
+private paths or host names. Under the recorded release authorization, attach it:
+
+```bash
+gh release upload vX.Y.Z-rc.N lab-qualification.json
+```
+
+The stable workflow rejects a missing, malformed or mismatched record. It checks
+the RC signature, both native source revisions and version labels, the immutable
+index and the RC tag digest before writing. It rechecks the qualification record
+and the one-time stable tag guard, then reads back stable and latest digests.
+A partial write stops promotion. Do not overwrite a version to recover it.
+
+The workflow in the **tagged commit** controls release publication. Merging new
+tooling does not change an older RC's workflow. Such an RC needs a separately
+authorized recovery operation, or a new RC that includes this tooling and passes
+both labs. This preparation grants no stable publication or deployment authority.
+
 What the workflow refuses:
 
 - Any prerelease tag that is not an exact `vX.Y.Z-rc.N` (for example `-beta.1`,
@@ -156,6 +210,40 @@ suffix that marks a separate compatibility track. The page does not mention
 prereleases or `-rc.` tags, and does not say explicitly that a plain `X.Y.Z` is
 not offered a suffixed variant. This is an inference from the suffix rule;
 consumers who need certainty should check their Renovate dry-run output.
+
+## Publish an older qualified RC
+
+An RC can predate the workflow that copies its digest. Under an explicit stable
+publication GO, use `recover-release-image.yml` from main. This operation does
+not rebuild or deploy. The exact accepted digest keeps its existing lab proof.
+
+1. Verify the retained RC build, signature, native manifests and both successful
+   stopped lab runs. Attach the qualification record described above.
+2. Record the current latest digest as the expected rollback target. Prepare one
+   non-prerelease draft named `vX.Y.Z`, with `--target` set to the exact highest
+   RC commit. Include the complete stable changelog, accepted digest, retained
+   RC APP_VERSION and qualification limits. Do not create the stable tag yet.
+3. Dispatch the reviewed executor on main:
+
+   ```bash
+   gh workflow run recover-release-image.yml --ref main \
+     -f tag=vX.Y.Z -f digest=sha256:<qualified-index> \
+     -f previous_digest=sha256:<current-latest>
+   ```
+
+The executor verifies all image evidence before writes. It refuses an existing
+stable tag/version, a changed latest digest, a changed current stable release or
+a newer/equal stable version. It creates the annotated stable tag and publishes
+the prepared draft with the repository GITHUB_TOKEN. GitHub does not trigger
+other workflows from these token-originated writes, so the older release build
+cannot run. It then uses the real published release response and the accepted
+source checkout for the existing promotion guards. It reads back stable/latest
+and retains a `qualified-release-recovery` artifact. Inspect that proof and the
+public release notes. This workflow is for the initial publication only.
+
+After a failed or uncertain write, stop and inspect actual tag, release and
+registry state. Do not rerun this initial-publication workflow or overwrite a
+version. A partially published version uses the explicit digest recovery below.
 
 ## Recover a failed latest promotion
 
