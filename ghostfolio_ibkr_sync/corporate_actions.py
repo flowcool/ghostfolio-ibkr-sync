@@ -11,7 +11,7 @@ import os
 import re
 import stat
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, DecimalException
 from fractions import Fraction
 from pathlib import Path
@@ -270,6 +270,9 @@ class Store(TypedDict):
     verified: dict[str, tuple[int, int, int, int, int]]
     inventories: dict[str, Inventory]
     bindings: dict[str, tuple[tuple[int, int, int, int, int], dict[str, Any]]]
+    references: dict[str, Any] | None
+    reference_original: bytes | None
+    maintenance_warning: bool
 
 
 def private_directory(path: Path) -> None:
@@ -294,7 +297,8 @@ def open_store(filename: str, input_files: list[str], *, simulation: bool) -> St
     inputs = [Path(item).absolute() for item in input_files if item]
     evidence = Path(str(path) + ".evidence")
     lock_path = Path(str(path) + ".lock")
-    for target in (path, lock_path):
+    for target in (path, lock_path, Path(str(path) + ".references.yaml"),
+                   Path(str(path) + ".rotation")):
         safe_path(target, inputs)
     # Delivery-state failures alone do not affect financial decisions. Only an
     # actual output/input collision is a configuration failure here.
@@ -343,6 +347,9 @@ def open_store(filename: str, input_files: list[str], *, simulation: bool) -> St
             "verified": {},
             "inventories": {},
             "bindings": {},
+            "references": None,
+            "reference_original": file_bytes(Path(str(path) + ".references.yaml")),
+            "maintenance_warning": False,
         }
     except BaseException:
         os.close(fd)
@@ -424,77 +431,400 @@ def retained_binding(store: Store, path: Path) -> dict[str, Any]:
     return result
 
 
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def report_facts(report: Inventory) -> list[str]:
+    """Exact decision inputs, excluding XML generation metadata and window overlap."""
+    facts = {fingerprint({"event": key, "rows": sorted(fingerprint(row) for row in event["rows"])})
+             for key, event in report["events"].items()}
+    for kind in ("trades", "cash", "positions"):
+        for row in report[kind]:
+            # Position observations are dated independent quantity anchors.
+            facts.add(fingerprint({"kind": kind, "row": row,
+                                   "date": report["period"][1] if kind == "positions" else None}))
+    facts.add(fingerprint({"section": report["section_present"],
+                           "trades": report["trades_present"],
+                           "held": report["account_held"]}))
+    return sorted(facts)
+
+
+def report_dependencies(report: Inventory) -> dict[str, Any]:
+    """Bind row facts to source identities so unrelated history can rotate."""
+    scopes: dict[str, list[str]] = {}
+    for kind in ("trades", "cash", "positions"):
+        for row in report[kind]:
+            fact = fingerprint({"kind": kind, "row": row,
+                                "date": report["period"][1] if kind == "positions" else None})
+            scopes[fact] = [field + ":" + row[field] for field in ("conid", "isin", "symbol", "actionID") if row.get(field)]
+    identities = {field + ":" + row[field] for event in report["events"].values()
+                  for row in event["rows"] for field in ("conid", "isin", "symbol", "actionID") if row.get(field)}
+    event_scopes = {key: sorted({field + ":" + row[field] for row in event["rows"]
+                                for field in ("conid", "isin", "symbol", "actionID") if row.get(field)})
+                    for key, event in report["events"].items()}
+    positions = {fingerprint({"kind": "positions", "row": row, "date": report["period"][1]}):
+                 report["period"][1] for row in report["positions"]}
+    return {"rows": scopes, "identities": sorted(identities), "positions": positions,
+            "event_scopes": event_scopes,
+            "unbounded": report["account_held"]}
+
+
+def acquisition_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """New bindings own their source summary; only legacy bindings need a companion."""
+    summary: dict[str, Any] = record["binding"] if record["binding"]["schema"] == 2 else record["summary"]
+    return summary
+
+
+def safety_facts(record: dict[str, Any], identities: set[str], unbounded: bool,
+                 anchor_dates: dict[str, str | None]) -> set[str]:
+    scopes = acquisition_summary(record)["dependencies"]["rows"]
+    facts = {fact for fact in acquisition_summary(record)["facts"]
+             if unbounded or fact not in scopes or identities.intersection(scopes[fact])}
+    if not unbounded:
+        for fact, day in acquisition_summary(record)["dependencies"]["positions"].items():
+            dates = [anchor_dates[identity] for identity in scopes[fact] if identity in anchor_dates]
+            if dates and all(value is not None for value in dates):
+                first = min(value for value in dates if value is not None)
+                if day >= first.replace("-", ""):
+                    # source_chain uses only independent positions before the first event.
+                    facts.discard(fact)
+    return facts
+
+
+def source_anchor_dates(records: dict[str, Any], mapping: dict[str, str],
+                        dates: dict[tuple[str, str], str]) -> dict[str, dict[str, str | None]]:
+    result: dict[str, dict[str, str | None]] = {}
+    for record in records.values():
+        source = record["binding"]["source"]
+        limits = result.setdefault(source, {})
+        for key, values in acquisition_summary(record)["dependencies"]["event_scopes"].items():
+            scope = set(values)
+            symbols = {mapping[value[5:]] for value in scope
+                       if value.startswith("isin:") and value[5:] in mapping}
+            scope.update("isin:" + isin for isin, symbol in mapping.items() if symbol in symbols)
+            day = dates.get((source, key))
+            for identity in scope:
+                if identity not in limits:
+                    limits[identity] = day
+                elif day is None or limits[identity] is None:
+                    limits[identity] = None
+                else:
+                    limits[identity] = min(str(limits[identity]), day)
+    return result
+
+
+def read_report(store: Store, key: str, binding: dict[str, Any]) -> Inventory:
+    fields = {"schema", "source", "query", "sha256", "period", "mapping"}
+    if binding.get("schema") == 2:
+        fields |= {"acquired", "facts", "events", "dependencies"}
+    if (not re.fullmatch(r"[0-9a-f]{64}", key)
+            or set(binding) != fields
+            or type(binding["schema"]) is not int or binding["schema"] not in (1, 2)
+            or fingerprint(binding) != key
+            or not isinstance(binding["sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", binding["sha256"])):
+        raise RuntimeError("Invalid retained corporate-action binding")
+    binding_path = store["evidence"] / (key + ".yaml")
+    if not binding_path.is_file() or retained_binding(store, binding_path) != binding:
+        raise RuntimeError("Missing retained corporate-action binding")
+    obj = store["evidence"] / (binding["sha256"] + ".xml")
+    safe_path(obj, store["inputs"])
+    if not obj.is_file():
+        raise RuntimeError("Missing retained corporate-action source")
+    signature = object_signature(obj)
+    digest = binding["sha256"]
+    if digest in store["verified"]:
+        if store["verified"][digest] != signature:
+            raise RuntimeError("Retained corporate-action source hash changed during this run")
+        result = store["inventories"][digest]
+    else:
+        data = obj.read_bytes()
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise RuntimeError("Retained corporate-action source hash changed")
+        result = parse_report(store, data.decode(), binding["source"])
+        store["verified"][digest] = signature
+    if result["source"] != binding["source"]:
+        raise RuntimeError("Retained corporate-action source binding changed")
+    if result["period"] != binding["period"] or not result["section_present"]:
+        raise RuntimeError("Retained corporate-action scope changed")
+    if binding["schema"] == 2 and (binding["facts"] != report_facts(result)
+            or binding["events"] != bool(result["events"])
+            or binding["dependencies"] != report_dependencies(result)):
+        raise RuntimeError("Retained corporate-action acquisition facts changed")
+    return result
+
+
+def reference_path(store: Store) -> Path:
+    return Path(str(store["path"]) + ".references.yaml")
+
+
+def publish_references(store: Store, references: dict[str, Any]) -> None:
+    """A committed generation is authoritative even if mutable findings are lost."""
+    check_store(store)
+    path = reference_path(store)
+    safe_path(path, store["inputs"])
+    if file_bytes(path) != store["reference_original"]:
+        raise RuntimeError("Corporate-action references changed during this run")
+    references = {**references, "generation": references["generation"] + 1}
+    try:
+        data = atomic_yaml(path, references)
+    except OSError:
+        # A directory-sync error can occur after replacement. Keep the complete
+        # published generation in memory, but do not proceed with deletion.
+        observed = file_bytes(path)
+        if observed is not None and read_yaml(observed) == references:
+            store["reference_original"] = observed
+            store["references"] = references
+        raise
+    if file_bytes(path) != data:
+        raise RuntimeError("Corporate-action reference publication failed")
+    store["reference_original"] = data
+    store["references"] = references
+    # If the index is subsequently lost, old orphan bindings cannot resurrect.
+    immutable_object(Path(str(store["path"]) + ".rotation"), b"version: 1\n", store["inputs"])
+
+
+def load_references(store: Store) -> dict[str, Any]:
+    if store["references"] is not None:
+        return store["references"]
+    raw = store["reference_original"]
+    if raw is not None:
+        references = read_yaml(raw)
+        if (set(references) != {"version", "generation", "records", "safety", "pending", "last"}
+                or type(references["version"]) is not int or references["version"] != 1
+                or type(references["generation"]) is not int or references["generation"] < 0
+                or not isinstance(references["records"], dict)
+                or not isinstance(references["safety"], list)
+                or not isinstance(references["pending"], list)
+                or not isinstance(references["last"], dict)
+                or any(not isinstance(key, str) or key not in references["records"]
+                       for key in references["safety"])):
+            raise RuntimeError("Invalid corporate-action reference generation")
+        for key, record in references["records"].items():
+            if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)
+                    or not isinstance(record, dict)
+                    or set(record) - {"binding", "acquired", "summary"}
+                    or not isinstance(record.get("binding"), dict)
+                    or fingerprint(record["binding"]) != key):
+                raise RuntimeError("Invalid corporate-action reference record")
+            binding = record["binding"]
+            if (not {"source", "query", "mapping", "sha256", "period", "schema"} <= binding.keys()
+                    or any(not isinstance(binding[field], str)
+                           for field in ("source", "query", "mapping", "sha256"))
+                    or type(binding["schema"]) is not int or binding["schema"] not in (1, 2)
+                    or not isinstance(binding["period"], list) or len(binding["period"]) != 2
+                    or any(not isinstance(day, str) for day in binding["period"])):
+                raise RuntimeError("Invalid corporate-action reference binding")
+            try:
+                start, end = (datetime.strptime(day, "%Y%m%d") for day in binding["period"])
+                if start > end:
+                    raise ValueError
+            except ValueError:
+                raise RuntimeError("Invalid corporate-action reference period") from None
+            if binding["schema"] == 1 and not isinstance(record.get("summary"), dict):
+                raise RuntimeError("Invalid legacy corporate-action summary")
+            summary = acquisition_summary(record)
+            if (not {"facts", "events", "dependencies"} <= summary.keys()
+                    or not isinstance(summary["facts"], list)
+                    or any(not isinstance(fact, str) for fact in summary["facts"])
+                    or type(summary["events"]) is not bool
+                    or not isinstance(summary["dependencies"], dict)
+                    or set(summary["dependencies"]) != {"rows", "identities", "unbounded", "positions", "event_scopes"}
+                    or any(not isinstance(summary["dependencies"][field], dict)
+                           for field in ("rows", "positions", "event_scopes"))
+                    or not isinstance(summary["dependencies"]["identities"], list)
+                    or type(summary["dependencies"]["unbounded"]) is not bool
+                    or any(not isinstance(item, str) for item in summary["dependencies"]["identities"])):
+                raise RuntimeError("Invalid corporate-action acquisition summary")
+            for field in ("rows", "event_scopes"):
+                for identity, values in acquisition_summary(record)["dependencies"][field].items():
+                    if (not isinstance(identity, str) or not isinstance(values, list)
+                            or any(not isinstance(item, str) for item in values)):
+                        raise RuntimeError("Invalid corporate-action reference identities")
+            for fact, day in acquisition_summary(record)["dependencies"]["positions"].items():
+                if (not isinstance(fact, str) or fact not in acquisition_summary(record)["dependencies"]["rows"]
+                        or not isinstance(day, str) or not re.fullmatch(r"[0-9]{8}", day)):
+                    raise RuntimeError("Invalid corporate-action reference position")
+        if any(not isinstance(last, dict) or not {"key", "identity"} <= last.keys()
+               for last in references["last"].values()):
+            raise RuntimeError("Invalid corporate-action acquisition history")
+        store["references"] = references
+        return references
+    if Path(str(store["path"]) + ".rotation").exists():
+        raise RuntimeError("Missing committed corporate-action reference generation")
+    records = dict(store["document"]["reports"])
+    for path in sorted(store["evidence"].glob("*.yaml")):
+        binding = retained_binding(store, path)
+        if path.stem in records and records[path.stem] != binding:
+            raise RuntimeError("Retained corporate-action binding changed")
+        records[path.stem] = binding
+    adopted = {}
+    last = {}
+    for key, binding in records.items():
+        if binding.get("schema") == 2:
+            raise RuntimeError("Missing committed corporate-action reference generation")
+        result = read_report(store, key, binding)
+        adopted[key] = {"binding": binding, "acquired": utc_now().isoformat(),
+                        "summary": {"facts": report_facts(result), "events": bool(result["events"]),
+                                    "dependencies": report_dependencies(result)}}
+        acquisition = fingerprint({"source": binding["source"], "query": binding["query"],
+                                   "mapping": binding["mapping"]})
+        identity = fingerprint({field: binding[field] for field in
+                                ("source", "query", "sha256", "period", "mapping")})
+        last[acquisition] = {"key": key, "identity": identity, "acquired": adopted[key]["acquired"]}
+    references = {"version": 1, "generation": 0, "records": adopted,
+                  "safety": list(adopted), "pending": [], "last": last}
+    publish_references(store, references)
+    return load_references(store)
+
+
 def retained_inventories(
     store: Store, source: str, query: str, mapping: dict[str, str]
 ) -> list[Inventory]:
-    """Recover from immutable acquisition bindings, not editable conclusions."""
-    records = dict(store["document"]["reports"])
-    # Recover unreferenced bindings left by a crash or missing mutable state.
-    for path in sorted(store["evidence"].glob("*.yaml")):
-        binding = retained_binding(store, path)
-        key = path.stem
-        if key in records and binding != records[key]:
-            raise RuntimeError("Retained corporate-action binding changed")
-        records[key] = binding
-    inventories: list[Inventory] = []
-    for key, binding in sorted(records.items()):
-        if (
-            not isinstance(key, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", key)
-            or not isinstance(binding, dict)
-            or set(binding)
-            != {"schema", "source", "query", "sha256", "period", "mapping"}
-            or type(binding["schema"]) is not int
-            or binding["schema"] != 1
-            or fingerprint(binding) != key
-            or not isinstance(binding["sha256"], str)
-            or not re.fullmatch(r"[0-9a-f]{64}", binding["sha256"])
-        ):
-            raise RuntimeError("Invalid retained corporate-action binding")
-        binding_path = store["evidence"] / (key + ".yaml")
-        safe_path(binding_path, store["inputs"])
-        if (
-            not binding_path.is_file()
-            or retained_binding(store, binding_path) != binding
-        ):
-            raise RuntimeError("Missing retained corporate-action binding")
-        obj = store["evidence"] / (binding["sha256"] + ".xml")
-        safe_path(obj, store["inputs"])
-        if not obj.is_file():
-            raise RuntimeError("Missing retained corporate-action source")
-        signature = object_signature(obj)
-        digest = binding["sha256"]
-        if digest in store["verified"]:
-            if store["verified"][digest] != signature:
-                raise RuntimeError(
-                    "Retained corporate-action source hash changed during this run"
-                )
-            result = store["inventories"][digest]
-        else:
-            data = obj.read_bytes()
-            if hashlib.sha256(data).hexdigest() != digest:
-                raise RuntimeError("Retained corporate-action source hash changed")
-            result = parse_report(store, data.decode(), binding["source"])
-            store["verified"][digest] = signature
-        if result["source"] != binding["source"]:
-            raise RuntimeError("Retained corporate-action source binding changed")
-        if result["period"] != binding["period"] or not result["section_present"]:
-            raise RuntimeError("Retained corporate-action scope changed")
-        if binding["source"] == source:
+    """Only active safety originals enter financial reconstruction."""
+    references = load_references(store)
+    safe_path(reference_path(store), store["inputs"])
+    if file_bytes(reference_path(store)) != store["reference_original"]:
+        raise RuntimeError("Corporate-action references changed during this run")
+    inventories = []
+    for key in references["safety"]:
+        record = references["records"][key]
+        result = read_report(store, key, record["binding"])
+        if (report_facts(result) != acquisition_summary(record)["facts"] or bool(result["events"]) != acquisition_summary(record)["events"]
+                or report_dependencies(result) != acquisition_summary(record)["dependencies"]):
+            raise RuntimeError("Retained corporate-action facts changed")
+        if result["source"] == source:
             inventories.append(result)
-    # Preserve every verified record, including other sources, after recovery.
-    store["document"]["reports"] = records
+    store["document"]["reports"] = {
+        key: references["records"][key]["binding"] for key in references["safety"]}
     return inventories
 
 
+def acquisition_time(value: object, now: datetime) -> datetime | None:
+    try:
+        stamp = datetime.fromisoformat(str(value))
+        if stamp.utcoffset() != timedelta(0) or stamp > now:
+            return None
+        return stamp
+    except (ValueError, TypeError):
+        return None
+
+
+def maintain_reports(store: Store, mapping: dict[str, str], dates: dict[tuple[str, str], str]) -> None:
+    """Commit retirement before deleting only explicitly retired owned objects."""
+    from copy import deepcopy
+
+    references = deepcopy(load_references(store))
+    now = utc_now()
+    for record in references["records"].values():
+        if acquisition_time(record.get("acquired"), now) is None:
+            record["acquired"] = now.isoformat()
+    for last in references["last"].values():
+        if acquisition_time(last.get("acquired"), now) is None:
+            last["acquired"] = now.isoformat()
+    sources = {record["binding"]["source"] for record in references["records"].values()
+               if acquisition_summary(record)["events"]}
+    candidates = {key: record for key, record in references["records"].items()
+                  if record["binding"]["source"] in sources}
+    anchor_dates = source_anchor_dates(candidates, mapping, dates)
+    identities = {source: {identity for record in candidates.values()
+                           if record["binding"]["source"] == source
+                           for identity in acquisition_summary(record)["dependencies"]["identities"]}
+                  for source in sources}
+    for scope in identities.values():
+        symbols = {value.removeprefix("symbol:") for value in scope if value.startswith("symbol:")}
+        symbols.update(mapping[value.removeprefix("isin:")] for value in scope
+                       if value.startswith("isin:") and value.removeprefix("isin:") in mapping)
+        scope.update("isin:" + isin for isin, symbol in mapping.items() if symbol in symbols)
+    unbounded = {source: any(acquisition_summary(record)["dependencies"]["unbounded"] for record in candidates.values()
+                            if record["binding"]["source"] == source) for source in sources}
+    safety = set(candidates)
+    # Prefer older originals. Retire a later copy only if all exact inputs and
+    # its entire declared interval survive in the same source/query/mapping scope.
+    for key in reversed(list(candidates)):
+        record = candidates[key]
+        binding = record["binding"]
+        peers = [candidates[other] for other in safety - {key}
+                 if all(candidates[other]["binding"][field] == binding[field]
+                        for field in ("source", "query", "mapping"))]
+        source = binding["source"]
+        facts = {fact for peer in peers for fact in safety_facts(
+            peer, identities[source], unbounded[source], anchor_dates[source])}
+        covered = datetime.strptime(binding["period"][0], "%Y%m%d").date()
+        end = datetime.strptime(binding["period"][1], "%Y%m%d").date()
+        for start_text, end_text in sorted(peer["binding"]["period"] for peer in peers):
+            start, stop = (datetime.strptime(text, "%Y%m%d").date()
+                           for text in (start_text, end_text))
+            if start <= covered:
+                covered = max(covered, stop + timedelta(days=1))
+        if safety_facts(record, identities[source], unbounded[source], anchor_dates[source]) <= facts and covered > end:
+            safety.remove(key)
+    # Recheck every surviving original before publishing a reduced generation.
+    for key in safety:
+        record = candidates[key]
+        result = read_report(store, key, record["binding"])
+        if (report_facts(result) != acquisition_summary(record)["facts"]
+                or report_dependencies(result) != acquisition_summary(record)["dependencies"]):
+            raise RuntimeError("Retained corporate-action facts changed")
+    references["safety"] = sorted(safety)
+    if any(acquisition_summary(candidates[key])["dependencies"]["positions"]
+           and any(day is None for day in anchor_dates[candidates[key]["binding"]["source"]].values())
+           and now - datetime.fromisoformat(candidates[key]["acquired"]) >= timedelta(hours=720)
+           for key in safety):
+        if not store["maintenance_warning"]:
+            log.warning("Corporate-action dated anchors retained; redundancy unproven")
+        store["maintenance_warning"] = True
+    for key, record in list(references["records"].items()):
+        acquired = acquisition_time(record["acquired"], now)
+        if key not in safety and acquired is not None and now - acquired >= timedelta(hours=720):
+            references["pending"].extend([key + ".yaml", record["binding"]["sha256"] + ".xml"])
+            del references["records"][key]
+    active_files = {name for key, record in references["records"].items()
+                    for name in (key + ".yaml", record["binding"]["sha256"] + ".xml")}
+    references["pending"] = sorted(set(references["pending"]) - active_files)
+    publish_references(store, references)
+    for name in references["pending"]:
+        if not isinstance(name, str) or not re.fullmatch(r"[0-9a-f]{64}\.(xml|yaml)", name):
+            raise RuntimeError("Invalid corporate-action retirement path")
+        path = store["evidence"] / name
+        safe_path(path, store["inputs"])
+        if path.exists():
+            # Refuse changed originals, hard links, symlinks and input aliases.
+            signature = object_signature(path)
+            if path.suffix == ".xml":
+                if hashlib.sha256(path.read_bytes()).hexdigest() != path.stem:
+                    raise RuntimeError("Retired corporate-action source changed")
+            elif fingerprint(read_yaml(path.read_bytes())) != path.stem:
+                raise RuntimeError("Retired corporate-action binding changed")
+            safe_path(path, store["inputs"])
+            if object_signature(path) != signature:
+                raise RuntimeError("Retired corporate-action object changed during cleanup")
+            path.unlink()
+            if path.suffix == ".xml":
+                store["verified"].pop(path.stem, None)
+            else:
+                store["bindings"].pop(path.stem, None)
+    directory = os.open(store["evidence"], os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    if references["pending"]:
+        publish_references(store, {**references, "pending": []})
+
+
 def retain_report(
-    store: Store, xml: str, source: str, query: str, mapping: dict[str, str]
+    store: Store, xml: str, source: str, query: str, mapping: dict[str, str], *,
+    dates: dict[tuple[str, str], str] | None = None,
 ) -> list[Inventory]:
-    """Bind a valid bounded report before dependent financial decisions."""
+    """Durably acquire evidence, then attempt independent local maintenance."""
+    from copy import deepcopy
+
     import yaml
 
     check_store(store)
-    previous = retained_inventories(store, source, query, mapping)
+    retained_inventories(store, source, query, mapping)
     current = parse_report(store, xml, source)
     if not current["section_present"]:
         raise RuntimeError("Required CorporateActions section is missing")
@@ -504,34 +834,55 @@ def retain_report(
             raise ValueError
     except ValueError:
         raise RuntimeError("Corporate-action report period is unavailable") from None
-    binding = {
-        "schema": 1,
-        "source": source,
-        "query": query,
-        "sha256": current["sha256"],
-        "period": current["period"],
-        "mapping": fingerprint(mapping),
-    }
+    binding = {"schema": 1, "source": source, "query": query,
+               "sha256": current["sha256"], "period": current["period"], "mapping": fingerprint(mapping)}
+    references = deepcopy(load_references(store))
+    identity = fingerprint({field: value for field, value in binding.items() if field != "schema"})
+    acquisition = fingerprint({"source": source, "query": query, "mapping": binding["mapping"]})
+    last = references["last"].get(acquisition, {})
+    acquired = last.get("acquired") if last.get("identity") == identity else utc_now().isoformat()
+    binding.update(schema=2, acquired=acquired, facts=report_facts(current),
+                   events=bool(current["events"]), dependencies=report_dependencies(current))
     key = fingerprint(binding)
-    if key in store["document"]["reports"]:
-        return previous
-    obj = store["evidence"] / (current["sha256"] + ".xml")
-    if current["sha256"] not in store["verified"]:
-        immutable_object(obj, xml.encode(), store["inputs"])
-        store["verified"][current["sha256"]] = object_signature(obj)
-    immutable_object(
-        store["evidence"] / (key + ".yaml"),
-        yaml.safe_dump(binding, sort_keys=True).encode(),
-        store["inputs"],
-    )
-    check_store(store)
-    store["document"]["reports"][key] = binding
+    # Re-reading any surviving acquisition never changes its original binding or age.
+    for old_key, record in references["records"].items():
+        old = record["binding"]
+        if identity == fingerprint({field: old[field] for field in
+                                    ("source", "query", "sha256", "period", "mapping")}):
+            key, binding, acquired = old_key, old, record.get("acquired")
+            break
+    if key not in references["records"]:
+        # Record uncommitted object names first. A crash can then leave only
+        # active references or explicit, retryable garbage, never hidden orphans.
+        names = {key + ".yaml", current["sha256"] + ".xml"}
+        active = {name for old_key, record in references["records"].items()
+                  for name in (old_key + ".yaml", record["binding"]["sha256"] + ".xml")}
+        references["pending"] = sorted(set(references["pending"]) | (names - active))
+        publish_references(store, references)
+        references = deepcopy(load_references(store))
+        immutable_object(store["evidence"] / (current["sha256"] + ".xml"), xml.encode(), store["inputs"])
+        immutable_object(store["evidence"] / (key + ".yaml"),
+                         yaml.safe_dump(binding, sort_keys=True).encode(), store["inputs"])
+        store["verified"][current["sha256"]] = object_signature(
+            store["evidence"] / (current["sha256"] + ".xml"))
+        references["records"][key] = {"binding": binding, "acquired": acquired}
+        references["pending"] = sorted(set(references["pending"]) - names)
+        references["last"][acquisition] = {"key": key, "identity": identity, "acquired": acquired}
+        # A new report must be durable before any dependent financial decision.
+        if current["events"] or any(r["binding"]["source"] == source and acquisition_summary(r)["events"]
+                                    for r in references["records"].values()):
+            references["safety"] = list(set(references["safety"]) | {key})
+        publish_references(store, references)
+    try:
+        maintain_reports(store, mapping, dates or {})
+    except (RuntimeError, OSError, ValueError):
+        if not store["maintenance_warning"]:
+            log.warning("Corporate-action report maintenance incomplete; retry next run")
+        store["maintenance_warning"] = True
+    reports = retained_inventories(store, source, query, mapping)
     store["original"] = atomic_yaml(store["path"], store["document"])
-    return (
-        [*previous, current]
-        if all(item["sha256"] != current["sha256"] for item in previous)
-        else previous
-    )
+    # Current ordinary input participates only in this run; expired archives do not.
+    return reports if any(r["sha256"] == current["sha256"] for r in reports) else [*reports, current]
 
 
 class DateProof(TypedDict):

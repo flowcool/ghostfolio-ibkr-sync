@@ -11,6 +11,7 @@ from copy import deepcopy
 from math import ceil, isfinite
 from pathlib import Path
 from typing import Any, cast
+from xml.etree.ElementTree import ParseError
 
 import requests
 
@@ -501,9 +502,10 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     preview = outcome.get("forced_preview")
     corporate = outcome.get("corporate_notification")
     corporate_due = corporate is not None and bool(corporate["sent"])
-    if code == 0 and not corporate_due and (dry_run_requested() or (days is None and not preview)):
+    maintenance_due = outcome.get("corporate_maintenance", False)
+    if code == 0 and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
         return
-    label = "Failure" if code else ("Corporate actions" if corporate_due else
+    label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
                                    ("Forced preview" if preview else "Token expiry"))
     try:
         settings = load_notification_config()
@@ -511,7 +513,7 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
             return
         if code:
             title, body = NOTIFY_TITLE, build_failure_summary(outcome)
-        elif corporate_due:
+        elif corporate_due or maintenance_due:
             title, body = "ghostfolio-ibkr-sync: corporate actions", "Corporate-action evidence summary."
             if not dry_run_requested():
                 if preview:
@@ -528,6 +530,8 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
             body += "\n" + "\n".join(f"- corporate_actions: {key} ({value})"
                                        for key, value in corporate["counts"].items()
                                        if key in ("active_holds", "changed_findings", "resumptions") and type(value) is int)
+        if maintenance_due:
+            body += "\n- corporate_actions: maintenance_incomplete (1)"
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
@@ -810,15 +814,6 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
     """Compute holds from source objects and fresh destination data, not cached flags."""
     decisions: dict[str, ca.Decision] = {}
     store = config.get("_corporate_store")
-    # Startup already validates these reports. Populate the same run cache for
-    # direct callers, so every configured owner is known before any release.
-    if store is not None:
-        for (report_source, _), source_xml in config.get("_source_reports", {}).items():
-            if source_xml is not None:
-                try:
-                    ca.parse_report(store, source_xml, report_source)
-                except (RuntimeError, ValueError):
-                    pass  # The owning source receives its conservative fallback below.
     notification_state_safe = store is not None
     try:
         proofs = ca.load_date_proofs(config.get("corporate_action_evidence_file"))
@@ -829,21 +824,54 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
         proofs = {}
         notification_state_safe = False
         log.error("Official corporate-action date evidence unavailable; affected events stay held")
-    for source, query in zip(config["account_ids"], config["query_ids"], strict=True):
-        xml = config.get("_source_reports", {}).get((source, query))
-        target = config.get("_source_accounts", {}).get((source, query))
-        fallback: ca.Decision = {"account_held": True, "symbols": set(), "effective": {},
-                                 "findings": {}, "dates": {}, "normalized": set()}
-        if xml is None or target is None:
-            decisions[source] = fallback
+    pairs = list(zip(config["account_ids"], config["query_ids"], strict=True))
+    names = config.get("account_names") or config["account_ids"]
+    targets = config.get("_source_accounts", {})
+    prepared: dict[tuple[str, str], list[ca.Inventory]] = {}
+    unavailable: set[tuple[str, str]] = set()
+    # Complete evidence acquisition for every owner before the first decision.
+    for pair in pairs:
+        source, query = pair
+        xml = config.get("_source_reports", {}).get(pair)
+        if xml is None or targets.get(pair) is None:
+            unavailable.add(pair)
             continue
         try:
             current = ca.parse_report(store, xml, source)
-            reports = [current]
-            # Retained reports survive shorter current windows. Failed persistence
-            # must hold trades, even when the in-memory evidence looks valid.
-            if store is not None:
-                reports = ca.retain_report(store, xml, source, query, mapping)
+            prepared[pair] = (ca.retain_report(store, xml, source, query, mapping,
+                                               dates={key: proof["effective_date"] for key, proof in proofs.items()})
+                              if store is not None else [current])
+            if current["account_held"] or not current["section_present"]:
+                unavailable.add(pair)
+        except (RuntimeError, OSError, ValueError, ParseError):
+            unavailable.add(pair)
+    groups = [{pair} for pair in pairs]
+    possible_targets = {
+        pair: ({targets[pair]} if targets.get(pair) is not None else
+               {targets[other] for other_index, other in enumerate(pairs)
+                if names[other_index] == names[index] and targets.get(other) is not None})
+        for index, pair in enumerate(pairs)
+    }
+    for index, pair in enumerate(pairs):
+        for other_index, other in enumerate(pairs[:index]):
+            if (names[index] == names[other_index]
+                    or not possible_targets[pair] or not possible_targets[other]
+                    or possible_targets[pair] & possible_targets[other]):
+                merged = set().union(*(group for group in groups if pair in group or other in group))
+                groups = [group for group in groups if pair not in group and other not in group] + [merged]
+    shared_holds = set().union(*(group for group in groups if len(group) > 1 and any(
+        owner in unavailable or any(report["events"] for report in prepared.get(owner, []))
+        for owner in group)))
+    for source, query in pairs:
+        pair = source, query
+        target = targets.get(pair)
+        fallback: ca.Decision = {"account_held": True, "symbols": set(), "effective": {},
+                                 "findings": {}, "dates": {}, "normalized": set()}
+        reports = prepared.get(pair)
+        if reports is None or target is None:
+            decisions[source] = fallback
+            continue
+        try:
             evidence: dict[str, dict[str, Any]] = {}
             symbols = {symbol for report in reports for event in report["events"].values()
                        if not set(event["reasons"]) - {"before_quantity_unproven", "effective_date_unproven"}
@@ -866,17 +894,9 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
                     evidence.pop(symbol, None)
             if stale:
                 decision = ca.decide(reports, source, target, mapping, snapshot, evidence, proofs)
-            names = config.get("account_names") or config["account_ids"]
-            pairs = list(zip(config["account_ids"], config["query_ids"], strict=True))
-            own_name = names[pairs.index((source, query))]
-            owners = [owner for index, owner in enumerate(pairs)
-                      if config.get("_source_accounts", {}).get(owner) == target
-                      or names[index] == own_name]
-            known_events = {item["source"] for item in store["inventories"].values()
-                            if item["events"]} if store is not None else {source}
-            if len(owners) > 1 and any(owner[0] in known_events for owner in owners):
+            if pair in shared_holds:
                 decision["account_held"] = True
-                log.warning("Corporate-action source/destination ownership is not unique")
+                log.warning("Corporate-action shared destination has unavailable or event-bearing owner evidence")
             if store is None:
                 decision["account_held"] = True
             else:
@@ -892,11 +912,13 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
                 decision["account_held"] = decision["account_held"] or previous["account_held"]
                 decision["symbols"].update(previous["symbols"])
             decisions[source] = decision
-        except (RuntimeError, OSError, ValueError):
+        except (RuntimeError, OSError, ValueError, ParseError):
             log.error("Corporate-action source/state evidence unavailable; account BUY/SELL held")
             decisions[source] = fallback
     config["_corporate_decisions"] = decisions
     outcome = config.get("_corporate_outcome")
     if outcome is not None:
+        if store is not None and store["maintenance_warning"]:
+            outcome["corporate_maintenance"] = True
         ca.prepare_notifications(outcome, config.get("corporate_action_state_file")
                                  if notification_state_safe else None, decisions)

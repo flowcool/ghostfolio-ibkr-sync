@@ -169,12 +169,38 @@ reports with source account, query, declared period, mapping fingerprint and has
 The connector reparses those reports after an event leaves the current window.
 Hashes detect changed evidence; they do not authenticate a coordinated rewrite.
 Keep the entire directory private and back it up with its input evidence.
-Each retained XML is verified and parsed once per run. Later reconciliations reuse
-those facts and reject file metadata changes. Additional compatible Flex columns
-can complete older evidence; changed shared facts or event legs remain conflicts.
-Full report retention currently grows with acquisitions. Bounded consolidation is not
-yet qualified. This is a known delivery blocker for unattended release; monitor and
-preserve the entire evidence directory. Do not delete files or reset state for capacity.
+Ordinary reports expire automatically after **30 days (720 hours)** from durable UTC
+acquisition time, on the next run. Simulation also performs this local maintenance.
+There is no retention ENV setting, quota or maintenance command. Re-reading the same
+acquisition or changing file timestamps does not renew its age. Legacy reports receive
+one persisted migration time and a full 30-day grace period. Invalid or future acquisition
+times cannot justify early removal.
+
+The connector keeps selective complete originals for known events, revisions,
+conflicts, relevant trades, dated position anchors, identities and continuous coverage.
+It removes a redundant safety copy only after it verifies surviving originals and their
+source facts. A matching holding, closed position or manual reconciliation does not
+retire required evidence. Useful safety history can still grow with new facts and
+required chains; 30 days is not a total storage bound. Different dated quantity anchors
+or query/mapping bindings can prevent proof of redundancy and remain retained.
+Additional compatible Flex columns can complete older evidence; changed shared facts
+or event legs remain conflicts.
+
+A versioned `.references.yaml` companion records active acquisitions and pending
+cleanup. The `.rotation` marker prevents recovery from reviving obsolete bindings
+if that index is lost. The connector publishes and verifies durable references before
+removal. Restarts retry interrupted cleanup. Only required safety originals and the
+current source enter normal reconciliation. Each required XML is hash-verified and
+parsed once per run; later reconciliations reuse facts and reject file metadata changes.
+
+Maintenance-only failure logs a warning and joins the configured consolidated
+notification once per run. It does not change exit status or otherwise safe imports.
+Missing or invalid required evidence still holds affected BUY/SELL. Independent cash
+keeps its existing guards. Proposals, mappings, official input documents and correction
+journals remain outside rotation. Reconciliation still uses current logs and proposals;
+the user handles manual cleanup and reruns analysis. There is no persistent reconciliation
+job or archive replay. Keep a private copy for an investigation longer than 30 days,
+or obtain another broker export. Expired ordinary archives cannot be recovered here.
 
 Run simulation first. A valid report with the required section initializes missing
 state and publishes its bounded inventory. Review the inventory before live mode.
@@ -245,7 +271,9 @@ Do not delete or reinitialize state to clear a known hold. Complete loss of both
 and evidence cannot be distinguished from first installation. Review the available
 bounded history; do not claim a trusted lifetime baseline. For runtime rollback, stop
 writers and force simulation **before** using an older image without these guards.
-Keep the evidence volume. Reverting code does not restore financial data.
+Before an older image reads this store, restore a complete pre-migration backup of
+state, companions and evidence. Keep current correction journals separately. A code
+revert alone cannot undo rotation or restore financial data.
 
 ## Limitations
 

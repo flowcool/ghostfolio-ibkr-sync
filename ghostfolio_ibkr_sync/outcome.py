@@ -19,6 +19,7 @@ class RunOutcome(TypedDict):
     token_expiry_days: NotRequired[int]
     forced_preview: NotRequired[str]
     corporate_notification: NotRequired[dict[str, Any]]
+    corporate_maintenance: NotRequired[bool]
 
 
 # Allowed failure reasons per stage. External summaries use only these codes,

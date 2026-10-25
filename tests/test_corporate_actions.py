@@ -8,6 +8,580 @@ import pytest
 from ghostfolio_ibkr_sync.corporate_actions import inventory
 
 
+def test_retention_age_exact_boundary_repeat_restart_and_file_times(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    import os
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    path = tmp_path / "state.yaml"
+    original = report()
+    store = ca.open_store(str(path), [], simulation=True)
+    ca.retain_report(store, original, "SOURCE", "Q", {})
+    obj = store["evidence"] / (inventory(original, "SOURCE")["sha256"] + ".xml")
+    ca.close_store(store)
+    for hours in (719, 720):
+        now = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=hours)
+        os.utime(obj, None)
+        store = ca.open_store(str(path), [], simulation=True)
+        ca.retain_report(store, original, "SOURCE", "Q", {})
+        ca.close_store(store)
+        assert obj.exists() is (hours == 719)
+
+
+@pytest.mark.parametrize("timestamp", [None, "missing", "bad", "2099-01-01T00:00:00+00:00"])
+def test_retention_age_untrusted_timestamp_receives_one_durable_grace(tmp_path, monkeypatch, timestamp):
+    from datetime import UTC, datetime, timedelta
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    path = tmp_path / "state.yaml"
+    store = ca.open_store(str(path), [], simulation=True)
+    ca.retain_report(store, report(), "SOURCE", "Q", {})
+    refs = store["references"]
+    key = next(iter(refs["records"]))
+    if timestamp == "missing":
+        del refs["records"][key]["acquired"]
+    else:
+        refs["records"][key]["acquired"] = timestamp
+    ca.atomic_yaml(ca.reference_path(store), refs)
+    ca.close_store(store)
+    now += timedelta(days=100)
+    store = ca.open_store(str(path), [], simulation=True)
+    ca.retain_report(store, report(), "SOURCE", "Q", {})
+    assert store["references"]["records"][key]["acquired"] == now.isoformat()
+    ca.close_store(store)
+    now += timedelta(hours=720)
+    store = ca.open_store(str(path), [], simulation=True)
+    ca.retain_report(store, report(end="20260101"), "SOURCE", "Q", {})
+    assert key not in store["references"]["records"]
+    ca.close_store(store)
+
+
+def test_retention_age_legacy_adoption_preserves_bytes_and_grace(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    import hashlib
+    import yaml
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    path = tmp_path / "state.yaml"
+    evidence = tmp_path / "state.yaml.evidence"
+    evidence.mkdir(mode=0o700)
+    xml = report().encode()
+    digest = hashlib.sha256(xml).hexdigest()
+    binding = {"schema": 1, "source": "SOURCE", "query": "Q", "sha256": digest,
+               "period": ["20250101", "20251231"], "mapping": ca.fingerprint({})}
+    key = ca.fingerprint(binding)
+    for name, data in ((digest + ".xml", xml), (key + ".yaml", yaml.safe_dump(binding).encode())):
+        (evidence / name).write_bytes(data)
+        (evidence / name).chmod(0o600)
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    for days in (0, 29, 30):
+        now = datetime(2030, 1, 1, tzinfo=UTC) + timedelta(days=days)
+        store = ca.open_store(str(path), [], simulation=True)
+        ca.retain_report(store, report(end="20260101"), "SOURCE", "Q", {})
+        ca.close_store(store)
+        assert (evidence / (digest + ".xml")).exists() is (days < 30)
+
+
+def test_retention_safety_anchor_trades_conflicts_coverage_and_decisions(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    path = tmp_path / "state.yaml"
+    baseline = ET.fromstring(report(end="20250326"))
+    section = ET.SubElement(baseline.find("FlexStatement"), "OpenPositions")
+    ET.SubElement(section, "OpenPosition", accountId="SOURCE", conid="CONTRACT1",
+                  isin="JP0000000001", levelOfDetail="SUMMARY", position="100")
+    originals = [ET.tostring(baseline, encoding="unicode"), report([action()], start="20250327")]
+    store = ca.open_store(str(path), [], simulation=True)
+    for xml in originals:
+        ca.retain_report(store, xml, "SOURCE", "Q", {})
+    _, _, snapshot, evidence, proofs = reverse_case()
+    mapping = {"JP0000000001": "SAMPLE.T"}
+    snapshot["activities"][0]["quantity"] = 500
+    snapshot["activities"][0]["assetProfile"]["isin"] = "JP0000000001"
+    evidence["SAMPLE.T"]["holding"]["quantity"] = 500
+    before = ca.decide([inventory(x, "SOURCE") for x in originals], "SOURCE", "TARGET",
+                       mapping, snapshot, evidence, proofs)
+    assert not before["findings"]["EVENT1"]["held"]
+    now += timedelta(days=40)
+    duplicate = originals[1].replace("<FlexQueryResponse>", '<FlexQueryResponse generated="new">')
+    retained = ca.retain_report(store, duplicate, "SOURCE", "Q", {})
+    after = ca.decide(retained, "SOURCE", "TARGET", mapping, snapshot, evidence, proofs)
+    assert after == before
+    assert len(store["references"]["safety"]) == 2
+    # A later conflicting revision survives an exact repeat and a closed position.
+    revised = report([action(quantity="401")], start="20250327")
+    ca.retain_report(store, revised, "SOURCE", "Q", {})
+    now += timedelta(days=40)
+    retained = ca.retain_report(store, report(start="20260101", end="20260131"), "SOURCE", "Q", mapping)
+    conflict = ca.decide(retained, "SOURCE", "TARGET", mapping, snapshot, evidence, proofs)
+    assert conflict["symbols"]
+    assert len(store["references"]["safety"]) == 4
+    assert all((store["evidence"] / (inventory(x, "SOURCE")["sha256"] + ".xml")).exists()
+               for x in [*originals, revised])
+    ca.close_store(store)
+
+
+def test_retention_safety_closed_trade_chain_cash_unknown_actions_and_unrelated_rows(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from fractions import Fraction
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    reports, mapping, _, _, _ = reverse_case()
+    event = report(reports[0]["events"]["EVENT1"]["rows"])
+    closing = ET.fromstring(report())
+    ET.SubElement(closing.find(".//Trades"), "Trade", accountId="SOURCE", conid="NEW",
+                  isin="CA0000000002", symbol="SAMPLE.T", tradeID="CLOSE", buySell="SELL",
+                  quantity="100", dateTime="20250401;120000 EDT")
+    ET.SubElement(closing.find(".//CashTransactions"), "CashTransaction", accountId="SOURCE",
+                  actionID="EVENT1", type="Corporate Action", amount="1", currency="JPY")
+    closing_xml = ET.tostring(closing, encoding="unicode")
+    unrelated = ET.fromstring(event)
+    ET.SubElement(unrelated.find(".//Trades"), "Trade", accountId="SOURCE", conid="UNRELATED",
+                  isin="XX0000000000", symbol="OTHER", tradeID="IGNORED", buySell="BUY",
+                  quantity="10", dateTime="20250401;120000 EDT")
+    unrelated_xml = ET.tostring(unrelated, encoding="unicode")
+    unknown = report([action(actionID="UNKNOWN", type="MERGER")])
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    for xml in (event, closing_xml, unrelated_xml, unknown):
+        ca.retain_report(store, xml, "SOURCE", "Q", mapping)
+    now += timedelta(days=31)
+    maintained = ca.retain_report(store, report(start="20260101", end="20260131"), "SOURCE", "Q", mapping)
+    originals = [inventory(x, "SOURCE") for x in (event, closing_xml, unrelated_xml, unknown)]
+    events = {**reports[0]["events"]}
+    assert ca.source_chain(originals, events, "SAMPLE.T", mapping, {"EVENT1": "2025-03-27"})[0] == Fraction(0)
+    assert ca.source_chain(maintained, events, "SAMPLE.T", mapping, {"EVENT1": "2025-03-27"})[0] == Fraction(0)
+    decision = ca.decide(maintained, "SOURCE", "TARGET", mapping, None, {}, {})
+    assert decision["findings"]["EVENT1"]["conclusions"]["cash"] == "explicit_linked_cash_observed_no_treatment"
+    assert decision["findings"]["UNKNOWN"]["held"]
+    assert not (store["evidence"] / (inventory(unrelated_xml, "SOURCE")["sha256"] + ".xml")).exists()
+    ca.close_store(store)
+
+
+def test_retention_safety_post_event_positions_do_not_create_per_acquisition_history(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    baseline = ET.fromstring(report(end="20250326"))
+    ET.SubElement(ET.SubElement(baseline.find("FlexStatement"), "OpenPositions"), "OpenPosition",
+                  accountId="SOURCE", conid="CONTRACT1", isin="JP0000000001",
+                  levelOfDetail="SUMMARY", position="100")
+    dates = {("SOURCE", "EVENT1"): "2025-03-27"}
+    mapping = {"JP0000000001": "SAMPLE.T"}
+    ca.retain_report(store, ET.tostring(baseline, encoding="unicode"), "SOURCE", "Q", mapping, dates=dates)
+    ca.retain_report(store, report([action()], start="20250327"), "SOURCE", "Q", mapping, dates=dates)
+    for day in range(40):
+        now += timedelta(days=1)
+        end = (datetime(2025, 4, 1) + timedelta(days=day)).strftime("%Y%m%d")
+        root = ET.fromstring(report(start="20250327", end=end))
+        ET.SubElement(ET.SubElement(root.find("FlexStatement"), "OpenPositions"), "OpenPosition",
+                      accountId="SOURCE", conid="CONTRACT1", isin="JP0000000001",
+                      levelOfDetail="SUMMARY", position="500")
+        ca.retain_report(store, ET.tostring(root, encoding="unicode"), "SOURCE", "Q", mapping, dates=dates)
+        assert len(store["references"]["safety"]) == 2
+    reports = ca.retained_inventories(store, "SOURCE", "Q", mapping)
+    events = next(r["events"] for r in reports if r["events"])
+    assert ca.source_chain(reports, events, "SAMPLE.T", mapping, {"EVENT1": "2025-03-27"})[0] == 500
+    ca.close_store(store)
+
+
+def test_retention_reporting_missing_required_proof_remains_a_hold(tmp_path):
+    from collections import defaultdict
+    from ghostfolio_ibkr_sync import app, corporate_actions as ca
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    tmp_path.chmod(0o700)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    ca.retain_report(store, report([action()]), "SOURCE", "Q", {})
+    (store["evidence"] / (inventory(report([action()]), "SOURCE")["sha256"] + ".xml")).unlink()
+    outcome = new_run_outcome()
+    config = {"account_ids": ["SOURCE"], "query_ids": ["Q"],
+              "_source_reports": {("SOURCE", "Q"): report()},
+              "_source_accounts": {("SOURCE", "Q"): "TARGET"},
+              "_corporate_store": store, "_corporate_outcome": outcome}
+    app.refresh_corporate_decisions(config, {}, {"activities": [], "count": 0}, {"qty": defaultdict(float)})
+    assert config["_corporate_decisions"]["SOURCE"]["account_held"]
+    assert not store["maintenance_warning"]
+    ca.close_store(store)
+
+
+@pytest.mark.parametrize("failure", ["unlink", "publication", "missing_index"])
+def test_retention_recovery_committed_references_never_resurrect_retired_bindings(tmp_path, monkeypatch, failure):
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    path = tmp_path / "state.yaml"
+    store = ca.open_store(str(path), [], simulation=True)
+    ca.retain_report(store, report(), "SOURCE", "Q", {})
+    old_digest = inventory(report(), "SOURCE")["sha256"]
+    old_file = store["evidence"] / (old_digest + ".xml")
+    now += timedelta(days=31)
+    unlink = Path.unlink
+    atomic = ca.atomic_yaml
+
+    def denied(file, *args, **kwargs):
+        if file.parent == store["evidence"]:
+            raise PermissionError("synthetic")
+        return unlink(file, *args, **kwargs)
+
+    def fail_publication(file, data):
+        if file == ca.reference_path(store):
+            # Cut after atomic publication: callers cannot assume it failed before commit.
+            atomic(file, data)
+            raise OSError("synthetic post-publication interruption")
+        return atomic(file, data)
+
+    if failure == "publication":
+        monkeypatch.setattr(ca, "atomic_yaml", fail_publication)
+        with pytest.raises(OSError):
+            ca.retain_report(store, report(end="20260101"), "SOURCE", "Q", {})
+    else:
+        monkeypatch.setattr(Path, "unlink", denied)
+        ca.retain_report(store, report(end="20260101"), "SOURCE", "Q", {})
+        assert store["maintenance_warning"]
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(ca, "atomic_yaml", atomic)
+    ca.close_store(store)
+    path.unlink()  # Findings loss must not turn stale bindings into active proof.
+    if failure == "missing_index":
+        ca.reference_path(store).unlink()
+    store = ca.open_store(str(path), [], simulation=True)
+    try:
+        if failure == "missing_index":
+            with pytest.raises(RuntimeError, match="Missing committed"):
+                ca.retain_report(store, report(), "SOURCE", "Q", {})
+            assert old_file.exists()
+        else:
+            ca.retain_report(store, report(end="20260101"), "SOURCE", "Q", {})
+            assert not old_file.exists()
+            assert not store["document"]["reports"]
+    finally:
+        ca.close_store(store)
+
+
+@pytest.mark.parametrize("damage", ["symlink", "hardlink", "input", "changed"])
+def test_retention_recovery_cleanup_protects_inputs_aliases_and_changed_objects(tmp_path, monkeypatch, damage):
+    from datetime import UTC, datetime, timedelta
+    import os
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    ca.retain_report(store, report(), "SOURCE", "Q", {})
+    obj = store["evidence"] / (inventory(report(), "SOURCE")["sha256"] + ".xml")
+    journal = tmp_path / "review.journal.yaml"
+    journal.write_bytes(obj.read_bytes())
+    journal.chmod(0o600)
+    if damage == "symlink":
+        obj.unlink()
+        obj.symlink_to(journal)
+    elif damage == "hardlink":
+        obj.unlink()
+        os.link(journal, obj)
+    elif damage == "input":
+        store["inputs"].append(obj)
+    else:
+        obj.write_bytes(b"changed")
+    before = obj.read_bytes()
+    now += timedelta(days=31)
+    ca.retain_report(store, report(end="20260101"), "SOURCE", "Q", {})
+    assert store["maintenance_warning"]
+    assert obj.read_bytes() == before
+    assert journal.read_bytes() == report().encode()
+    ca.close_store(store)
+
+
+@pytest.mark.parametrize("stage", ["xml", "binding", "active", "cleanup_binding", "cleanup_xml", "cleanup_sync"])
+def test_retention_recovery_interruptions_retain_complete_committed_generation(tmp_path, monkeypatch, stage):
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+    import os
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    path = tmp_path / "state.yaml"
+    store = ca.open_store(str(path), [], simulation=True)
+    original = report([action()])
+    ca.retain_report(store, original, "SOURCE", "Q", {})
+    ordinary = report()
+    ca.retain_report(store, ordinary, "SOURCE", "Q", {})
+    now += timedelta(days=31)
+    new = report(start="20260101", end="20260131")
+    immutable, atomic, unlink, fsync = ca.immutable_object, ca.atomic_yaml, Path.unlink, os.fsync
+    fired = False
+
+    def interrupt_object(file, data, inputs):
+        nonlocal fired
+        immutable(file, data, inputs)
+        if not fired and ((stage == "xml" and file.suffix == ".xml")
+                          or (stage == "binding" and file.suffix == ".yaml")):
+            fired = True
+            raise KeyboardInterrupt("synthetic acquisition crash")
+
+    def interrupt_active(file, data):
+        nonlocal fired
+        result = atomic(file, data)
+        if stage == "active" and file == ca.reference_path(store) and any(
+                r["binding"]["sha256"] == inventory(new, "SOURCE")["sha256"] for r in data["records"].values()):
+            fired = True
+            raise KeyboardInterrupt("synthetic committed publication crash")
+        return result
+
+    def interrupt_unlink(file, *args, **kwargs):
+        nonlocal fired
+        result = unlink(file, *args, **kwargs)
+        if (not fired and file.parent == store["evidence"]
+                and stage == "cleanup_" + ("xml" if file.suffix == ".xml" else "binding")):
+            fired = True
+            raise KeyboardInterrupt("synthetic cleanup crash")
+        return result
+
+    def interrupt_sync(fd):
+        nonlocal fired
+        fsync(fd)
+        if stage == "cleanup_sync" and not fired and store["references"]["pending"]:
+            # Only interrupt the evidence directory sync after the retired ordinary object vanished.
+            old = store["evidence"] / (inventory(ordinary, "SOURCE")["sha256"] + ".xml")
+            if not old.exists():
+                fired = True
+                raise KeyboardInterrupt("synthetic directory-sync crash")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ca, "immutable_object", interrupt_object)
+        patch.setattr(ca, "atomic_yaml", interrupt_active)
+        patch.setattr(Path, "unlink", interrupt_unlink)
+        patch.setattr(os, "fsync", interrupt_sync)
+        with pytest.raises(KeyboardInterrupt):
+            ca.retain_report(store, new, "SOURCE", "Q", {})
+    ca.close_store(store)
+    assert fired
+    store = ca.open_store(str(path), [], simulation=True)
+    recovered = ca.retain_report(store, new, "SOURCE", "Q", {})
+    assert any("EVENT1" in r["events"] for r in recovered)
+    assert not store["references"]["pending"]
+    assert len(list(store["evidence"].glob("*.xml"))) == len(store["references"]["records"])
+    ca.close_store(store)
+
+
+@pytest.mark.parametrize("after_replace", [False, True])
+def test_retention_recovery_storage_failure_during_maintenance_is_warning_only(tmp_path, monkeypatch, after_replace):
+    from datetime import UTC, datetime, timedelta
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    ca.retain_report(store, report(), "SOURCE", "Q", {})
+    now += timedelta(days=30)
+    atomic = ca.atomic_yaml
+
+    def unavailable(file, data):
+        if file == ca.reference_path(store):
+            if after_replace:
+                atomic(file, data)
+            raise OSError(28, "synthetic storage failure")
+        return atomic(file, data)
+
+    monkeypatch.setattr(ca, "atomic_yaml", unavailable)
+    current = ca.retain_report(store, report(), "SOURCE", "Q", {})
+    assert store["maintenance_warning"]
+    assert not ca.decide(current, "SOURCE", "TARGET", {}, None, {}, {})["account_held"]
+    ca.close_store(store)
+
+
+def test_retention_recovery_concurrent_reference_change_fences_evidence(tmp_path):
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    ca.retain_report(store, report([action()]), "SOURCE", "Q", {})
+    ca.reference_path(store).write_bytes(store["reference_original"] + b"\n")
+    with pytest.raises(RuntimeError, match="references changed"):
+        ca.retain_report(store, report(), "SOURCE", "Q", {})
+    ca.close_store(store)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("unavailable", ["missing", "malformed", "wrong_account", "target", "section"])
+@pytest.mark.parametrize("shared", [False, True])
+def test_shared_owner_unavailable_holds_before_dispatch(tmp_path, monkeypatch, reverse, unavailable, shared):
+    from collections import defaultdict
+    from ghostfolio_ibkr_sync import app, corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    pairs = [("SOURCE", "Q"), ("OTHER", "Q2")]
+    if reverse:
+        pairs.reverse()
+    reports = {("SOURCE", "Q"): report(), ("OTHER", "Q2"): report(account="OTHER")}
+    targets = {("SOURCE", "Q"): "TARGET", ("OTHER", "Q2"): "TARGET" if shared else "DISTINCT"}
+    if unavailable == "missing":
+        reports[("OTHER", "Q2")] = None
+    elif unavailable == "malformed":
+        reports[("OTHER", "Q2")] = "<broken"
+    elif unavailable == "wrong_account":
+        reports[("OTHER", "Q2")] = report()
+    elif unavailable == "section":
+        reports[("OTHER", "Q2")] = report(account="OTHER", section=False)
+    else:
+        targets.pop(("OTHER", "Q2"))
+    config = {"account_ids": [p[0] for p in pairs], "query_ids": [p[1] for p in pairs],
+              "account_names": ["Shared" if shared else p[0] for p in pairs],
+              "_source_reports": reports, "_source_accounts": targets, "_corporate_store": store}
+    try:
+        app.refresh_corporate_decisions(config, {}, {"activities": [], "count": 0}, {"qty": defaultdict(float)})
+        decisions = config["_corporate_decisions"]
+        assert decisions["OTHER"]["account_held"]
+        assert decisions["SOURCE"]["account_held"] is (shared or unavailable == "target")
+    finally:
+        ca.close_store(store)
+
+
+def test_shared_owner_unavailable_named_group_keeps_proven_distinct_target_independent(tmp_path):
+    from collections import defaultdict
+    from ghostfolio_ibkr_sync import app, corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    config = {"account_ids": ["SOURCE", "OTHER", "THIRD"], "query_ids": ["Q", "Q2", "Q3"],
+              "account_names": ["One", "One", "Two"], "_corporate_store": store,
+              "_source_reports": {("SOURCE", "Q"): report(),
+                                  ("OTHER", "Q2"): None,
+                                  ("THIRD", "Q3"): report(account="THIRD")},
+              "_source_accounts": {("SOURCE", "Q"): "TARGET", ("THIRD", "Q3"): "DISTINCT"}}
+    app.refresh_corporate_decisions(config, {}, {"activities": [], "count": 0}, {"qty": defaultdict(float)})
+    assert config["_corporate_decisions"]["SOURCE"]["account_held"]
+    assert config["_corporate_decisions"]["OTHER"]["account_held"]
+    assert not config["_corporate_decisions"]["THIRD"]["account_held"]
+    ca.close_store(store)
+
+
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("simulation", [False, True])
+def test_retention_reporting_cleanup_warning_is_not_a_financial_failure(tmp_path, monkeypatch, configured, simulation):
+    from datetime import UTC, datetime, timedelta
+    from pathlib import Path
+    from collections import defaultdict
+    from ghostfolio_ibkr_sync import app, corporate_actions as ca
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    tmp_path.chmod(0o700)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    ca.retain_report(store, report(), "SOURCE", "Q", {})
+    now += timedelta(days=31)
+    unlink = Path.unlink
+
+    def denied(file, *args, **kwargs):
+        if file.parent == store["evidence"]:
+            raise PermissionError("private path must not enter notification")
+        return unlink(file, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    outcome = new_run_outcome()
+    config = {"account_ids": ["SOURCE"], "query_ids": ["Q"],
+              "_source_reports": {("SOURCE", "Q"): report(end="20260101")},
+              "_source_accounts": {("SOURCE", "Q"): "TARGET"},
+              "_corporate_store": store, "_corporate_outcome": outcome}
+    sent = []
+    monkeypatch.setenv("DRY_RUN", "true" if simulation else "false")
+    monkeypatch.setattr(app, "load_notification_config", lambda: {} if configured else None)
+    monkeypatch.setattr(app, "send_notification", lambda *args: sent.append(args) or "sent")
+    app.refresh_corporate_decisions(config, {}, {"activities": [], "count": 0}, {"qty": defaultdict(float)})
+    assert not config["_corporate_decisions"]["SOURCE"]["account_held"]
+    assert outcome["failures"] == []
+    app.finalize_run(outcome, 0)
+    assert len(sent) == int(configured)
+    if configured:
+        assert "maintenance_incomplete (1)" in sent[0][2]
+        assert "SOURCE" not in sent[0][2] and str(tmp_path) not in sent[0][2]
+    ca.close_store(store)
+
+
+@pytest.mark.parametrize("daily", [True, False])
+def test_retention_longevity_ten_year_daily_and_high_frequency(tmp_path, monkeypatch, daily):
+    from datetime import UTC, datetime, timedelta
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    origin = datetime(2026, 1, 1, tzinfo=UTC)
+    now = origin
+    monkeypatch.setattr(ca, "utc_now", lambda: now)
+    path = tmp_path / "state.yaml"
+    parse = ca.inventory
+    parses = 0
+
+    def observed(xml, source):
+        nonlocal parses
+        parses += 1
+        return parse(xml, source)
+
+    monkeypatch.setattr(ca, "inventory", observed)
+    steps = range(3653) if daily else [*range(72), *range(816, 888)]
+    for step in steps:
+        now = origin + (timedelta(days=step) if daily else timedelta(hours=step))
+        end = now.date()
+        start = end - timedelta(days=364)
+        rows = []
+        # Sparse events and a revision must survive after leaving rolling windows.
+        if step < 50 or (daily and 1500 <= step < 1550):
+            rows = [action()] if step < 50 else [action(actionID="EVENT2", transactionID="LEG2",
+                    dateTime="20300209;120000 EST", reportDate="20300209")]
+        if daily and step == 1520:
+            rows = [action(actionID="EVENT2", transactionID="LEG2", quantity="401",
+                           dateTime="20300209;120000 EST", reportDate="20300301")]
+        xml = report(rows, start=start.strftime("%Y%m%d"), end=end.strftime("%Y%m%d"))
+        xml = xml.replace("<FlexQueryResponse>", f'<FlexQueryResponse generated="{step}">')
+        store = ca.open_store(str(path), [], simulation=True)
+        parses = 0
+        try:
+            reports = ca.retain_report(store, xml, "SOURCE", "Q", {})
+            refs = store["references"]
+            ordinary = set(refs["records"]) - set(refs["safety"])
+            assert len(ordinary) <= (30 if daily else 72)
+            # Continuous coverage needs at most one full-window original per year,
+            # plus the two events/revision and the current boundary.
+            assert len(refs["safety"]) <= (16 if daily else 4)
+            assert parses <= 2 * len(refs["safety"]) + 2
+            assert len(list(store["evidence"].glob("*.xml"))) == len(refs["records"])
+            assert not refs["pending"] and not store["maintenance_warning"]
+        finally:
+            ca.close_store(store)
+    events = ca.decide(reports, "SOURCE", "TARGET", {}, None, {}, {})["findings"]
+    assert "EVENT1" in events
+    if daily:
+        assert "EVENT2" in events
+        assert "conflicting_event_revision" in events["EVENT2"]["reasons"]
+
+
 def action(**changes):
     return {
         "accountId": "SOURCE",
