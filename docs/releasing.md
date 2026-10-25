@@ -84,9 +84,11 @@ Release triggers `release-image.yml`. It requires an exact `vX.Y.Z` tag without
 leading zeros on main and refuses an existing `:X.Y.Z` or an uncertain registry
 response. Select an unused version; do not replace an already published tag.
 
-Check the release workflow logs: both native runtime checks and security gates
-must pass, published configuration digests must match the tested images, and
-both architectures must match the assembled manifest. Only the current stable
+Check the release workflow logs: a new build must pass both native runtime and
+security gates, with published configuration digests matching the checked images.
+Promotion from an RC must verify its signed artifact and accepted lab record,
+then copy the exact index. The original RC run must supply the native build
+checks. Both architectures must match. Only the current stable
 release advances `:latest`. Check that the release notes show the head text and
 generated list. Fill in "Published artifacts" with the workflow link, version
 and verified manifest digest from its `release-manifest` artifact.
@@ -133,6 +135,58 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
    gh release create vX.Y.Z --verify-tag --latest --notes-start-tag <previous-stable-tag> \
      --title "vX.Y.Z — <short summary>" --notes-file head.md --generate-notes
    ```
+
+### Preserve the qualified digest
+
+For stable publication with an RC, the workflow copies the highest RC index.
+Stable and latest must have the same digest as that qualified RC. It does not
+rebuild either architecture. `APP_VERSION` and OCI version labels retain the RC
+tag. Changing those values would change the accepted image bytes.
+
+Before publishing stable, a maintainer reviews both lab result files and attaches
+one `lab-qualification.json` asset to the RC prerelease. This record attests the
+maintainer's acceptance. The workflow can verify the record and its binding to
+the signed image. It cannot independently prove that a lab run occurred. Keep the
+private runner evidence. Use this exact schema; replace every placeholder:
+
+```json
+{
+  "schema": 1,
+  "repository": "flowcool/ghostfolio-ibkr-sync",
+  "rc_tag": "vX.Y.Z-rc.N",
+  "commit": "<40-character release commit>",
+  "digest": "sha256:<qualified index hash>",
+  "native": {
+    "amd64": "sha256:<amd64 manifest hash>",
+    "arm64": "sha256:<arm64 manifest hash>"
+  },
+  "labs": {
+    "empty": {"status": "PASS", "cleanup": "stopped", "evidence_sha256": "<result.json SHA-256>"},
+    "golden": {"status": "PASS", "cleanup": "stopped", "evidence_sha256": "<result.json SHA-256>"}
+  }
+}
+```
+
+Hash the retained final `result.json` from each versioned lab runner invocation.
+Require both results to name this image digest, report successful acceptance,
+and confirm stopped cleanup. Do not attest a failed or incomplete run. Copy the
+native manifest hashes from the signed index. Do not include credentials,
+private paths or host names. Under the recorded release authorization, attach it:
+
+```bash
+gh release upload vX.Y.Z-rc.N lab-qualification.json
+```
+
+The stable workflow rejects a missing, malformed or mismatched record. It checks
+the RC signature, both native source revisions and version labels, the immutable
+index and the RC tag digest before writing. It rechecks the qualification record
+and the one-time stable tag guard, then reads back stable and latest digests.
+A partial write stops promotion. Do not overwrite a version to recover it.
+
+The workflow in the **tagged commit** controls release publication. Merging new
+tooling does not change an older RC's workflow. Such an RC needs a separately
+authorized recovery operation, or a new RC that includes this tooling and passes
+both labs. This preparation grants no stable publication or deployment authority.
 
 What the workflow refuses:
 
