@@ -304,6 +304,9 @@ def env(monkeypatch):
 
 def stub_main(monkeypatch, results, existing=None):
     calls = []
+    monkeypatch.setattr(app, "fetch_flex_report",
+                        lambda token, query: report(source_account={"q1":"U1","q2":"U2"}[query]))
+    monkeypatch.setattr(app, "ghost_find_account_id", lambda cfg, name: name)
 
     def fake_process(config, ibkr_id, qid, name, mapping, ids, comments, pos):
         calls.append((ibkr_id, qid, name))
@@ -1362,8 +1365,8 @@ def test_historical_diagnostic_report_window_and_unmatched_coverage(monkeypatch,
     rows = [destination(), destination(id="older", comment="legacy dividend",
                                       date="2025-07-15T00:00:00Z")]
     ids, comments, pos = read(monkeypatch, rows)
-    xml = report(divs=div_xml()).replace("<FlexStatement>",
-        '<FlexStatement fromDate="20260701" toDate="20260731">')
+    xml = report(divs=div_xml()).replace('fromDate="20200101" toDate="20261231"',
+        'fromDate="20260701" toDate="20260731"')
     monkeypatch.setattr(app, "fetch_flex_report", lambda *args: xml)
     monkeypatch.setattr(app, "ghost_find_account_id", lambda *args: ACC)
     for verb in ("post", "put", "patch", "delete"):
@@ -1577,8 +1580,8 @@ def test_dry_run_default_warns_on_every_invocation(env, caplog, value, invalid_c
         reads.clear()
         assert app.main() == (1 if invalid_config else 0)
         assert reads == ([] if invalid_config else [
-            "activities", "flex-request", "flex-report", "accounts", "cash",
-            "flex-request", "flex-report", "accounts", "cash"])
+            "flex-request", "flex-report", "accounts",
+            "flex-request", "flex-report", "accounts", "activities", "cash", "cash"])
         warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
         assert warnings.count("DRY_RUN not set: simulation, nothing written") == 1
 

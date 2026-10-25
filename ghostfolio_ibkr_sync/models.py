@@ -31,6 +31,8 @@ class Settings:
     mapping_file: str
     dry_run: bool
     activity_review_file: str | None = None
+    corporate_action_state_file: str | None = None
+    corporate_action_evidence_file: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

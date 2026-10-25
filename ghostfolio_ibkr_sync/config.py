@@ -35,6 +35,8 @@ class ConfigDict(TypedDict):
     mapping_file: str
     dry_run: bool
     activity_review_file: str | None
+    corporate_action_state_file: str | None
+    corporate_action_evidence_file: str | None
 
 
 class NotificationConfigDict(TypedDict):
@@ -148,6 +150,8 @@ def load() -> Settings:
         mapping_file=os.environ.get("MAPPING_FILE", "mapping.yaml"),
         dry_run=dry_run_requested(),
         activity_review_file=review_file,
+        corporate_action_state_file=os.environ.get("CORPORATE_ACTION_STATE_FILE", "").strip() or None,
+        corporate_action_evidence_file=os.environ.get("CORPORATE_ACTION_EVIDENCE_FILE", "").strip() or None,
     )
 
 
@@ -166,6 +170,8 @@ def load_config() -> ConfigDict:
         "mapping_file": settings.mapping_file,
         "dry_run": settings.dry_run,
         "activity_review_file": settings.activity_review_file,
+        "corporate_action_state_file": settings.corporate_action_state_file,
+        "corporate_action_evidence_file": settings.corporate_action_evidence_file,
     }
 
 

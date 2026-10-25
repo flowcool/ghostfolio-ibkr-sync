@@ -35,6 +35,9 @@ def env(monkeypatch):
     for k in ("GHOST_ACCESS_TOKEN", "GHOST_ACCOUNT_NAMES", "DRY_RUN", "APPRISE_TIMEOUT"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setattr(app, "fetch_flex_report", lambda token, query: report(
+        source_account={"q1":"U111","q2":"U222","q3":"U333"}[query]))
+    monkeypatch.setattr(app, "ghost_find_account_id", lambda cfg, name: name)
     return monkeypatch
 
 

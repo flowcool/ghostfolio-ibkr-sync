@@ -51,3 +51,6 @@ CLAUDE.local.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Private corporate-action reports, date evidence and delivery state
+state/

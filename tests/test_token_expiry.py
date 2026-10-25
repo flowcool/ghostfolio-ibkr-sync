@@ -8,6 +8,7 @@ import pytest
 
 import requests
 import os
+from _sync_helpers import report
 from ghostfolio_ibkr_sync import app, config, notify
 
 NOW = 1800000000
@@ -36,6 +37,9 @@ def env(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("no real HTTP"))
     monkeypatch.setattr(requests, "post", lambda *a, **k: pytest.fail("no real HTTP"))
     monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setattr(app, "fetch_flex_report",
+                        lambda token, query: report(source_account="U" + query[1:]))
+    monkeypatch.setattr(app, "ghost_find_account_id", lambda *args: "target")
     return monkeypatch
 
 

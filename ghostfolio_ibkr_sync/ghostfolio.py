@@ -250,15 +250,15 @@ def ghost_get_existing_orders(
     # Keep the original JSON numbers before the normal float-based reader runs.
     # A mock/adapter without wire bytes cannot establish exact numeric evidence.
     exact_data = None
-    if config.get("dry_run") or config.get("activity_review_file"):
-        wire = getattr(resp, "content", None)
-        if isinstance(wire, (str, bytes)) and wire:
-            try:
-                exact_data = json.loads(wire, parse_float=Decimal, parse_int=Decimal)
-            except (ValueError, UnicodeError, DecimalException):
-                pass  # The existing decoder below owns technical failures.
+    wire = getattr(resp, "content", None)
+    if isinstance(wire, (str, bytes)) and wire:
+        try:
+            exact_data = json.loads(wire, parse_float=Decimal, parse_int=Decimal)
+        except (ValueError, UnicodeError, DecimalException):
+            pass  # The existing decoder below owns technical failures.
     result = index_existing_activities(resp.json(), dry_run=bool(config.get("dry_run")),
                                        exact_data=exact_data)
+    result[2]["corporate_snapshot"] = exact_data
     if config.get("activity_review_file"):
         if not isinstance(exact_data, dict):
             raise RuntimeError("Activity review requires original destination JSON bytes")
@@ -703,3 +703,47 @@ def ghost_update_reviewed_activity(config: Config, payload: dict[str, Any]) -> N
         raise RuntimeError("Review correction outcome uncertain; retained journal") from None
     if not 200 <= response.status_code < 300:
         raise RuntimeError("Review correction rejected or uncertain; retained journal")
+
+
+def ghost_read_exact(config: Config, route: str, *, params: dict[str, str] | None = None) -> dict[str, Any]:
+    """One credential-safe GET with original decimal evidence, never a retry."""
+    validate_ghost_host(config["ghost_host"])
+    if not route.startswith("/api/v1/") or "?" in route or "#" in route:
+        raise RuntimeError("Invalid corporate-action read route")
+    try:
+        response = requests.get(config["ghost_host"] + route,
+                                headers=ghost_headers(config["ghost_token"]),
+                                params=params, timeout=(10, 30), allow_redirects=False)
+        if ghost_response_is_redirect(response) or not 200 <= response.status_code < 300:
+            raise RuntimeError("Corporate-action read unavailable")
+        result = json.loads(response.content, parse_int=Decimal, parse_float=Decimal)
+    except (requests.RequestException, ValueError, TypeError, UnicodeError):
+        raise RuntimeError("Corporate-action read unavailable") from None
+    if not isinstance(result, dict):
+        raise RuntimeError("Corporate-action read is not an object")
+    return result
+
+
+def ghost_corporate_evidence(config: Config, symbol: str) -> dict[str, Any]:
+    """Read existing profile and user-wide holding; the caller reconciles scope."""
+    from urllib.parse import quote
+
+    profile = ghost_read_exact(config, "/api/v1/asset-profiles/YAHOO/" + quote(symbol, safe=""))
+    holding: dict[str, Any] | None = None
+    # Bounded GET-only observations. A missing/stale result never resends a write.
+    for _ in range(2):
+        try:
+            holding = ghost_read_exact(config, "/api/v1/portfolio/holding/YAHOO/" + quote(symbol, safe=""))
+            break
+        except RuntimeError:
+            continue
+    if holding is None:
+        raise RuntimeError("Corporate-action holding unavailable after bounded observations")
+    version: str | None = None
+    if profile.get("splits"):
+        metadata = ghost_read_exact(config, "/api/v1/export", params={
+            "activityIds": "00000000-0000-0000-0000-000000000000"})
+        meta = metadata.get("meta")
+        if isinstance(meta, dict) and isinstance(meta.get("version"), str):
+            version = meta["version"]
+    return {"profile": profile, "holding": holding, "version": version}

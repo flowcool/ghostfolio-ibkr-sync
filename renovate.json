@@ -4,7 +4,7 @@
     "config:recommended"
   ],
   "forkProcessing": "enabled",
-  "enabledManagers": ["pip_requirements", "github-actions", "dockerfile", "docker-compose"],
+  "enabledManagers": ["pip_requirements", "pep621", "github-actions", "dockerfile", "docker-compose"],
   "timezone": "Europe/Zurich",
   "schedule": ["* * * * 1"],
   "prConcurrentLimit": 3,
@@ -18,12 +18,12 @@
   "packageRules": [
     {
       "description": "Keep the complete pinned Python dependency closure together after the review window.",
-      "matchManagers": ["pip_requirements"],
+      "matchManagers": ["pip_requirements", "pep621"],
       "minimumReleaseAge": "14 days",
       "rangeStrategy": "pin"
     },
     {
-      "matchManagers": ["pip_requirements"],
+      "matchManagers": ["pip_requirements", "pep621"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "python-minor-patch"
     },
@@ -49,6 +49,12 @@
       "matchManagers": ["github-actions"],
       "matchPackageNames": ["python"],
       "allowedVersions": ">=3.14 <3.15"
+    },
+    {
+      "description": "Python interpreter migrations remain a separate reviewed change.",
+      "matchManagers": ["pep621"],
+      "matchDepTypes": ["requires-python"],
+      "enabled": false
     },
     {
       "description": "Major upgrades require approval before creating a branch or PR.",
