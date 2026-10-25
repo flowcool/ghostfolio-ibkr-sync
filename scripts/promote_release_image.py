@@ -70,6 +70,10 @@ def plan():
     candidate = max(candidates, key=lambda name: int(RC_TAG.fullmatch(name).group(4)))
     commit = output("git", "rev-parse", "HEAD").decode().strip()
     stable_follows_release_candidate(tag, commits, commit)
+    return tag, version, candidate, candidate_qualification(repository, candidate, commit)
+
+
+def candidate_qualification(repository, candidate, commit):
     release = json.loads(output("gh", "api", f"repos/{repository}/releases/tags/{candidate}"))
     if (release.get("draft") is not False or release.get("prerelease") is not True
             or release.get("tag_name") != candidate or not release.get("published_at")):
@@ -83,7 +87,7 @@ def plan():
     if len(data) > 16384:
         raise RuntimeError("Qualification record is too large")
     record = qualification(json.loads(data, object_pairs_hook=unique_object), repository, candidate, commit)
-    return tag, version, candidate, record
+    return record
 
 
 def inspect(reference):
@@ -97,7 +101,7 @@ def same_digest(reference, expected):
     return raw
 
 
-def promote(selected, progress=None):
+def promote(selected, progress=None, verify_only=False):
     if progress is None:
         progress = {}
     progress["phase"] = "signature verification"
@@ -126,6 +130,8 @@ def promote(selected, progress=None):
                 or labels.get("org.opencontainers.image.source") != "https://github.com/" + record["repository"]
                 or labels.get("org.opencontainers.image.version") != candidate):
             raise RuntimeError("Native source identity mismatch")
+    if verify_only:
+        return raw
     # Re-read release authority, main ancestry, exact tag and version absence.
     progress["phase"] = "release and qualification recheck"
     subprocess.run([sys.executable, "scripts/release_image.py", "--registry"],

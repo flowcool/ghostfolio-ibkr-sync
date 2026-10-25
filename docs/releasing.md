@@ -211,6 +211,40 @@ prereleases or `-rc.` tags, and does not say explicitly that a plain `X.Y.Z` is
 not offered a suffixed variant. This is an inference from the suffix rule;
 consumers who need certainty should check their Renovate dry-run output.
 
+## Publish an older qualified RC
+
+An RC can predate the workflow that copies its digest. Under an explicit stable
+publication GO, use `recover-release-image.yml` from main. This operation does
+not rebuild or deploy. The exact accepted digest keeps its existing lab proof.
+
+1. Verify the retained RC build, signature, native manifests and both successful
+   stopped lab runs. Attach the qualification record described above.
+2. Record the current latest digest as the expected rollback target. Prepare one
+   non-prerelease draft named `vX.Y.Z`, with `--target` set to the exact highest
+   RC commit. Include the complete stable changelog, accepted digest, retained
+   RC APP_VERSION and qualification limits. Do not create the stable tag yet.
+3. Dispatch the reviewed executor on main:
+
+   ```bash
+   gh workflow run recover-release-image.yml --ref main \
+     -f tag=vX.Y.Z -f digest=sha256:<qualified-index> \
+     -f previous_digest=sha256:<current-latest>
+   ```
+
+The executor verifies all image evidence before writes. It refuses an existing
+stable tag/version, a changed latest digest, a changed current stable release or
+a newer/equal stable version. It creates the annotated stable tag and publishes
+the prepared draft with the repository GITHUB_TOKEN. GitHub does not trigger
+other workflows from these token-originated writes, so the older release build
+cannot run. It then uses the real published release response and the accepted
+source checkout for the existing promotion guards. It reads back stable/latest
+and retains a `qualified-release-recovery` artifact. Inspect that proof and the
+public release notes. This workflow is for the initial publication only.
+
+After a failed or uncertain write, stop and inspect actual tag, release and
+registry state. Do not rerun this initial-publication workflow or overwrite a
+version. A partially published version uses the explicit digest recovery below.
+
 ## Recover a failed latest promotion
 
 A version may exist even when its `latest` promotion failed. A workflow rerun
