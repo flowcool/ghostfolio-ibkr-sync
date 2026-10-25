@@ -272,11 +272,6 @@ class Store(TypedDict):
     bindings: dict[str, tuple[tuple[int, int, int, int, int], dict[str, Any]]]
 
 
-# Bound immutable report/proof bytes and inode growth; never delete evidence.
-MAX_EVIDENCE_BYTES = 256 * 1024 * 1024
-MAX_EVIDENCE_OBJECTS = 4096
-
-
 def private_directory(path: Path) -> None:
     if any(part.is_symlink() for part in (path, *path.parents)):
         raise RuntimeError("Corporate-action paths must not contain symlinks")
@@ -383,19 +378,6 @@ def immutable_object(path: Path, data: bytes, inputs: list[Path]) -> None:
         if path.read_bytes() != data:
             raise RuntimeError("Retained corporate-action object hash changed")
         return
-    objects = list(path.parent.iterdir())
-    if (
-        len(objects) >= MAX_EVIDENCE_OBJECTS
-        or sum(item.stat().st_size for item in objects) + len(data) > MAX_EVIDENCE_BYTES
-    ):
-        log.error(
-            "Corporate-action evidence capacity reached (%d MiB / %d objects); preserve evidence; BUY/SELL held",
-            MAX_EVIDENCE_BYTES // (1024 * 1024),
-            MAX_EVIDENCE_OBJECTS,
-        )
-        raise RuntimeError(
-            "Corporate-action evidence budget reached; preserve evidence and hold BUY/SELL"
-        )
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as stream:
         stream.write(data)

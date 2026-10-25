@@ -172,13 +172,9 @@ Keep the entire directory private and back it up with its input evidence.
 Each retained XML is verified and parsed once per run. Later reconciliations reuse
 those facts and reject file metadata changes. Additional compatible Flex columns
 can complete older evidence; changed shared facts or event legs remain conflicts.
-Immutable evidence is limited to **256 MiB and 4,096 objects** per state directory.
-Before either limit is exceeded, new retention fails and BUY/SELL stay held. Existing
-proof is preserved; the connector never deletes or silently compacts source history.
-Monitor the volume and retain a private backup. At the limit, stop writers and use a
-separately reviewed offline consolidation that preserves the required event/position
-anchors, contiguous windows and original acquisition bindings. Do not delete files
-or reset state to recover capacity. Cash keeps its existing guards.
+Full report retention currently grows with acquisitions. Bounded consolidation is not
+yet qualified. This is a known delivery blocker for unattended release; monitor and
+preserve the entire evidence directory. Do not delete files or reset state for capacity.
 
 Run simulation first. A valid report with the required section initializes missing
 state and publishes its bounded inventory. Review the inventory before live mode.

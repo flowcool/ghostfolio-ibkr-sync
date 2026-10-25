@@ -992,30 +992,69 @@ def test_retained_evidence_parsed_and_verified_once_per_object_per_run(
         ca.close_store(store)
 
 
-@pytest.mark.parametrize("limit", ["bytes", "objects"])
-def test_persistence_evidence_budget_preserves_existing_chain_and_state(
-    tmp_path, monkeypatch, limit
+@pytest.mark.parametrize("shared_target", [False, True])
+def test_holds_distinct_sources_cannot_certify_shared_destination_ownership(
+    tmp_path, monkeypatch, shared_target
 ):
-    from ghostfolio_ibkr_sync import corporate_actions as ca
+    from copy import deepcopy
+    from collections import defaultdict
+    import hashlib
+    from ghostfolio_ibkr_sync import app, corporate_actions as ca
 
     tmp_path.chmod(0o700)
-    path = tmp_path / "state.yaml"
-    store = ca.open_store(str(path), [], simulation=True)
+    store = ca.open_store(str(tmp_path / "state.yaml"), [], simulation=True)
+    reports, mapping, snapshot, evidence, _ = reverse_case()
+    original_rows = reports[0]["events"]["EVENT1"]["rows"]
+    other_rows = [{**row, "accountId": "OTHER"} for row in original_rows]
+    second_target = "TARGET" if shared_target else "OTHER_TARGET"
+    if not shared_target:
+        second = deepcopy(snapshot["activities"][0])
+        second.update(id="ROW2", accountId=second_target)
+        snapshot["activities"].append(second)
+        snapshot["count"] = 2
+        evidence["SAMPLE.T"]["holding"]["quantity"] = 200
+    document = tmp_path / "official.txt"
+    document.write_bytes(b"official date")
+    document.chmod(0o600)
+    proof = {
+        "effective_date": "2025-03-27",
+        "source_url": "https://issuer.example/split",
+        "document": str(document),
+        "bytes": document.read_bytes(),
+        "sha256": hashlib.sha256(document.read_bytes()).hexdigest(),
+    }
+    monkeypatch.setattr(
+        ca,
+        "load_date_proofs",
+        lambda _: {(source, "EVENT1"): proof for source in ("SOURCE", "OTHER")},
+    )
+    monkeypatch.setattr(
+        app, "ghost_corporate_evidence", lambda *_: evidence["SAMPLE.T"]
+    )
+    config = {
+        "account_ids": ["SOURCE", "OTHER"],
+        "query_ids": ["Q1", "Q2"],
+        "account_names": ["One", "Two"],
+        "_corporate_store": store,
+        "_source_reports": {
+            ("SOURCE", "Q1"): report(original_rows),
+            ("OTHER", "Q2"): report(other_rows, account="OTHER"),
+        },
+        "_source_accounts": {
+            ("SOURCE", "Q1"): "TARGET",
+            ("OTHER", "Q2"): second_target,
+        },
+    }
+    positions = {"qty": defaultdict(float)}
     try:
-        ca.retain_report(store, report([action()]), "SOURCE", "query", {})
-        before = path.read_bytes()
-        evidence = {p.name: p.read_bytes() for p in store["evidence"].iterdir()}
-        if limit == "bytes":
-            monkeypatch.setattr(
-                ca, "MAX_EVIDENCE_BYTES", sum(map(len, evidence.values()))
-            )
+        app.refresh_corporate_decisions(config, mapping, snapshot, positions)
+        assert all(
+            d["account_held"] is shared_target
+            for d in config["_corporate_decisions"].values()
+        )
+        if shared_target:
+            assert not positions["qty"]
         else:
-            monkeypatch.setattr(ca, "MAX_EVIDENCE_OBJECTS", len(evidence))
-        with pytest.raises(RuntimeError, match="evidence budget reached"):
-            ca.retain_report(
-                store, report([action()], end="20260101"), "SOURCE", "query", {}
-            )
-        assert path.read_bytes() == before
-        assert {p.name: p.read_bytes() for p in store["evidence"].iterdir()} == evidence
+            assert positions["qty"][("TARGET", "SAMPLE.T")] == 100
     finally:
         ca.close_store(store)

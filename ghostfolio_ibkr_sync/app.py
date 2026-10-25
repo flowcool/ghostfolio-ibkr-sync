@@ -810,6 +810,15 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
     """Compute holds from source objects and fresh destination data, not cached flags."""
     decisions: dict[str, ca.Decision] = {}
     store = config.get("_corporate_store")
+    # Startup already validates these reports. Populate the same run cache for
+    # direct callers, so every configured owner is known before any release.
+    if store is not None:
+        for (report_source, _), source_xml in config.get("_source_reports", {}).items():
+            if source_xml is not None:
+                try:
+                    ca.parse_report(store, source_xml, report_source)
+                except (RuntimeError, ValueError):
+                    pass  # The owning source receives its conservative fallback below.
     notification_state_safe = store is not None
     try:
         proofs = ca.load_date_proofs(config.get("corporate_action_evidence_file"))
@@ -857,7 +866,15 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
                     evidence.pop(symbol, None)
             if stale:
                 decision = ca.decide(reports, source, target, mapping, snapshot, evidence, proofs)
-            if config["account_ids"].count(source) > 1 and decision["findings"]:
+            names = config.get("account_names") or config["account_ids"]
+            pairs = list(zip(config["account_ids"], config["query_ids"], strict=True))
+            own_name = names[pairs.index((source, query))]
+            owners = [owner for index, owner in enumerate(pairs)
+                      if config.get("_source_accounts", {}).get(owner) == target
+                      or names[index] == own_name]
+            known_events = {item["source"] for item in store["inventories"].values()
+                            if item["events"]} if store is not None else {source}
+            if len(owners) > 1 and any(owner[0] in known_events for owner in owners):
                 decision["account_held"] = True
                 log.warning("Corporate-action source/destination ownership is not unique")
             if store is None:
