@@ -14,7 +14,9 @@ concurrency:
 jobs:
   preflight:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The full offline gate includes the ten-year retention scenarios and
+    # takes longer than the short release metadata preflight.
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read
