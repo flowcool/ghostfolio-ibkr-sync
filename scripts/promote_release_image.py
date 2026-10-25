@@ -97,7 +97,10 @@ def same_digest(reference, expected):
     return raw
 
 
-def promote(selected):
+def promote(selected, progress=None):
+    if progress is None:
+        progress = {}
+    progress["phase"] = "signature verification"
     tag, version, candidate, record = selected
     image = "ghcr.io/" + record["repository"]
     source = image + "@" + record["digest"]
@@ -106,9 +109,11 @@ def promote(selected):
         f"https://github.com/{record['repository']}/.github/workflows/release-image.yml@refs/tags/{candidate}",
         "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", source],
         check=True, stdout=subprocess.DEVNULL, timeout=120)
+    progress["phase"] = "qualified index verification"
     raw = same_digest(source, record["digest"])
     same_digest(image + ":" + candidate[1:], record["digest"])
     index = json.loads(raw)
+    progress["phase"] = "native source identity verification"
     for arch in ("amd64", "arm64"):
         digest = native_manifest_digest(index, arch)
         if digest != record["native"][arch]:
@@ -122,17 +127,22 @@ def promote(selected):
                 or labels.get("org.opencontainers.image.version") != candidate):
             raise RuntimeError("Native source identity mismatch")
     # Re-read release authority, main ancestry, exact tag and version absence.
+    progress["phase"] = "release and qualification recheck"
     subprocess.run([sys.executable, "scripts/release_image.py", "--registry"],
                    check=True, timeout=120)
     if plan() != selected:
         raise RuntimeError("Qualification changed during verification")
+    progress["phase"] = "version write and readback"
+    progress["publication_attempted"] = True
     subprocess.run(["docker", "buildx", "imagetools", "create", "--tag",
                     image + ":" + version, source], check=True, timeout=120)
     same_digest(image + ":" + version, record["digest"])
     Path("release-manifest.json").write_bytes(raw)
     Path("release-manifest-digest.txt").write_text(record["digest"])
+    progress["phase"] = "current stable release check"
     current = output("gh", "api", f"repos/{record['repository']}/releases/latest", "--jq", ".tag_name").decode().strip()
     if current == tag:
+        progress["phase"] = "latest write and readback"
         subprocess.run(["docker", "buildx", "imagetools", "create", "--tag", image + ":latest", source],
                        check=True, timeout=120)
         same_digest(image + ":latest", record["digest"])
@@ -148,18 +158,23 @@ def main():
     mode.add_argument("--plan", action="store_true", help="Read qualification metadata; no registry writes")
     mode.add_argument("--publish", action="store_true", help="Release workflow only; requires publication authority")
     args = parser.parse_args()
+    progress = {"phase": "qualification record", "publication_attempted": False}
     try:
         selected = plan()
         if args.publish:
             if selected is None:
                 raise RuntimeError("Qualified RC required")
-            promote(selected)
+            promote(selected, progress)
         else:
             with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
                 stream.write("candidate=" + (selected[2] if selected else "") + "\n")
             print("Qualified RC promotion selected" if selected else "Native release build selected")
     except Exception:
-        raise SystemExit("Qualified RC promotion refused; inspect prerequisites before retry") from None
+        if progress["publication_attempted"]:
+            outcome = "Publication may be partial; stop, inspect registry evidence and never overwrite the version"
+        else:
+            outcome = "Promotion refused before publication"
+        raise SystemExit(f"{outcome}; failed at {progress['phase']}") from None
 
 
 if __name__ == "__main__":
