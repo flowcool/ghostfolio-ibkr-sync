@@ -79,13 +79,22 @@ jobs:
           build = api("/actions/runs/40206240896")
           require(build["conclusion"] == "success" and build["head_sha"] == commit
                   and build["event"] == "release", "Signed native release checks missing")
-          release = api("/releases/tags/" + tag)
+          drafts = [r for r in api("/releases?per_page=20") if r.get("tag_name") == tag]
+          require(len(drafts) == 1, "One prepared draft required")
+          release = drafts[0]
           require(release["draft"] is True and release["prerelease"] is False
+                  and release["published_at"] is None and release["target_commitish"] == commit
                   and "waived further lab admission" in release["body"], "Prepared waived draft required")
-          require(api("/releases/latest")["tag_name"] == "v3.2.0", "Current stable drift")
+          previous_release = api("/releases/latest")
+          require(previous_release["tag_name"] == "v3.2.0", "Current stable drift")
           raw = promotion.promote((tag, version, candidate, record), verify_only=True)
           promotion.same_digest(image + ":latest", previous)
           registry_version_absent(repository, version, os.environ["GITHUB_ACTOR"], os.environ["GH_TOKEN"])
+          require(api("/releases/latest")["id"] == previous_release["id"], "Current stable changed")
+          current_draft = api("/releases/" + str(release["id"]))
+          require(all(current_draft.get(key) == release.get(key) for key in (
+              "id", "tag_name", "target_commitish", "body", "name", "draft", "prerelease", "published_at")),
+              "Prepared draft changed")
           proof = Path("tmp/security-patch-3.2.1")
           proof.mkdir(parents=True)
           state = dict(schema=1, **record, rc_tag=candidate, lab_admission="maintainer-waived",
