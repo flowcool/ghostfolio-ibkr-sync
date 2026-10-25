@@ -11,6 +11,7 @@ PYTHON_WORKFLOWS = {
     'docker-publish.yml': 2,
     'release-image.yml': 4,
     'recover-release-image.yml': 1,
+    'publish-v3.2.1.yml': 1,
     'dependency-release-watch.yml': 1,
     'upstream-release-watch.yml': 1,
 }
