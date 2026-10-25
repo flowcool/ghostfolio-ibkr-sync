@@ -459,7 +459,7 @@ def test_shared_owner_unavailable_holds_before_dispatch(tmp_path, monkeypatch, r
         app.refresh_corporate_decisions(config, {}, {"activities": [], "count": 0}, {"qty": defaultdict(float)})
         decisions = config["_corporate_decisions"]
         assert decisions["OTHER"]["account_held"]
-        assert decisions["SOURCE"]["account_held"] is (shared or unavailable == "target")
+        assert decisions["SOURCE"]["account_held"] is shared
     finally:
         ca.close_store(store)
 

@@ -855,7 +855,6 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
     for index, pair in enumerate(pairs):
         for other_index, other in enumerate(pairs[:index]):
             if (names[index] == names[other_index]
-                    or not possible_targets[pair] or not possible_targets[other]
                     or possible_targets[pair] & possible_targets[other]):
                 merged = set().union(*(group for group in groups if pair in group or other in group))
                 groups = [group for group in groups if pair not in group and other not in group] + [merged]
