@@ -9,10 +9,13 @@ import time
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from math import ceil, isfinite
+from pathlib import Path
 from typing import Any, cast
+from xml.etree.ElementTree import ParseError
 
 import requests
 
+from ghostfolio_ibkr_sync import corporate_actions as ca
 from ghostfolio_ibkr_sync.activity_review import (
     ReviewState,
     assert_unchanged,
@@ -36,6 +39,7 @@ from ghostfolio_ibkr_sync.ghostfolio import (
     activity_date_is_current,
     dividend_context,
     format_versioned_activity_identity,
+    ghost_corporate_evidence,
     ghost_exchange_access_token,
     ghost_find_account_id,
     ghost_get_existing_orders,
@@ -85,6 +89,7 @@ from ghostfolio_ibkr_sync.sync import (
     load_mapping,
     log_dividend_proximity_skip,
     rejected_sell_symbols,
+    resolve_symbol,
     split_import_phases,
     trade_id_decision,
     unique_trades,
@@ -142,7 +147,11 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     # Fetch the Flex Query report
     try:
-        if "_review_reports" in config:
+        if "_source_reports" in config:
+            xml_text = config["_source_reports"].get((ibkr_account_id, query_id))
+            if xml_text is None:
+                raise RuntimeError("Source acquisition failed")
+        elif "_review_reports" in config:
             xml_text = config["_review_reports"].get(ibkr_account_id)
             if xml_text is None:
                 raise RuntimeError("Review source acquisition failed")
@@ -164,14 +173,18 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
                   "Ghostfolio lookup or any write", query_id, reason)
         return {}, False
 
-    if ibkr_account_id in config.get("_review_failed_sources", set()):
+    if ((ibkr_account_id, query_id) in config.get("_source_failed", set())
+            or (config.get("_review_state") is not None
+                and ibkr_account_id in config.get("_review_failed_sources", set()))):
         return {}, False
     if config.get("_review_state") is not None:
         assert_unchanged(config["_review_state"])
 
     # Find the Ghostfolio account
     try:
-        ghost_account_id = ghost_find_account_id(config, ghost_account_name)
+        ghost_account_id = (config["_source_accounts"].get((ibkr_account_id, query_id))
+                            if "_source_accounts" in config
+                            else ghost_find_account_id(config, ghost_account_name))
     except (requests.RequestException, RuntimeError) as exc:
         log.error("Failed to look up Ghostfolio account '%s': %s", ghost_account_name, exc)
         return {}, False
@@ -208,10 +221,14 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             xml_text, ibkr_account_id, ghost_account_id, mapping, existing_trade_ids,
             existing_dividend_comments, positions, query_id=query_id,
             diagnostic_preview=bool(config.get("dry_run")),
-            review_holds=config.get("_review_holds"))
+            review_holds=config.get("_review_holds"),
+            corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id))
     except InvalidActivityIdentityError:
         return {}, False
     ok = ok and selection_ok
+    decision = config.get("_corporate_decisions", {}).get(ibkr_account_id)
+    if decision is not None:
+        ok = ok and not decision["account_held"] and not decision["symbols"]
 
     # Create buys/dividends first. A server-skipped BUY cannot back a later SELL,
     # even in this account's batch. Dry-run uses proposed buys for simulation.
@@ -262,6 +279,7 @@ def select_account_activities(
     date_is_current: Callable[[Mapping[str, Any]], bool] | None = None,
     holdings_trace: dict[str, Any] | None = None,
     review_holds: set[str] | None = None,
+    corporate_decision: ca.Decision | None = None,
 ) -> tuple[list[Activity], dict[str, DividendContext], Unmapped, bool]:
     """Select without fetching or dispatching; mutate only manual-match state.
 
@@ -333,6 +351,10 @@ def select_account_activities(
         if activity is None or not date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
+            ok = False
+            continue
+        if corporate_decision is not None and ca.candidate_held(corporate_decision, activity):
+            log.warning("Corporate-action BUY/SELL candidate held for %s", activity["symbol"])
             ok = False
             continue
         # The gate must use the same signed quantity the converted BUY/SELL will
@@ -478,26 +500,45 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     """
     days = outcome.get("token_expiry_days")
     preview = outcome.get("forced_preview")
-    if code == 0 and (dry_run_requested() or (days is None and not preview)):
+    corporate = outcome.get("corporate_notification")
+    corporate_due = corporate is not None and bool(corporate["sent"])
+    maintenance_due = outcome.get("corporate_maintenance", False)
+    if code == 0 and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
         return
-    label = "Failure" if code else ("Forced preview" if preview else "Token expiry")
+    label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
+                                   ("Forced preview" if preview else "Token expiry"))
     try:
         settings = load_notification_config()
         if settings is None:
             return
         if code:
             title, body = NOTIFY_TITLE, build_failure_summary(outcome)
+        elif corporate_due or maintenance_due:
+            title, body = "ghostfolio-ibkr-sync: corporate actions", "Corporate-action evidence summary."
+            if not dry_run_requested():
+                if preview:
+                    body += "\n" + build_forced_preview_summary(preview)
+                if days is not None:
+                    body += "\n" + build_token_expiry_summary(days)
         elif preview:
             title, body = FORCED_PREVIEW_NOTIFY_TITLE, build_forced_preview_summary(preview)
             if days is not None:
                 body += "\n" + build_token_expiry_summary(days)
         else:
             title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(cast(int, days))
+        if corporate_due and corporate is not None:
+            body += "\n" + "\n".join(f"- corporate_actions: {key} ({value})"
+                                       for key, value in corporate["counts"].items()
+                                       if key in ("active_holds", "changed_findings", "resumptions") and type(value) is int)
+        if maintenance_due:
+            body += "\n- corporate_actions: maintenance_incomplete (1)"
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
         return
     if status == "sent":
+        if corporate_due and corporate is not None:
+            ca.confirm_notification(cast(ca.NotificationPlan, corporate))
         log.info("%s notification sent", label)
     elif status == "timeout":
         log.warning("%s notification timed out (it may still arrive; not retried)", label)
@@ -530,31 +571,45 @@ def run_sync(outcome: RunOutcome) -> int:
 
 
 def prepare_review_sources(config: dict[str, Any], mapping: dict[str, str], names: list[str]) -> None:
-    """Acquire and validate each report once; safe accounts remain independent."""
+    """Acquire before target lookup; retain independent source failures."""
     reports: dict[str, str | None] = {}
     events: dict[str, dict[str, Any]] = {}
     accounts: dict[str, str] = {}
     failed: set[str] = set()
+    source_reports: dict[tuple[str, str], str | None] = {}
+    source_accounts: dict[tuple[str, str], str] = {}
+    source_failed: set[tuple[str, str]] = set()
     for source, query, name in zip(config["account_ids"], config["query_ids"], names, strict=True):
         try:
+            xml = fetch_flex_report(config["ibkr_token"], query)
+            if parse_source_account_ids(xml) != {source}:
+                raise RuntimeError("Source account mismatch")
+            ca.parse_report(config.get("_corporate_store"), xml, source)  # Validate before target lookup.
+            reports[source] = xml
             target = ghost_find_account_id(config, name)
             if target is None:
-                raise RuntimeError("Review destination account missing")
+                raise RuntimeError("Destination account missing")
             accounts[source] = target
-            xml = fetch_flex_report(config["ibkr_token"], query)
-            reports[source] = xml
-            events.update(source_events(xml, source, target, mapping))
+            source_accounts[(source, query)] = target
+            source_reports[(source, query)] = xml
+            if config.get("_review_state") is not None:
+                events.update(source_events(xml, source, target, mapping))
         except Exception:
             reports[source] = None
             failed.add(source)
-            log.error("Review report acquisition/validation failed for source account %s", source)
-    for item in config["_review_state"]["document"]["proposals"].values():
+            source_reports[(source, query)] = None
+            source_failed.add((source, query))
+            log.error("Source report acquisition/validation failed for source account %s", source)
+    for item in (config.get("_review_state") or {"document": {"proposals": {}}})["document"]["proposals"].values():
         source = item.get("source account")
         target = item.get("destination account")
         if (isinstance(source, str) and source in failed and source not in accounts
                 and isinstance(target, str) and target):
             accounts[source] = target
     # Retained bindings can suspend failed sources, never authorize dispatch.
+    config["_source_reports"] = source_reports
+    config["_source_accounts"] = source_accounts
+    config["_source_failed"] = source_failed
     config["_review_reports"] = reports
     config["_review_events"] = events
     config["_review_accounts"] = accounts
@@ -562,6 +617,29 @@ def prepare_review_sources(config: dict[str, Any], mapping: dict[str, str], name
 
 
 def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
+    """Own the corporate-action lock for this run, including simulation."""
+    store: ca.Store | None = None
+    try:
+        inputs = [config.get("mapping_file", ""), config.get("corporate_action_evidence_file", "")]
+        if config.get("activity_review_file"):
+            inputs += [config["activity_review_file"], config["activity_review_file"] + ".journal.yaml",
+                       config["activity_review_file"] + ".lock"]
+        try:
+            store = ca.open_store(config.get("corporate_action_state_file",
+                                             os.environ.get("CORPORATE_ACTION_STATE_FILE")) or "",
+                                  inputs, simulation=bool(config["dry_run"] or timezone_preview_reason()))
+            config["_corporate_store"] = store
+        except (RuntimeError, OSError):
+            log.error("Corporate-action state unavailable; BUY/SELL held; cash keeps existing guards")
+        config["_corporate_outcome"] = outcome
+        return _run_configured_sync(config, outcome)
+    finally:
+        config.pop("_corporate_store", None)
+        if store is not None:
+            ca.close_store(store)
+
+
+def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     """Execute with any optional persistent-review lock held for the whole run."""
     reason = timezone_preview_reason()
     if reason:
@@ -610,8 +688,7 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
         account_names = account_ids
         log.warning("No GHOST_ACCOUNT_NAMES provided, using IBKR account IDs as Ghostfolio account names")
 
-    if config.get("_review_state") is not None:
-        prepare_review_sources(config, mapping, account_names)
+    prepare_review_sources(config, mapping, account_names)
 
     # Fetch existing activities once for the whole run; process_account keeps the
     # sets current as it imports
@@ -635,6 +712,15 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
              len(existing_trade_ids), len(existing_dividend_comments),
              len(positions.get("versioned_identities", set())))
 
+    # Reparse retained bytes and reconcile before review can dispatch any PUT.
+    def reconcile_corporate(rows: list[dict[str, Any]] | None = None) -> None:
+        snapshot = ({"activities": rows, "count": len(rows)} if rows is not None
+                    else positions.get("corporate_snapshot"))
+        refresh_corporate_decisions(config, mapping, snapshot, positions)
+
+    config["_corporate_reconcile"] = reconcile_corporate
+    reconcile_corporate()
+
     if (config.get("_review_state") is not None
             and (any(xml is not None for xml in config["_review_reports"].values())
                  or config["_review_state"]["original"] is not None
@@ -650,6 +736,7 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
         # A replacement changes positions once. Never add its full quantity to
         # the earlier holdings. Rebuild every account from verified destination.
         existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)
+        reconcile_corporate()
 
     all_unmapped = {}
     failed_accounts = []
@@ -689,7 +776,11 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     if not all_unmapped:
         log.info("No unmapped ISINs in this run")
 
-    if failed_accounts:
+    corporate_failed = any(d["account_held"] or d["symbols"]
+                           for d in config.get("_corporate_decisions", {}).values())
+    if corporate_failed:
+        record_failure(outcome, "corporate_actions", "trade_hold")
+    if failed_accounts or corporate_failed:
         log.error("Sync completed with errors for %d of %d account(s): %s",
                   len(failed_accounts), len(account_ids), ", ".join(failed_accounts))
         return 1
@@ -716,3 +807,117 @@ def main() -> int:
         code = 1
     finalize_run(outcome, code)
     return code
+
+
+def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
+                                snapshot: dict[str, Any] | None, positions: Positions) -> None:
+    """Compute holds from source objects and fresh destination data, not cached flags."""
+    decisions: dict[str, ca.Decision] = {}
+    store = config.get("_corporate_store")
+    notification_state_safe = store is not None
+    try:
+        proofs = ca.load_date_proofs(config.get("corporate_action_evidence_file"))
+        if store is not None:
+            store["inputs"] += [Path(proof["document"]) for proof in proofs.values()]
+            ca.check_store(store)
+    except (RuntimeError, OSError, ValueError):
+        proofs = {}
+        notification_state_safe = False
+        log.error("Official corporate-action date evidence unavailable; affected events stay held")
+    pairs = list(zip(config["account_ids"], config["query_ids"], strict=True))
+    names = config.get("account_names") or config["account_ids"]
+    targets = config.get("_source_accounts", {})
+    prepared: dict[tuple[str, str], list[ca.Inventory]] = {}
+    unavailable: set[tuple[str, str]] = set()
+    # Complete evidence acquisition for every owner before the first decision.
+    for pair in pairs:
+        source, query = pair
+        xml = config.get("_source_reports", {}).get(pair)
+        if xml is None or targets.get(pair) is None:
+            unavailable.add(pair)
+            continue
+        try:
+            current = ca.parse_report(store, xml, source)
+            prepared[pair] = (ca.retain_report(store, xml, source, query, mapping,
+                                               dates={key: proof["effective_date"] for key, proof in proofs.items()})
+                              if store is not None else [current])
+            if current["account_held"] or not current["section_present"]:
+                unavailable.add(pair)
+        except (RuntimeError, OSError, ValueError, ParseError):
+            unavailable.add(pair)
+    groups = [{pair} for pair in pairs]
+    possible_targets = {
+        pair: ({targets[pair]} if targets.get(pair) is not None else
+               {targets[other] for other_index, other in enumerate(pairs)
+                if names[other_index] == names[index] and targets.get(other) is not None})
+        for index, pair in enumerate(pairs)
+    }
+    for index, pair in enumerate(pairs):
+        for other_index, other in enumerate(pairs[:index]):
+            if (names[index] == names[other_index]
+                    or possible_targets[pair] & possible_targets[other]):
+                merged = set().union(*(group for group in groups if pair in group or other in group))
+                groups = [group for group in groups if pair not in group and other not in group] + [merged]
+    shared_holds = set().union(*(group for group in groups if len(group) > 1 and any(
+        owner in unavailable or any(report["events"] for report in prepared.get(owner, []))
+        for owner in group)))
+    for source, query in pairs:
+        pair = source, query
+        target = targets.get(pair)
+        fallback: ca.Decision = {"account_held": True, "symbols": set(), "effective": {},
+                                 "findings": {}, "dates": {}, "normalized": set()}
+        reports = prepared.get(pair)
+        if reports is None or target is None:
+            decisions[source] = fallback
+            continue
+        try:
+            evidence: dict[str, dict[str, Any]] = {}
+            symbols = {symbol for report in reports for event in report["events"].values()
+                       if not set(event["reasons"]) - {"before_quantity_unproven", "effective_date_unproven"}
+                       for row in event["rows"]
+                       if (symbol := resolve_symbol(row.get("isin"), row.get("symbol"), mapping))}
+            for symbol in sorted(symbols):
+                try:
+                    evidence[symbol] = ghost_corporate_evidence(config, symbol)
+                except (RuntimeError, requests.RequestException):
+                    log.warning("Corporate-action destination evidence unavailable for %s", symbol)
+            decision = ca.decide(reports, source, target, mapping, snapshot, evidence, proofs)
+            stale = {symbol for event in decision["findings"].values()
+                     if "destination_holding_mismatch" in event["reasons"]
+                     for symbol in event["symbols"] if symbol in evidence}
+            for symbol in sorted(stale):
+                log.info("Corporate-action holding mismatch: one fresh read-only observation for %s", symbol)
+                try:
+                    evidence[symbol] = ghost_corporate_evidence(config, symbol)
+                except (RuntimeError, requests.RequestException):
+                    evidence.pop(symbol, None)
+            if stale:
+                decision = ca.decide(reports, source, target, mapping, snapshot, evidence, proofs)
+            if pair in shared_holds:
+                decision["account_held"] = True
+                log.warning("Corporate-action shared destination has unavailable or event-bearing owner evidence")
+            if store is None:
+                decision["account_held"] = True
+            else:
+                ca.publish_findings(store, source, decision, proofs)
+            for key, event in decision["findings"].items():
+                log.warning("Corporate action %s: held=%s reasons=%s conclusions=%s", key,
+                            event["held"], ",".join(event["reasons"]), event["conclusions"])
+            for symbol, quantity in decision["effective"].items():
+                if symbol not in decision["symbols"] and not decision["account_held"]:
+                    positions["qty"][(target, symbol)] = float(quantity)
+            previous = decisions.get(source)
+            if previous is not None:
+                decision["account_held"] = decision["account_held"] or previous["account_held"]
+                decision["symbols"].update(previous["symbols"])
+            decisions[source] = decision
+        except (RuntimeError, OSError, ValueError, ParseError):
+            log.error("Corporate-action source/state evidence unavailable; account BUY/SELL held")
+            decisions[source] = fallback
+    config["_corporate_decisions"] = decisions
+    outcome = config.get("_corporate_outcome")
+    if outcome is not None:
+        if store is not None and store["maintenance_warning"]:
+            outcome["corporate_maintenance"] = True
+        ca.prepare_notifications(outcome, config.get("corporate_action_state_file")
+                                 if notification_state_safe else None, decisions)

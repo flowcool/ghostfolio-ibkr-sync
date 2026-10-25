@@ -139,6 +139,19 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 
 6. Save the query and note the Query ID (click the info icon next to the query to find it)
 
+### Corporate Actions (required)
+
+Select **Corporate Actions**, even when the report contains no events. An empty
+section records no observed event in that report window. A missing section holds
+all BUY/SELL for that source account; independent cash keeps its existing guards.
+
+Include ClientAccountID (`accountId`), Type, ActionID, TransactionID,
+LevelOfDetail, ConID, ISIN, Symbol, Quantity, CurrencyPrimary, Date/Time **with
+time zone**, Report Date, Description and Action Description. Include available
+Amount, Proceeds and realized/value fields. Missing cash is different from zero.
+Do not add Open Positions solely for this feature. These fields do not prove
+complete lifetime coverage or authorize corporate-action treatment.
+
 ### Prepare for structured dividend quantities
 
 Enrich the query before upgrading. Dividend quantities now require structured
@@ -270,6 +283,5 @@ On the Flex Queries page, click the **info icon** (circle with "i") next to your
 ## 5. Data availability
 
 Activity Statement data updates once daily after market close. Running the sync during market hours will only include trades from the previous day or earlier.
-
 
 [Back to the README](../README.md)

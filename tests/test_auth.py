@@ -105,6 +105,7 @@ def test_load_config_never_calls_the_network(env):
 
 
 def test_typed_settings_match_the_config_dictionary(env):
+    env.delenv("CORPORATE_ACTION_STATE_FILE", raising=False)
     env.setenv("GHOST_ACCESS_TOKEN", SECRET)
     env.setenv("GHOST_ACCOUNT_NAMES", " IBKR ")
     settings = config.load()
@@ -116,7 +117,8 @@ def test_typed_settings_match_the_config_dictionary(env):
         "ibkr_token": "tok", "account_ids": ["U1"], "query_ids": ["q1"],
         "account_names": ["IBKR"], "ghost_token": None, "ghost_access_token": SECRET,
         "ghost_host": "http://ghost:3333", "ghost_platform_id": "", "mapping_file": "",
-        "dry_run": False, "activity_review_file": None}
+        "dry_run": False, "activity_review_file": None,
+        "corporate_action_state_file": None, "corporate_action_evidence_file": None}
 
 
 def test_typed_settings_are_immutable_and_hide_credentials(env):
@@ -218,6 +220,9 @@ def access_env(env, dry_run=False):
 def record_startup(monkeypatch, tokens=("bearer-1", "bearer-2", "bearer-3"), fail=None):
     """Stub every startup step; return the ordered list of what happened."""
     events = []
+    from _sync_helpers import report
+    monkeypatch.setattr(app, "fetch_flex_report", lambda *args: report())
+    monkeypatch.setattr(app, "ghost_find_account_id", lambda cfg, name: name)
     issued = iter(tokens)
 
     def exchange(host, access_token):
@@ -337,7 +342,7 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
     div = ('<CashTransaction type="Dividends" levelOfDetail="DETAIL" amount="25" dateTime="20260715;120000 EST" '
            'isin="US1912161007" symbol="KO" currency="USD" description="KO CASH DIVIDEND" '
            'accountId="U1" conid="1" actionID="9" exDate="20260710"/>')
-    xml = (f"<FlexQueryResponse><FlexStatements><FlexStatement>"
+    xml = (f'<FlexQueryResponse><FlexStatements><FlexStatement accountId="U1" fromDate="20200101" toDate="20261231"><CorporateActions/>'
            '<AccountInformation accountId="U1" currency="USD"/>'
            f"<Trades>{trade}</Trades><CashTransactions>{div}</CashTransactions><ChangeInDividendAccruals/><CashReport>"
            '<CashReportCurrency currency="BASE_SUMMARY" endingCash="100"/></CashReport>'

@@ -63,7 +63,7 @@ def report(trades="", divs="", cash="100.5", cash_section=True, base_currency="U
                      date=row.get("dateTime", "")[:8], reportDate=row.get("dateTime", "")[:8])
         accruals.append(ET.tostring(ET.Element("ChangeInDividendAccrual", attrs), encoding="unicode"))
     evidence = "<ChangeInDividendAccruals>" + "".join(accruals) + "</ChangeInDividendAccruals>"
-    return (f"<FlexQueryResponse><FlexStatements><FlexStatement>{info}<Trades>{trades}</Trades>{ct}{cash_xml}{evidence}"
+    return (f'<FlexQueryResponse><FlexStatements><FlexStatement accountId="{source_account}" fromDate="20200101" toDate="20261231">{info}<CorporateActions/><Trades>{trades}</Trades>{ct}{cash_xml}{evidence}'
             f"</FlexStatement></FlexStatements></FlexQueryResponse>")
 
 

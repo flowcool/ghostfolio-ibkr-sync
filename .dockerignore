@@ -10,3 +10,6 @@ tests
 requirements-dev.txt
 pytest.ini
 .pytest_cache
+
+# Private corporate-action reports, date evidence and delivery state
+state/
