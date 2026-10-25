@@ -30,7 +30,6 @@ from ghostfolio_ibkr_sync.ghostfolio import activity_date_is_current, activity_i
 from ghostfolio_ibkr_sync.ibkr import (
     IBKR_MAX_XML_BYTES,
     parse_ibkr_datetime,
-    parse_source_account_ids,
 )
 
 log = logging.getLogger(__name__)
@@ -75,9 +74,12 @@ def inventory(xml: str, source: str) -> Inventory:
     """Recognize events without certifying quantity, timing or treatment."""
     if len(xml.encode()) > IBKR_MAX_XML_BYTES:
         raise RuntimeError("Corporate-action report exceeds the source size limit")
-    if parse_source_account_ids(xml) != {source}:
-        raise RuntimeError("Corporate-action source account mismatch")
     root = ET.fromstring(xml)
+    accounts = {
+        node.get("accountId", "").strip() for node in root.iter("AccountInformation")
+    }
+    if accounts != {source}:
+        raise RuntimeError("Corporate-action source account mismatch")
     statements = list(root.iter("FlexStatement"))
     if len(statements) != 1 or statements[0].get("accountId") not in (None, source):
         raise RuntimeError("Corporate-action source account statement mismatch")
@@ -104,143 +106,12 @@ def inventory(xml: str, source: str) -> Inventory:
         != (len(list(section.iter("CorporateAction"))) if section is not None else 0)
     )
     for key, rows in sorted(grouped.items()):
-        rows.sort(key=lambda row: sorted(row.items()))
-        reasons: set[str] = set()
-        ratios: set[tuple[int, int]] = set()
-        transactions: dict[str, dict[str, str]] = {}
-        for row in rows:
-            required = (
-                "accountId",
-                "type",
-                "actionID",
-                "transactionID",
-                "levelOfDetail",
-                "conid",
-                "isin",
-                "symbol",
-                "quantity",
-                "currency",
-                "reportDate",
-            )
-            if any(not row.get(field, "").strip() for field in required):
-                reasons.add("missing_fields")
-            if row.get("levelOfDetail") != "DETAIL":
-                reasons.add("unsupported_detail")
-            try:
-                number(row.get("quantity"))
-                for field in ("proceeds", "amount", "fifoPnlRealized", "value"):
-                    if row.get(field):
-                        number(row[field])
-            except RuntimeError:
-                reasons.add("invalid_number")
-            if (
-                not re.fullmatch(
-                    r"[0-9]{8};[0-9]{6} [A-Za-z_+:/0-9-]+", row.get("dateTime", "")
-                )
-                or parse_ibkr_datetime(row.get("dateTime")) is None
-            ):
-                reasons.add("invalid_processing_time")
-            try:
-                datetime.strptime(row.get("reportDate", ""), "%Y%m%d")
-            except ValueError:
-                reasons.add("invalid_report_date")
-            descriptions = [
-                row[field]
-                for field in ("description", "actionDescription")
-                if row.get(field)
-            ]
-            if not descriptions:
-                reasons.add("ratio_unproven")
-            for description in descriptions:
-                matches = re.findall(
-                    r"\bSPLIT ([1-9][0-9]*) FOR ([1-9][0-9]*)\b", description
-                )
-                if len(matches) != 1:
-                    reasons.add("ratio_unproven")
-                else:
-                    ratios.add((int(matches[0][0]), int(matches[0][1])))
-            if row.get("securityIDType") == "ISIN" and row.get("securityID") != row.get(
-                "isin"
-            ):
-                reasons.add("conflicting_security_identity")
-            if row.get("transactionID") in transactions:
-                reasons.add("conflicting_transaction")
-            transactions[row.get("transactionID", "")] = row
-        if len(ratios) != 1:
-            reasons.add("conflicting_ratio")
-        ratio = list(next(iter(ratios))) if len(ratios) == 1 else None
-        kinds = {row.get("type") for row in rows}
-        if kinds == {"FS"}:
-            if len(rows) != 1 or not ratio or ratio[0] <= ratio[1]:
-                reasons.add("incomplete_forward_shape")
-            try:
-                if number(rows[0].get("quantity")) <= 0:
-                    reasons.add("incomplete_forward_shape")
-            except RuntimeError:
-                reasons.add("incomplete_forward_shape")
-            reasons.add("before_quantity_unproven")
-        elif kinds == {"RS"}:
-            try:
-                negative = [row for row in rows if number(row.get("quantity")) < 0]
-                positive = [row for row in rows if number(row.get("quantity")) > 0]
-                if (
-                    len(rows) != 2
-                    or len(negative) != 1
-                    or len(positive) != 1
-                    or ratio is None
-                    or ratio[0] >= ratio[1]
-                    or number(positive[0]["quantity"]) * ratio[1]
-                    != -number(negative[0]["quantity"]) * ratio[0]
-                    or negative[0].get("isin") == positive[0].get("isin")
-                    or negative[0].get("conid") == positive[0].get("conid")
-                ):
-                    reasons.add("incomplete_reverse_legs")
-            except RuntimeError:
-                reasons.add("incomplete_reverse_legs")
-        else:
-            reasons.add("unsupported_type")
-        if len({row.get("currency") for row in rows}) != 1:
-            reasons.add("conflicting_currency")
-        if any(row.get("code", "").strip() for row in rows):
-            reasons.add("revision_or_cancellation")
-        # The processing/report dates do not establish the market effective date.
-        reasons.add("effective_date_unproven")
-        symbols = sorted({row["symbol"] for row in rows if row.get("symbol")})
-        isins = sorted({row["isin"] for row in rows if row.get("isin")})
+        events[key] = event_inventory(rows)
         if any(
             not row.get("conid") or not row.get("isin") or not row.get("symbol")
             for row in rows
         ):
             unbounded = True
-        cash_fields = [
-            row.get(field) for row in rows for field in ("amount", "proceeds")
-        ]
-        cash = "missing_proof"
-        if all(value not in (None, "") for value in cash_fields):
-            try:
-                cash = (
-                    "no_action_cash_observed"
-                    if all(number(v) == 0 for v in cash_fields)
-                    else "explicit_action_cash_requires_linked_evidence"
-                )
-            except RuntimeError:
-                pass
-        events[key] = {
-            "rows": rows,
-            "candidate_ratio": ratio,
-            "reasons": sorted(reasons),
-            "symbols": symbols,
-            "isins": isins,
-            "held": True,
-            "conclusions": {
-                "source": "observed_bounded_window",
-                "identity": "missing_proof",
-                "quantity": "missing_proof",
-                "history": "missing_proof",
-                "cash": cash,
-                "timing": "missing_proof",
-            },
-        }
     return {
         "source": source,
         "sha256": hashlib.sha256(xml.encode()).hexdigest(),
@@ -255,6 +126,140 @@ def inventory(xml: str, source: str) -> Inventory:
     }
 
 
+def event_inventory(rows: list[dict[str, str]]) -> Event:
+    """Recompute conclusions when compatible query columns add evidence."""
+    rows.sort(key=lambda row: sorted(row.items()))
+    reasons: set[str] = set()
+    ratios: set[tuple[int, int]] = set()
+    transactions: dict[str, dict[str, str]] = {}
+    for row in rows:
+        required = (
+            "accountId",
+            "type",
+            "actionID",
+            "transactionID",
+            "levelOfDetail",
+            "conid",
+            "isin",
+            "symbol",
+            "quantity",
+            "currency",
+            "reportDate",
+        )
+        if any(not row.get(field, "").strip() for field in required):
+            reasons.add("missing_fields")
+        if row.get("levelOfDetail") != "DETAIL":
+            reasons.add("unsupported_detail")
+        try:
+            number(row.get("quantity"))
+            for field in ("proceeds", "amount", "fifoPnlRealized", "value"):
+                if row.get(field):
+                    number(row[field])
+        except RuntimeError:
+            reasons.add("invalid_number")
+        if (
+            not re.fullmatch(
+                r"[0-9]{8};[0-9]{6} [A-Za-z_+:/0-9-]+", row.get("dateTime", "")
+            )
+            or parse_ibkr_datetime(row.get("dateTime")) is None
+        ):
+            reasons.add("invalid_processing_time")
+        try:
+            datetime.strptime(row.get("reportDate", ""), "%Y%m%d")
+        except ValueError:
+            reasons.add("invalid_report_date")
+        descriptions = [
+            row[field]
+            for field in ("description", "actionDescription")
+            if row.get(field)
+        ]
+        if not descriptions:
+            reasons.add("ratio_unproven")
+        for description in descriptions:
+            matches = re.findall(
+                r"\bSPLIT ([1-9][0-9]*) FOR ([1-9][0-9]*)\b", description
+            )
+            if len(matches) != 1:
+                reasons.add("ratio_unproven")
+            else:
+                ratios.add((int(matches[0][0]), int(matches[0][1])))
+        if row.get("securityIDType") == "ISIN" and row.get("securityID") != row.get(
+            "isin"
+        ):
+            reasons.add("conflicting_security_identity")
+        if row.get("transactionID") in transactions:
+            reasons.add("conflicting_transaction")
+        transactions[row.get("transactionID", "")] = row
+    if len(ratios) != 1:
+        reasons.add("conflicting_ratio")
+    ratio = list(next(iter(ratios))) if len(ratios) == 1 else None
+    kinds = {row.get("type") for row in rows}
+    if kinds == {"FS"}:
+        if len(rows) != 1 or not ratio or ratio[0] <= ratio[1]:
+            reasons.add("incomplete_forward_shape")
+        try:
+            if number(rows[0].get("quantity")) <= 0:
+                reasons.add("incomplete_forward_shape")
+        except RuntimeError:
+            reasons.add("incomplete_forward_shape")
+        reasons.add("before_quantity_unproven")
+    elif kinds == {"RS"}:
+        try:
+            negative = [row for row in rows if number(row.get("quantity")) < 0]
+            positive = [row for row in rows if number(row.get("quantity")) > 0]
+            if (
+                len(rows) != 2
+                or len(negative) != 1
+                or len(positive) != 1
+                or ratio is None
+                or ratio[0] >= ratio[1]
+                or number(positive[0]["quantity"]) * ratio[1]
+                != -number(negative[0]["quantity"]) * ratio[0]
+                or negative[0].get("isin") == positive[0].get("isin")
+                or negative[0].get("conid") == positive[0].get("conid")
+            ):
+                reasons.add("incomplete_reverse_legs")
+        except RuntimeError:
+            reasons.add("incomplete_reverse_legs")
+    else:
+        reasons.add("unsupported_type")
+    if len({row.get("currency") for row in rows}) != 1:
+        reasons.add("conflicting_currency")
+    if any(row.get("code", "").strip() for row in rows):
+        reasons.add("revision_or_cancellation")
+    # The processing/report dates do not establish the market effective date.
+    reasons.add("effective_date_unproven")
+    symbols = sorted({row["symbol"] for row in rows if row.get("symbol")})
+    isins = sorted({row["isin"] for row in rows if row.get("isin")})
+    cash_fields = [row.get(field) for row in rows for field in ("amount", "proceeds")]
+    cash = "missing_proof"
+    if all(value not in (None, "") for value in cash_fields):
+        try:
+            cash = (
+                "no_action_cash_observed"
+                if all(number(v) == 0 for v in cash_fields)
+                else "explicit_action_cash_requires_linked_evidence"
+            )
+        except RuntimeError:
+            pass
+    return {
+        "rows": rows,
+        "candidate_ratio": ratio,
+        "reasons": sorted(reasons),
+        "symbols": symbols,
+        "isins": isins,
+        "held": True,
+        "conclusions": {
+            "source": "observed_bounded_window",
+            "identity": "missing_proof",
+            "quantity": "missing_proof",
+            "history": "missing_proof",
+            "cash": cash,
+            "timing": "missing_proof",
+        },
+    }
+
+
 class Store(TypedDict):
     path: Path
     evidence: Path
@@ -262,6 +267,14 @@ class Store(TypedDict):
     lock: int
     original: bytes | None
     document: dict[str, Any]
+    verified: dict[str, tuple[int, int, int, int, int]]
+    inventories: dict[str, Inventory]
+    bindings: dict[str, tuple[tuple[int, int, int, int, int], dict[str, Any]]]
+
+
+# Bound immutable report/proof bytes and inode growth; never delete evidence.
+MAX_EVIDENCE_BYTES = 256 * 1024 * 1024
+MAX_EVIDENCE_OBJECTS = 4096
 
 
 def private_directory(path: Path) -> None:
@@ -332,6 +345,9 @@ def open_store(filename: str, input_files: list[str], *, simulation: bool) -> St
             "lock": fd,
             "original": original,
             "document": document,
+            "verified": {},
+            "inventories": {},
+            "bindings": {},
         }
     except BaseException:
         os.close(fd)
@@ -367,6 +383,19 @@ def immutable_object(path: Path, data: bytes, inputs: list[Path]) -> None:
         if path.read_bytes() != data:
             raise RuntimeError("Retained corporate-action object hash changed")
         return
+    objects = list(path.parent.iterdir())
+    if (
+        len(objects) >= MAX_EVIDENCE_OBJECTS
+        or sum(item.stat().st_size for item in objects) + len(data) > MAX_EVIDENCE_BYTES
+    ):
+        log.error(
+            "Corporate-action evidence capacity reached (%d MiB / %d objects); preserve evidence; BUY/SELL held",
+            MAX_EVIDENCE_BYTES // (1024 * 1024),
+            MAX_EVIDENCE_OBJECTS,
+        )
+        raise RuntimeError(
+            "Corporate-action evidence budget reached; preserve evidence and hold BUY/SELL"
+        )
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as stream:
         stream.write(data)
@@ -379,6 +408,40 @@ def immutable_object(path: Path, data: bytes, inputs: list[Path]) -> None:
         os.close(directory)
 
 
+def object_signature(path: Path) -> tuple[int, int, int, int, int]:
+    info = path.stat()
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def parse_report(store: Store | None, xml: str, source: str) -> Inventory:
+    """Parse identical bytes once per run; cached facts never replace file checks."""
+    digest = hashlib.sha256(xml.encode()).hexdigest()
+    if store is not None and digest in store["inventories"]:
+        result = store["inventories"][digest]
+        if result["source"] != source:
+            raise RuntimeError("Corporate-action source binding changed")
+        return result
+    result = inventory(xml, source)
+    if store is not None:
+        store["inventories"][digest] = result
+    return result
+
+
+def retained_binding(store: Store, path: Path) -> dict[str, Any]:
+    safe_path(path, store["inputs"])
+    signature = object_signature(path)
+    cached = store["bindings"].get(path.stem)
+    if cached is not None:
+        if cached[0] != signature:
+            raise RuntimeError(
+                "Retained corporate-action binding changed during this run"
+            )
+        return cached[1]
+    result = read_yaml(path.read_bytes())
+    store["bindings"][path.stem] = signature, result
+    return result
+
+
 def retained_inventories(
     store: Store, source: str, query: str, mapping: dict[str, str]
 ) -> list[Inventory]:
@@ -386,8 +449,7 @@ def retained_inventories(
     records = dict(store["document"]["reports"])
     # Recover unreferenced bindings left by a crash or missing mutable state.
     for path in sorted(store["evidence"].glob("*.yaml")):
-        safe_path(path, store["inputs"])
-        binding = read_yaml(path.read_bytes())
+        binding = retained_binding(store, path)
         key = path.stem
         if key in records and binding != records[key]:
             raise RuntimeError("Retained corporate-action binding changed")
@@ -411,17 +473,29 @@ def retained_inventories(
         safe_path(binding_path, store["inputs"])
         if (
             not binding_path.is_file()
-            or read_yaml(binding_path.read_bytes()) != binding
+            or retained_binding(store, binding_path) != binding
         ):
             raise RuntimeError("Missing retained corporate-action binding")
         obj = store["evidence"] / (binding["sha256"] + ".xml")
         safe_path(obj, store["inputs"])
         if not obj.is_file():
             raise RuntimeError("Missing retained corporate-action source")
-        data = obj.read_bytes()
-        if hashlib.sha256(data).hexdigest() != binding["sha256"]:
-            raise RuntimeError("Retained corporate-action source hash changed")
-        result = inventory(data.decode(), binding["source"])
+        signature = object_signature(obj)
+        digest = binding["sha256"]
+        if digest in store["verified"]:
+            if store["verified"][digest] != signature:
+                raise RuntimeError(
+                    "Retained corporate-action source hash changed during this run"
+                )
+            result = store["inventories"][digest]
+        else:
+            data = obj.read_bytes()
+            if hashlib.sha256(data).hexdigest() != digest:
+                raise RuntimeError("Retained corporate-action source hash changed")
+            result = parse_report(store, data.decode(), binding["source"])
+            store["verified"][digest] = signature
+        if result["source"] != binding["source"]:
+            raise RuntimeError("Retained corporate-action source binding changed")
         if result["period"] != binding["period"] or not result["section_present"]:
             raise RuntimeError("Retained corporate-action scope changed")
         if binding["source"] == source:
@@ -439,7 +513,7 @@ def retain_report(
 
     check_store(store)
     previous = retained_inventories(store, source, query, mapping)
-    current = inventory(xml, source)
+    current = parse_report(store, xml, source)
     if not current["section_present"]:
         raise RuntimeError("Required CorporateActions section is missing")
     try:
@@ -457,9 +531,12 @@ def retain_report(
         "mapping": fingerprint(mapping),
     }
     key = fingerprint(binding)
-    immutable_object(
-        store["evidence"] / (current["sha256"] + ".xml"), xml.encode(), store["inputs"]
-    )
+    if key in store["document"]["reports"]:
+        return previous
+    obj = store["evidence"] / (current["sha256"] + ".xml")
+    if current["sha256"] not in store["verified"]:
+        immutable_object(obj, xml.encode(), store["inputs"])
+        store["verified"][current["sha256"]] = object_signature(obj)
     immutable_object(
         store["evidence"] / (key + ".yaml"),
         yaml.safe_dump(binding, sort_keys=True).encode(),
@@ -787,6 +864,34 @@ class Decision(TypedDict):
     normalized: set[str]
 
 
+def merge_event_rows(
+    previous: list[dict[str, str]], current: list[dict[str, str]]
+) -> list[dict[str, str]] | None:
+    """Additional columns enrich facts; changed shared facts remain revisions."""
+    old = {row.get("transactionID", ""): row for row in previous}
+    new = {row.get("transactionID", ""): row for row in current}
+    if (
+        "" in old
+        or "" in new
+        or len(old) != len(previous)
+        or len(new) != len(current)
+        or old.keys() != new.keys()
+    ):
+        return None
+    merged = []
+    for key in sorted(old):
+        left, right = old[key], new[key]
+        if left.get("code", "") != right.get("code", "") or any(
+            left[field] and right[field] and left[field] != right[field]
+            for field in left.keys() & right.keys()
+        ):
+            return None
+        merged.append(
+            {**left, **{field: value for field, value in right.items() if value}}
+        )
+    return merged
+
+
 def decide(
     reports: list[Inventory],
     source: str,
@@ -803,14 +908,18 @@ def decide(
     account_held = any(report["account_held"] for report in reports)
     for report in reports:
         for key, event in report["events"].items():
-            if key in events:
-                if events[key]["rows"] != event["rows"]:
-                    events[key]["reasons"].append("conflicting_event_revision")
-                    # Neither revision can define the affected security scope.
-                    # Keep all account BUY/SELL held until the conflict is proved.
-                    account_held = True
-            else:
+            if key not in events:
                 events[key] = deepcopy(event)
+            elif events[key]["rows"] != event["rows"]:
+                merged = merge_event_rows(events[key]["rows"], event["rows"])
+                if merged is None:
+                    events[key]["reasons"].append("conflicting_event_revision")
+                    account_held = True
+                else:
+                    conflict = "conflicting_event_revision" in events[key]["reasons"]
+                    events[key] = event_inventory(merged)
+                    if conflict:
+                        events[key]["reasons"].append("conflicting_event_revision")
     dates = {
         key: proofs[(source, key)]["effective_date"]
         for key in events

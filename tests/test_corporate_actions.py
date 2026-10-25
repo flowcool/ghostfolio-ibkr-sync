@@ -915,9 +915,107 @@ def test_retained_evidence_conflicting_revision_survives_later_exact_repeat():
     revision = deepcopy(original)
     revision["events"]["EVENT1"]["rows"][0]["proceeds"] = "1"
     for order in permutations([original, revision, original]):
-        decision = decide(list(order), "SOURCE", "TARGET", mapping, snapshot, evidence, proofs)
+        decision = decide(
+            list(order), "SOURCE", "TARGET", mapping, snapshot, evidence, proofs
+        )
         event = decision["findings"]["EVENT1"]
         assert event["held"]
         assert "conflicting_event_revision" in event["reasons"]
         assert decision["account_held"]
         assert "SAMPLE.T" in decision["symbols"]
+
+
+def test_conclusions_query_column_enrichment_is_not_a_revision():
+    from copy import deepcopy
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    reports, mapping, snapshot, evidence, proofs = reverse_case()
+    old = deepcopy(reports[0])
+    new = deepcopy(reports[0])
+    for row in old["events"]["EVENT1"]["rows"]:
+        row.pop("amount")
+    for row in new["events"]["EVENT1"]["rows"]:
+        row["actionDescription"] = row["description"]
+        row["newOptionalColumn"] = "extra source evidence"
+    for order in permutations([old, new, old]):
+        decision = ca.decide(
+            list(order), "SOURCE", "TARGET", mapping, snapshot, evidence, proofs
+        )
+        event = decision["findings"]["EVENT1"]
+        assert "conflicting_event_revision" not in event["reasons"]
+        assert not decision["account_held"] and not event["held"]
+        assert event["conclusions"]["cash"] == "no_action_cash_observed"
+
+
+def test_retained_evidence_parsed_and_verified_once_per_object_per_run(
+    tmp_path, monkeypatch
+):
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    path = tmp_path / "state.yaml"
+    store = ca.open_store(str(path), [], simulation=True)
+    source = report([action()])
+    other = report([action(accountId="OTHER")], account="OTHER")
+    ca.retain_report(store, source, "SOURCE", "query1", {})
+    ca.retain_report(store, other, "OTHER", "query2", {})
+    ca.close_store(store)
+    store = ca.open_store(str(path), [], simulation=False)
+    parses, reads = [], []
+    from pathlib import Path
+
+    original_inventory, original_read = ca.inventory, Path.read_bytes
+
+    def count_inventory(xml, account):
+        parses.append(account)
+        return original_inventory(xml, account)
+
+    def count_read(file):
+        if file.suffix == ".xml":
+            reads.append(file.name)
+        return original_read(file)
+
+    monkeypatch.setattr(ca, "inventory", count_inventory)
+    monkeypatch.setattr(Path, "read_bytes", count_read)
+    try:
+        for _ in range(4):
+            ca.retain_report(store, source, "SOURCE", "query1", {})
+            ca.retain_report(store, other, "OTHER", "query2", {})
+        assert sorted(parses) == ["OTHER", "SOURCE"]
+        assert len(reads) == len(set(reads)) == 2
+        # A cache never hides a modified immutable object during this run.
+        target = store["evidence"] / reads[0]
+        target.write_bytes(original_read(target) + b" ")
+        with pytest.raises(RuntimeError, match="changed during this run"):
+            ca.retained_inventories(store, "SOURCE", "query1", {})
+    finally:
+        ca.close_store(store)
+
+
+@pytest.mark.parametrize("limit", ["bytes", "objects"])
+def test_persistence_evidence_budget_preserves_existing_chain_and_state(
+    tmp_path, monkeypatch, limit
+):
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+
+    tmp_path.chmod(0o700)
+    path = tmp_path / "state.yaml"
+    store = ca.open_store(str(path), [], simulation=True)
+    try:
+        ca.retain_report(store, report([action()]), "SOURCE", "query", {})
+        before = path.read_bytes()
+        evidence = {p.name: p.read_bytes() for p in store["evidence"].iterdir()}
+        if limit == "bytes":
+            monkeypatch.setattr(
+                ca, "MAX_EVIDENCE_BYTES", sum(map(len, evidence.values()))
+            )
+        else:
+            monkeypatch.setattr(ca, "MAX_EVIDENCE_OBJECTS", len(evidence))
+        with pytest.raises(RuntimeError, match="evidence budget reached"):
+            ca.retain_report(
+                store, report([action()], end="20260101"), "SOURCE", "query", {}
+            )
+        assert path.read_bytes() == before
+        assert {p.name: p.read_bytes() for p in store["evidence"].iterdir()} == evidence
+    finally:
+        ca.close_store(store)

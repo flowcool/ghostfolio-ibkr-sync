@@ -580,7 +580,7 @@ def prepare_review_sources(config: dict[str, Any], mapping: dict[str, str], name
             xml = fetch_flex_report(config["ibkr_token"], query)
             if parse_source_account_ids(xml) != {source}:
                 raise RuntimeError("Source account mismatch")
-            ca.inventory(xml, source)  # Reject cross-account event rows before any target lookup.
+            ca.parse_report(config.get("_corporate_store"), xml, source)  # Validate before target lookup.
             reports[source] = xml
             target = ghost_find_account_id(config, name)
             if target is None:
@@ -829,7 +829,7 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
             decisions[source] = fallback
             continue
         try:
-            current = ca.inventory(xml, source)
+            current = ca.parse_report(store, xml, source)
             reports = [current]
             # Retained reports survive shorter current windows. Failed persistence
             # must hold trades, even when the in-memory evidence looks valid.

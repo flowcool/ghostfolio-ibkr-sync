@@ -169,6 +169,16 @@ reports with source account, query, declared period, mapping fingerprint and has
 The connector reparses those reports after an event leaves the current window.
 Hashes detect changed evidence; they do not authenticate a coordinated rewrite.
 Keep the entire directory private and back it up with its input evidence.
+Each retained XML is verified and parsed once per run. Later reconciliations reuse
+those facts and reject file metadata changes. Additional compatible Flex columns
+can complete older evidence; changed shared facts or event legs remain conflicts.
+Immutable evidence is limited to **256 MiB and 4,096 objects** per state directory.
+Before either limit is exceeded, new retention fails and BUY/SELL stay held. Existing
+proof is preserved; the connector never deletes or silently compacts source history.
+Monitor the volume and retain a private backup. At the limit, stop writers and use a
+separately reviewed offline consolidation that preserves the required event/position
+anchors, contiguous windows and original acquisition bindings. Do not delete files
+or reset state to recover capacity. Cash keeps its existing guards.
 
 Run simulation first. A valid report with the required section initializes missing
 state and publishes its bounded inventory. Review the inventory before live mode.
