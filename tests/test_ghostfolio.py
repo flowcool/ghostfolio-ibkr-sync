@@ -182,9 +182,14 @@ def test_short_import_acceptance_full_response_is_clean(monkeypatch):
     assert ghostfolio.ghost_import_activities(CFG, acts) == (acts, True)
 
 
-def test_unknown_400_fails_hard_without_retry(monkeypatch):
-    """A non per-symbol 400 (e.g. too many activities) fails hard, no retry."""
-    sent = sequence_post(monkeypatch, [Resp({"message": ["Too many activities (1 at most)"]}, 400)])
+@pytest.mark.parametrize("message", [
+    "Too many activities (1 at most)",
+    "Bad Request",  # Ghostfolio 3.92.0 masks errors other than CallerFacingError.
+    "Conflict",     # Ghostfolio 3.92.0 exposes only the HTTP exception reason.
+])
+def test_unknown_400_fails_hard_without_retry(monkeypatch, message):
+    """Generic import errors must fail without resending financial writes."""
+    sent = sequence_post(monkeypatch, [Resp({"message": [message]}, 400)])
     assert ghostfolio.ghost_import_activities(CFG, [{"symbol": "KO"}]) == ([], False)
     assert len(sent) == 1                                                   # no retry
 
