@@ -3,6 +3,33 @@
 set -euo pipefail
 image=${1:?Pass the locally built test image}
 probe=$(realpath "$(dirname "$0")/../tests/container_sync_probe.py")
+# Inspect the immutable image configuration, without runtime ENV overrides.
+identity=$(python3 - "$image" "$(dirname "$0")" <<'PY_IDENTITY'
+import json
+import os
+import subprocess
+import sys
+sys.path.insert(0, sys.argv[2])
+from release_image import verify_image_identity
+image = json.loads(subprocess.check_output(["docker", "image", "inspect", sys.argv[1]], timeout=30))[0]
+config = image["Config"]
+labels = config.get("Labels") or {}
+env = dict(item.split("=", 1) for item in config.get("Env", []))
+version = os.environ.get("RELEASE_APP_VERSION") or labels.get("org.opencontainers.image.version")
+revision = os.environ.get("RELEASE_REVISION") or labels.get("org.opencontainers.image.revision")
+if version or revision:
+    source = labels.get("org.opencontainers.image.source", "")
+    prefix = "https://github.com/"
+    assert source.startswith(prefix), "Release source label required"
+    verify_image_identity({"config": config, "architecture": image["Architecture"], "os": image["Os"]},
+                          "v" + (version or ""), revision, source.removeprefix(prefix), image["Architecture"])
+    print(f"ghostfolio-ibkr-sync version {version} — commit {revision[:12]}")
+else:
+    assert env.get("APP_VERSION") == "dev" and env.get("APP_REVISION") == "unknown", "Release identity missing"
+    print("ghostfolio-ibkr-sync version dev — commit unknown")
+PY_IDENTITY
+)
+echo "Verified image identity: $identity"
 # Hold the mapping file inside an operator-owned temp dir. The file itself is
 # chowned to 10001 below, but unlinking it needs write access on the parent dir
 # (which the operator owns, non-sticky), not file ownership. So cleanup needs no
@@ -89,6 +116,7 @@ wait_for_log() {
 # profile, one-off and scheduled.
 one_off_output=$(docker run --rm "${options[@]}" "$image")
 grep -q 'Synthetic read-only sync passed' <<< "$one_off_output"
+grep -Fq "$identity" <<< "$one_off_output"
 scheduled_id=$(docker run -d "${options[@]}" -e 'CRON=* * * * *' "$image")
 # A real supercronic tick must run the synthetic Python payload successfully.
 wait_for_log "$scheduled_id" 'Synthetic read-only sync passed'
@@ -104,12 +132,14 @@ real_output=$(docker run --rm "${real_options[@]}" "$image" 2>&1) || status=$?
 echo "$real_output"
 [ "$status" -eq 1 ]
 grep -q 'Starting IBKR to Ghostfolio sync' <<< "$real_output"
+grep -Fq "[INFO] $identity" <<< "$real_output"
 grep -q 'Missing required environment variables: IBKR_TOKEN' <<< "$real_output"
 scheduled_id=$(docker run -d "${real_options[@]}" -e 'CRON=* * * * *' "$image")
 wait_for_log "$scheduled_id" 'Missing required environment variables: IBKR_TOKEN'
 scheduled_logs=$(docker logs "$scheduled_id" 2>&1)
 echo "$scheduled_logs"
 grep -q 'Starting IBKR to Ghostfolio sync' <<< "$scheduled_logs"
+grep -Fq "[INFO] $identity" <<< "$scheduled_logs"
 grep -q 'python -m ghostfolio_ibkr_sync' <<< "$scheduled_logs"
 
 # Keep actual scheduled application streams separate. Supercronic lifecycle

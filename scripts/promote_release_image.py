@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 from release_image import (RC_TAG, STABLE_TAG, release_candidate_commits,
-                           release_metadata, stable_follows_release_candidate)
+                           release_metadata, stable_follows_release_candidate,
+                           verify_image_identity)
 from verify_release_image import native_manifest_digest
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -118,18 +119,17 @@ def promote(selected, progress=None, verify_only=False):
     same_digest(image + ":" + candidate[1:], record["digest"])
     index = json.loads(raw)
     progress["phase"] = "native source identity verification"
+    identity_forms = set()
     for arch in ("amd64", "arm64"):
         digest = native_manifest_digest(index, arch)
         if digest != record["native"][arch]:
             raise RuntimeError("Native manifest mismatch")
         config = json.loads(output("docker", "buildx", "imagetools", "inspect",
             "--format", "{{json .Image}}", image + "@" + digest))
-        labels = config.get("config", {}).get("Labels", {})
-        if (config.get("architecture") != arch or config.get("os") != "linux"
-                or labels.get("org.opencontainers.image.revision") != record["commit"]
-                or labels.get("org.opencontainers.image.source") != "https://github.com/" + record["repository"]
-                or labels.get("org.opencontainers.image.version") != candidate):
-            raise RuntimeError("Native source identity mismatch")
+        identity_forms.add(verify_image_identity(config, candidate, record["commit"],
+                                                record["repository"], arch, allow_legacy=True))
+    if len(identity_forms) != 1:
+        raise RuntimeError("Native image identity forms differ")
     if verify_only:
         return raw
     # Re-read release authority, main ancestry, exact tag and version absence.

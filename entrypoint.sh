@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
-echo "ghostfolio-ibkr-sync build ${APP_VERSION:-dev}"
+revision=${APP_REVISION:-unknown}
+if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then revision=unknown; fi
+printf 'ghostfolio-ibkr-sync version %s — commit %s\n' "${APP_VERSION:-dev}" "${revision:0:12}"
 
 if [ -n "$CRON" ]; then
     # Five numeric cron fields only; never interpolate an environment command.

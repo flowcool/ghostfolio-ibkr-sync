@@ -586,5 +586,10 @@ has one timestamp and one level. The scheduler passes application output directl
 and keeps its lifecycle messages separate. A transport stream is not a severity.
 For a clean scheduled run, application INFO stays INFO without scheduler wrapping.
 `LOG_LEVEL` still filters application records. LAB_EVIDENCE JSON remains at DEBUG.
-Startup shows `ghostfolio-ibkr-sync build <APP_VERSION>`. This identifies the build;
-a stable tag can reuse an RC digest and retain the qualified RC build identity.
+Startup and each sync cycle show `ghostfolio-ibkr-sync version X.Y.Z — commit <12-character SHA>`.
+The build sets `APP_VERSION` and `APP_REVISION` automatically from the validated
+release tag and source commit. No operator setting or startup network lookup is
+needed. The version is the target software version. An RC reports the same target
+version before stable publication; its registry tag still contains `-rc.N`.
+Stable promotion preserves the qualified digest. Older images retain their original
+RC build text. Local builds without release metadata report `dev` and `unknown`.

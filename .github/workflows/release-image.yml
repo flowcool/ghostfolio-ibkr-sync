@@ -23,6 +23,8 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
+      app_version: ${{ steps.release.outputs.app_version }}
+      revision: ${{ steps.release.outputs.revision }}
       candidate: ${{ steps.promotion.outputs.candidate }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,6 +66,8 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository }}
       RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      RELEASE_APP_VERSION: ${{ needs.preflight.outputs.app_version }}
+      RELEASE_REVISION: ${{ needs.preflight.outputs.revision }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,6 +76,13 @@ jobs:
         with:
           python-version: "3.14"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Generate OCI metadata from the validated release identity
+        id: meta
+        uses: docker/metadata-action@369eb591f429131d6889c46b94e711f089e6ca96 # v5.8.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: type=raw,value=${{ env.RELEASE_APP_VERSION }}
+          flavor: latest=false
       - name: Fix build timestamps to the release commit
         run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
       - name: Build native runtime for validation
@@ -82,12 +93,14 @@ jobs:
           load: true
           tags: ibkr-release:check
           build-args: |
-            APP_VERSION=${{ env.RELEASE_TAG }}
+            APP_VERSION=${{ env.RELEASE_APP_VERSION }}
+            APP_REVISION=${{ env.RELEASE_REVISION }}
             SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           labels: |
+            ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.revision=${{ env.RELEASE_REVISION }}
+            org.opencontainers.image.version=${{ env.RELEASE_APP_VERSION }}
       - name: Gate fixable high and critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -124,12 +137,14 @@ jobs:
           sbom: true
           provenance: mode=max
           build-args: |
-            APP_VERSION=${{ env.RELEASE_TAG }}
+            APP_VERSION=${{ env.RELEASE_APP_VERSION }}
+            APP_REVISION=${{ env.RELEASE_REVISION }}
             SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           labels: |
+            ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.revision=${{ env.RELEASE_REVISION }}
+            org.opencontainers.image.version=${{ env.RELEASE_APP_VERSION }}
       - name: Verify publication uses the validated image configuration
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}

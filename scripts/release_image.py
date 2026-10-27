@@ -14,6 +14,40 @@ STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 RC_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-rc\.([1-9][0-9]*)")
 
 
+def release_identity(tag, commit):
+    """Derive immutable software identity from an exact release tag and Git commit."""
+    match = STABLE_TAG.fullmatch(tag) or RC_TAG.fullmatch(tag)
+    if not match or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError("Exact release tag and full source commit required")
+    return ".".join(match.group(1, 2, 3)), commit
+
+
+def verify_image_identity(config, tag, commit, repository, arch, allow_legacy=False):
+    """Verify runtime and OCI identity before publication; allow exact legacy RCs only on promotion."""
+    version, revision = release_identity(tag, commit)
+    image_config = config.get("config", {})
+    labels = image_config.get("Labels", {})
+    if (config.get("architecture") != arch or config.get("os") != "linux"
+            or labels.get("org.opencontainers.image.revision") != revision
+            or labels.get("org.opencontainers.image.source") != "https://github.com/" + repository):
+        raise RuntimeError("Native source identity mismatch")
+    runtime = {}
+    for entry in image_config.get("Env", []):
+        key, separator, value = entry.partition("=")
+        if key in ("APP_VERSION", "APP_REVISION"):
+            if not separator or key in runtime:
+                raise RuntimeError("Ambiguous runtime image identity")
+            runtime[key] = value
+    label_version = labels.get("org.opencontainers.image.version")
+    if (runtime.get("APP_VERSION") == version and runtime.get("APP_REVISION") == revision
+            and label_version == version):
+        return "target"
+    if (allow_legacy and RC_TAG.fullmatch(tag) and runtime.get("APP_VERSION") == tag
+            and "APP_REVISION" not in runtime and label_version == tag):
+        return "legacy"
+    raise RuntimeError("Runtime and OCI image identity mismatch")
+
+
 def release_metadata(event):
     release = event.get("release", {})
     tag = release.get("tag_name", "")
@@ -111,6 +145,7 @@ def main():
         tagged = subprocess.check_output(["git", "rev-parse", tag + "^{commit}"], text=True, timeout=15).strip()
         if head != tagged:
             raise RuntimeError("Release checkout does not match tag")
+        app_version, revision = release_identity(tag, head)
         if STABLE_TAG.fullmatch(tag):
             stable_follows_release_candidate(tag, release_candidate_commits(tag), tagged)
         print(f"Release {tag}: version={version}, commit={head}, ancestor of origin/main")
@@ -124,7 +159,7 @@ def main():
             print(f"Authenticated version absence confirmed: {version}")
         phase = "workflow output"
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write(f"tag={tag}\nversion={version}\n")
+            output.write(f"tag={tag}\nversion={version}\napp_version={app_version}\nrevision={revision}\n")
     except Exception:
         raise SystemExit(f"Release preflight failed at {phase}; version publication refused") from None
 
