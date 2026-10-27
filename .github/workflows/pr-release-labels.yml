@@ -4,8 +4,7 @@ name: PR release labels
 # notes (.github/release.yml) are grouped. Never a required check, never fails.
 on:
   pull_request:
-    # Title-driven: its own label writes must not re-trigger it.
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, labeled]
 
 permissions:
   contents: read
