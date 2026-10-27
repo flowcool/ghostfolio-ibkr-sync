@@ -36,8 +36,8 @@ propagation in its PR.
 ## Durable work state
 
 - OpenSpec change `clarify-operator-actions` is implemented and archived at `openspec/changes/archive/2026-10-27-clarify-operator-actions/`. All ten tasks have offline acceptance proof.
-- Beads implementation `infra-8tt.93.1` is complete. Release child `infra-8tt.93.2` owns publication, exact-candidate lab qualification and stable promotion.
-- Parent `infra-8tt.93` remains in progress until release acceptance. No publication or production GO was granted by implementation.
+- Implementation and release for `clarify-operator-actions` are complete. Stable `v3.3.0` reuses the RC digest qualified in both labs. Beads owns the acceptance evidence.
+- Stable publication does not authorize production deployment or financial operations.
 
 ## Working mode: fast-track
 
