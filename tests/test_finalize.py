@@ -494,6 +494,9 @@ def test_operator_action_delivery_explicit(env, caplog, raw, status, expected):
     assert len(sent) == int(raw == json.dumps(URLS))
     assert URL_SECRET not in caplog.text and "invalid-SECRET" not in caplog.text
     assert out["delivery"] == expected
+    assert "Token expiry notification" not in caplog.text
+    if raw == json.dumps(URLS):
+        assert "User action notification" in caplog.text
 
 
 @pytest.mark.parametrize("exc", [KeyboardInterrupt, SystemExit])

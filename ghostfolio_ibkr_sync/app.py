@@ -572,7 +572,8 @@ def _finalize_notification(outcome: RunOutcome, code: int) -> None:
         report_delivery(outcome, "not required")
         return
     label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
-                                   ("Forced preview" if preview else "Token expiry"))
+                                   ("Forced preview" if preview else
+                                    "Token expiry" if days is not None else "User action"))
     try:
         settings, configuration = load_notification_delivery()
         if settings is None:
