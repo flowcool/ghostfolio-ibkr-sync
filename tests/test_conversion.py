@@ -293,3 +293,25 @@ def test_v2_source_qualification_partition_cancellation_refund_and_pil(reverse_c
     # Opposite signed tax conserves before clamping; separate clamps differ.
     assert sum(a["fee"] for a in activities) == 2
     assert sync.convert_dividend_to_activity(group, "dest", {}, {}) is None  # unequal quantities
+
+
+@pytest.mark.parametrize("case,reason", [("quantity", "dividend_rejected"), ("reversal", "dividend_reversal"),
+                                        ("tax", "dividend_signed_tax"), ("zero", None)])
+def test_operator_action_inventory_dividend_local_rejections(case, reason):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    row = div(quantity="bad" if case == "quantity" else "100", amount=-25 if case == "reversal" else 0 if case in ("tax", "zero") else 25,
+              tax=-3 if case == "tax" else 0)
+    assert sync.convert_dividend_to_activity(row, "acc", {ISIN: "KO"}, {}, outcome=out) is None
+    assert set(out["actions"]) == ({reason} if reason else set())
+
+
+def test_operator_action_inventory_dividend_reason_mapping_complete():
+    import ast
+    from pathlib import Path
+    tree = ast.parse(Path(sync.__file__).read_text())
+    reasons = {node.args[0].value for node in ast.walk(tree) if isinstance(node, ast.Call)
+               and isinstance(node.func, ast.Name) and node.func.id == "reject" and node.args
+               and isinstance(node.args[0], ast.Constant)}
+    assert reasons <= set(sync.DIVIDEND_REJECTION_ACTIONS)
+    assert all(sync.DIVIDEND_REJECTION_ACTIONS[reason] == "dividend_rejected" for reason in reasons)

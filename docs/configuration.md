@@ -533,3 +533,14 @@ Current valid source fields and verified destination ownership prove resolution.
 Mapping checks still run for already imported trades in the acquired window.
 Normal CASH/OPT exclusions, absent positions and recovered network retries do not
 create required-action reminders by themselves.
+
+
+Dividend actions use `dividend_rejected` for missing/conflicting cash, quantity,
+payment association or withholding evidence. `dividend_reversal` identifies an
+orphan reversal. `dividend_signed_tax` identifies signed zero-net tax, orphan tax
+or a withholding refund. `dividend_check` identifies a discrepant proximity skip.
+Inspect preserved Flex and Ghostfolio evidence. Never invent payment or quantity,
+and never resend an uncertain transaction. Complete consistent current evidence,
+verified destination agreement or documented manual resolution proves resolution.
+Ordinary zero-net payments without signed tax remain exclusions. Future dates
+remain deferred work. A representation limit alone does not request correction.

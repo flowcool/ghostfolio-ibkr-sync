@@ -70,6 +70,9 @@ def record_failure(outcome: RunOutcome, stage: str, reason: str, ordinal: object
 # Private event keys never enter external summaries. Instructions and resolution
 # proof are fixed text; callers supply only the observed code and private scope.
 ACTION_INSTRUCTIONS = {
+    "dividend_rejected": "Inspect the rejected payable event and missing or conflicting Flex quantity, cash or tax evidence. Never invent payment or quantity. Resolution: complete consistent current source evidence supports the event.",
+    "dividend_reversal": "Compare the reversal with the original dividend in Ghostfolio and preserved Flex cash rows. Do not resend. Resolution: source and destination prove the reversal outcome or documented manual resolution.",
+    "dividend_signed_tax": "Inspect signed withholding, refunds and orphan tax against the original payment in Ghostfolio. Do not invent or resend a transaction. Resolution: current payment and tax evidence reconcile or documented manual resolution.",
     "trade_invalid": "Inspect the omitted trade and required Flex fields. Do not invent a trade. Resolution: valid current source evidence permits safe conversion.",
     "trade_manual": "Compare the source trade with the manual Ghostfolio activity before any reference repair. Resolution: verified reference ownership or documented manual resolution.",
     "trade_position": "Compare current Ghostfolio holdings and source trades. Resolution: verified holdings support the intended sale; no automatic repair is authorized.",

@@ -2030,3 +2030,15 @@ def test_operator_action_inventory_trade_invalid_and_normal_exclusions():
         "U1", ACC, {ISIN_KO: "KO"}, set(), set(), positions(), outcome=out)
     assert not ok and not activities
     assert out["actions"]["trade_invalid"] == {"U1:T1"}
+
+
+@pytest.mark.parametrize("mode", ["missing", "empty", "conflict", "short"])
+def test_operator_action_inventory_dividend_selection_unchanged(mode):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    xml = structured_input_xml(mode)
+    out = new_run_outcome()
+    args = (xml, "U1", ACC, {ISIN_KO: "KO", ISIN_PEP: "PEP"}, set(), set())
+    baseline = app.select_account_activities(*args, positions())
+    reported = app.select_account_activities(*args, positions(), outcome=out)
+    assert reported == baseline
+    assert out["actions"]["dividend_rejected"]

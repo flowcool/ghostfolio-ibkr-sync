@@ -294,11 +294,12 @@ def select_account_activities(
     date_is_current = date_is_current or activity_date_is_current
     # Parse trades and dividends
     trades: list[dict[str, Any]] = parse_trades(xml_text)
-    dividends = parse_cash_dividends(xml_text)
+    dividends = parse_cash_dividends(xml_text, outcome=outcome)
     if dividends is None:
         log.error("Flex Query %s has no Cash Transactions section: dividends not synced. "
                   "Add Cash Transactions (Dividends, Payment In Lieu Of Dividends, "
                   "Withholding Tax) to the query, see README", query_id)
+        record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:cash_section")
         ok = False
         dividends = []
     log.debug("Found %d trades and %d dividend payments in Flex Query report",
@@ -397,6 +398,8 @@ def select_account_activities(
     div_skipped_dup = 0
     candidates = []
     for div in dividends:
+        if div.get("isin") and div["isin"] not in mapping:
+            record_action(outcome, "mapping_unverified", f"{ibkr_account_id}:{div['isin']}")
         if any(format_versioned_activity_identity(ibkr_account_id, "DIVIDEND", row.get("actionID", ""))
                in review_holds for row in div["payments"]):
             continue
@@ -404,12 +407,13 @@ def select_account_activities(
             div, ghost_account_id, mapping, positions, existing_dividend_comments)
         if dedup == "not_payable":
             # Preserve existing diagnostics for reversals and tax-only rows.
-            convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
+            convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped, outcome=outcome)
             continue
         if dedup == "existing":
             div_skipped_dup += 1
             continue
         if dedup == "partial":
+            record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:{div['isin']}:{div['date']}")
             log.error("Dividend %s %s: partial versioned action coverage — not imported; "
                       "account failed; automatic reruns will refuse while this group stays "
                       "in the report window; explicit reviewed recovery required",
@@ -417,13 +421,14 @@ def select_account_activities(
             ok = False
             continue
         if dedup == "action_conflict":
+            record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:{div['isin']}:{div['date']}")
             log.error("Dividend %s %s: versioned action-context conflict or unknown overlap — "
                       "not imported; account failed; manual review required",
                       symbol or div.get("symbol") or "unknown", div["date"])
             ok = False
             continue
         if dedup == "proximity":
-            log_dividend_proximity_skip(cast(str, symbol), div, cast(DividendEntry, matched))
+            log_dividend_proximity_skip(cast(str, symbol), div, cast(DividendEntry, matched), outcome=outcome)
             div_skipped_dup += 1
             continue
         candidates.append(div)
@@ -445,7 +450,7 @@ def select_account_activities(
     if dividend_input_compatible(candidates):
         for div in candidates:
             proposed, partition_ok = convert_dividend_actions(
-                div, ghost_account_id, mapping, unmapped, dividends)
+                div, ghost_account_id, mapping, unmapped, dividends, outcome=outcome)
             if not partition_ok:
                 ok = False
                 continue
@@ -457,6 +462,10 @@ def select_account_activities(
             for activity in proposed:
                 proposed_dividend_context[activity["comment"]] = dividend_context(
                     {**activity, "isin": div["isin"]}, activity["date"])
+
+    else:
+        for div in candidates:
+            record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:{div['isin']}:{div['date']}")
 
     if report_counts is None:
         log.info("New dividend activities: %d, duplicates skipped: %d",
