@@ -505,3 +505,11 @@ without a compatibility launcher, so update any script or note that calls it.
 - **Active position context** - drafts and excluded activities/accounts retain their import identifiers for deduplication, but cannot contribute holdings, manual matches or dividend proximity evidence. Holdings and manual reconciliation use active YAHOO profiles; other sources cannot back YAHOO sells. Excluded target accounts are refused. Future timestamps are deferred with exit 1 until a later run; this conservative instant check avoids server-local draft assignment even when import responses omit tags. Accepted imports use the actual server profile symbol; a canonicalized symbol can require an explicit mapping before sells under the original ticker are allowed.
 - **Batch guard limitations** - the gate checks net quantity, not chronological balances. Buy and sell phases are separate requests, so successful buys can remain if sells fail. A dry-run previews candidates without verifying server acceptance.
 - **No overlap protection** - avoid concurrent sync runs targeting the same Ghostfolio account; deduplication is based on a snapshot read at startup.
+
+
+### User action required
+
+Required actions send one consolidated reminder on every completed run, including
+simulation. Repeated observations of one event and reason count once. Reminders
+continue while current evidence requires action. Clean success sends no heartbeat.
+Review approval does not suppress a reminder when missing proof still blocks work.

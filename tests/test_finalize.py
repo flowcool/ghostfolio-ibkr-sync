@@ -436,3 +436,36 @@ def test_dry_run_modes_delivery_failure_keeps_exit(env, caplog, mode, status):
     assert app.main() == 1 and len(sent) == 1
     assert calls == ([] if mode == "invalid" else ["U111", "U222", "U333"])
     assert URL_SECRET not in caplog.text
+
+
+@pytest.mark.parametrize("mode", [None, "", "true", "false"])
+def test_operator_action_reminders_repeat_then_resolve(env, mode, caplog):
+    if mode is None:
+        env.delenv("DRY_RUN")
+    else:
+        env.setenv("DRY_RUN", mode)
+    sent = spy_send(env)
+    caplog.set_level(logging.INFO)
+    for _ in range(2):
+        out = outcome.new_run_outcome()
+        outcome.record_action(out, "review_approval", "private-event")
+        outcome.record_action(out, "review_approval", "private-event")
+        app.finalize_run(out, 0)
+    assert len(sent) == 2
+    assert "review_approval (1)" in sent[0]["body"]
+    assert "private-event" not in sent[0]["body"]
+    app.finalize_run(outcome.new_run_outcome(), 0)
+    assert len(sent) == 2
+    assert "Notification result: not required" in caplog.text
+
+
+def test_operator_action_summary_redacts_and_keeps_failure_priority(env):
+    sent = spy_send(env)
+    out = outcome.new_run_outcome()
+    for reason in ("review_approval", "mapping_unverified", "dividend_check"):
+        outcome.record_action(out, reason, CANARY + AMOUNT)
+    outcome.record_failure(out, "account", "account_failed", 1)
+    app.finalize_run(out, 1)
+    assert len(sent) == 1 and sent[0]["title"] == notify.NOTIFY_TITLE
+    assert all(reason in sent[0]["body"] for reason in out["actions"])
+    assert CANARY not in sent[0]["body"] and AMOUNT not in sent[0]["body"]

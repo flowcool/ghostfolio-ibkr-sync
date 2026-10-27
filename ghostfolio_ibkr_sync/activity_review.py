@@ -897,6 +897,11 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     publish_review(state, {"version": 1, "proposals": refreshed})
     held = {item["source event"] for item in refreshed.values()} | unresolved_events
+    from ghostfolio_ibkr_sync.outcome import record_action
+    for item in refreshed.values():
+        if item.get("approve") == "yes" and item.get("actionable") and item.get("execution path") == "normal run" and QUALIFIED_EXECUTION is not None:
+            continue
+        record_action(config.get("_corporate_outcome"), "review_approval", item["source event"])
     if held:
         log.warning("Activity review holds %d source event(s); pending approvals remain in %s", len(held), state["path"])
     return blocked, held

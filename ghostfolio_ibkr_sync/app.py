@@ -72,6 +72,7 @@ from ghostfolio_ibkr_sync.notify import (
 )
 from ghostfolio_ibkr_sync.outcome import (
     RunOutcome,
+    action_summary,
     is_token_rejection,
     new_run_outcome,
     record_failure,
@@ -498,12 +499,14 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     notify in every mode, including invalid configuration. Delivery never changes
     the exit code. A reminder on a failed run joins its failure notification.
     """
+    actions = action_summary(outcome)
     days = outcome.get("token_expiry_days")
     preview = outcome.get("forced_preview")
     corporate = outcome.get("corporate_notification")
     corporate_due = corporate is not None and bool(corporate["sent"])
     maintenance_due = outcome.get("corporate_maintenance", False)
-    if code == 0 and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
+    if code == 0 and not actions and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
+        log.info("Notification result: not required")
         return
     label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
                                    ("Forced preview" if preview else "Token expiry"))
@@ -520,6 +523,8 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
                     body += "\n" + build_forced_preview_summary(preview)
                 if days is not None:
                     body += "\n" + build_token_expiry_summary(days)
+        elif actions:
+            title, body = "ghostfolio-ibkr-sync: user action required", "User action required."
         elif preview:
             title, body = FORCED_PREVIEW_NOTIFY_TITLE, build_forced_preview_summary(preview)
             if days is not None:
@@ -532,6 +537,8 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
                                        if key in ("active_holds", "changed_findings", "resumptions") and type(value) is int)
         if maintenance_due:
             body += "\n- corporate_actions: maintenance_incomplete (1)"
+        if actions:
+            body += "\n" + actions
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
