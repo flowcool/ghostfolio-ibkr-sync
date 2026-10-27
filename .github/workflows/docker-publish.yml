@@ -24,9 +24,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Documentation-only PRs (docs/, openspec/, *.md) skip the work below; the
-  # required checks still report (skipped = success). Fails open: any scope
-  # error runs everything.
+  # Documentation-only PRs (docs/, openspec/, *.md) skip the dependency audit
+  # and container steps; tests still run. Required checks still report
+  # (skipped = success). Fails open: any scope error runs everything.
   scope:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -43,16 +43,15 @@ jobs:
         run: |
           code=true
           if [ -n "$PR" ]; then
-            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
+            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only || true)
             if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
               code=false
             fi
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+  # Tests also check README, ADR and doc consistency: they run on every PR.
   test:
-    needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

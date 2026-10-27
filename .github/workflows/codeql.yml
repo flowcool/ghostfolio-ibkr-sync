@@ -34,7 +34,7 @@ jobs:
         run: |
           code=true
           if [ -n "$PR" ]; then
-            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
+            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only || true)
             if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
               code=false
             fi
