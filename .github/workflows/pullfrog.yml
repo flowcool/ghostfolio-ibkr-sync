@@ -20,13 +20,33 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      pull-requests: read
     steps:
+      # Local addition: documentation-only PRs (docs/, openspec/, *.md) are not
+      # reviewed. Fails open: without a PR number or file list, the review runs.
+      - name: Skip documentation-only PRs
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NAME: ${{ inputs.name }}
+        run: |
+          review=true
+          pr=$(printf '%s' "$RUN_NAME" | sed -nE 's/^Review (new commits on )?#([0-9]+).*/\2/p')
+          if [ -n "$pr" ]; then
+            files=$(gh pr diff "$pr" --repo "$GITHUB_REPOSITORY" --name-only || true)
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
+              review=false
+            fi
+          fi
+          echo "review=$review" >> "$GITHUB_OUTPUT"
       - name: Checkout code
+        if: steps.scope.outputs.review == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
       - name: Run agent
+        if: steps.scope.outputs.review == 'true'
         uses: pullfrog/pullfrog@ae4145b3d72b3f4aa045e2352dc6b2c7538daeeb # v0 tag, resolved 2026-10-21
         with:
           prompt: ${{ inputs.prompt }}

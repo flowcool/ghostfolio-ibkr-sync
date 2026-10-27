@@ -8,14 +8,16 @@ reviews:
   review_status: true
   auto_review:
     enabled: true
-    # Work is delivered as stacked PRs, often drafts: review every base branch,
-    # not only the default one.
-    drafts: true
-    base_branches:
-      - ".*"
-    # Stacked PRs receive many merge commits; CodeRabbit otherwise pauses them
-    # ("Reviews paused") and silently skips later pushes. 0 disables the pause.
-    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    # Documentation-only PRs are not reviewed (conventional "docs" titles).
+    ignore_title_keywords:
+      - "docs:"
+      - "docs("
+  # Documentation and specs are not reviewed.
+  path_filters:
+    - "!**/*.md"
+    - "!docs/**"
+    - "!openspec/**"
   # Mono-file, functional, no-docstring convention; the warning is noise on every PR.
   pre_merge_checks:
     docstrings:
