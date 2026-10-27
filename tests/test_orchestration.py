@@ -2042,3 +2042,33 @@ def test_operator_action_inventory_dividend_selection_unchanged(mode):
     reported = app.select_account_activities(*args, positions(), outcome=out)
     assert reported == baseline
     assert out["actions"]["dividend_rejected"]
+
+
+@pytest.mark.parametrize("dry,cash_ok,missing,expected", [(False, True, False, "request reported successful"),
+    (True, True, False, "simulated"), (False, False, False, "uncertain/failed"),
+    (False, True, True, "not updated")])
+def test_operator_action_result_independent_cash(monkeypatch, caplog, dry, cash_ok, missing, expected):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    caplog.set_level(logging.INFO)
+    xml = report(trade_xml("T1"))
+    if missing:
+        xml = xml.replace('currency="BASE_SUMMARY"', 'currency="USD"')
+    w = World(monkeypatch, xml, cash_ok=cash_ok)
+    out = new_run_outcome()
+    cfg = {**CFG, "dry_run": dry, "_corporate_outcome": out}
+    _, ok = app.process_account(cfg, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, set(), set(), positions())
+    app.finalize_run(out, int(not ok))
+    assert expected in caplog.text
+    assert ("simulated proposals=1" if dry else "accepted imports=1") in caplog.text
+    assert "independent balance readback" not in caplog.text
+    assert len(w.cash_calls) == int(not missing)
+
+
+def test_operator_action_result_early_failure_has_no_invented_zeros(monkeypatch, caplog):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    caplog.set_level(logging.INFO)
+    out = new_run_outcome()
+    app.finalize_run(out, 1)
+    assert "Cycle result: failure" in caplog.text
+    assert "imports=unavailable" in caplog.text and "cash=unavailable" in caplog.text
+    assert "notification=disabled" in caplog.text

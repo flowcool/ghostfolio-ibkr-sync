@@ -70,9 +70,11 @@ from ghostfolio_ibkr_sync.notify import (
     send_notification,
 )
 from ghostfolio_ibkr_sync.outcome import (
+    AccountResult,
     RunOutcome,
     action_summary,
     is_token_rejection,
+    log_operational_result,
     new_run_outcome,
     record_action,
     record_failure,
@@ -145,6 +147,11 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
     """
     log.info("Processing IBKR account %s (Ghostfolio: %s)", ibkr_account_id, ghost_account_name)
     ok = True
+    outcome = config.get("_corporate_outcome")
+    account_result: AccountResult = {"simulated": bool(config.get("dry_run")), "accepted": None,
+                                     "duplicates": None, "held": None, "deferred": None, "cash": "unavailable"}
+    if outcome is not None:
+        outcome["account_results"][f"{ibkr_account_id}:{query_id}"] = account_result
 
     # Fetch the Flex Query report
     try:
@@ -224,7 +231,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             diagnostic_preview=bool(config.get("dry_run")),
             review_holds=config.get("_review_holds"),
             corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id),
-            outcome=config.get("_corporate_outcome"))
+            outcome=outcome, account_result=account_result)
     except InvalidActivityIdentityError:
         return {}, False
     ok = ok and selection_ok
@@ -234,6 +241,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     # Create buys/dividends first. A server-skipped BUY cannot back a later SELL,
     # even in this account's batch. Dry-run uses proposed buys for simulation.
+    account_result["accepted"] = 0
     phases = split_import_phases(activities)
     for phase in phases:
         if not phase:
@@ -250,6 +258,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         if not phase:
             continue
         imported, import_ok = ghost_import_activities(config, phase)
+        account_result["accepted"] = (account_result["accepted"] or 0) + len(imported)
         # Only accepted rows (or proposals in isolated simulation state) advance
         # the run. DIVIDEND identities must never act as trade IDs or holdings.
         record_accepted_activities(imported, positions, existing_trade_ids,
@@ -261,12 +270,20 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
     try:
         cash_balance = parse_cash_report(xml_text)
         if cash_balance is not None:
-            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance,
-                                         parse_base_currency(xml_text)):
+            config.setdefault("_cash_outcomes", {}).pop(ghost_account_id, None)
+            cash_ok = ghost_update_cash_balance(config, ghost_account_id, cash_balance,
+                                               parse_base_currency(xml_text))
+            account_result["cash"] = config.get("_cash_outcomes", {}).get(
+                ghost_account_id, ("simulated" if config.get("dry_run") else "request reported successful")
+                if cash_ok else "uncertain/failed")
+            if not cash_ok:
                 ok = False
         else:
+            account_result["cash"] = "not updated"
+            record_action(outcome, "cash_missing", f"{ibkr_account_id}:BASE_SUMMARY")
             log.warning("No BASE_SUMMARY cash balance found in report")
     except Exception as exc:
+        account_result["cash"] = config.get("_cash_outcomes", {}).get(ghost_account_id, "uncertain/failed")
         log.error("Failed to update cash balance: %s", exc)
         ok = False
 
@@ -283,12 +300,16 @@ def select_account_activities(
     review_holds: set[str] | None = None,
     corporate_decision: ca.Decision | None = None,
     outcome: RunOutcome | None = None,
+    account_result: AccountResult | None = None,
 ) -> tuple[list[Activity], dict[str, DividendContext], Unmapped, bool]:
     """Select without fetching or dispatching; mutate only manual-match state.
 
     Offline callers supply a captured clock and isolated holdings state.
     """
     ok = True
+    if account_result is not None:
+        account_result["held"] = set()
+        account_result["deferred"] = set()
     review_holds = review_holds or set()
     date_is_current = date_is_current or activity_date_is_current
     # Parse trades and dividends
@@ -361,11 +382,15 @@ def select_account_activities(
         if activity is None or not date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
             if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
                 record_action(outcome, "trade_invalid", f"{ibkr_account_id}:{trade_id}")
+            if activity is not None and not date_is_current(activity) and account_result is not None and account_result["deferred"] is not None:
+                account_result["deferred"].add(f"{ibkr_account_id}:{trade_id}")
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
             ok = False
             continue
         if corporate_decision is not None and ca.candidate_held(corporate_decision, activity):
+            if account_result is not None and account_result["held"] is not None:
+                account_result["held"].add(f"{ibkr_account_id}:{trade_id}")
             log.warning("Corporate-action BUY/SELL candidate held for %s", activity["symbol"])
             ok = False
             continue
@@ -454,6 +479,8 @@ def select_account_activities(
                 ok = False
                 continue
             if any(not date_is_current(activity) for activity in proposed):
+                if account_result is not None and account_result["deferred"] is not None:
+                    account_result["deferred"].update(activity["comment"] for activity in proposed)
                 log.error("Future or invalid dividend date; deferred until a later run")
                 ok = False
                 continue
@@ -475,6 +502,8 @@ def select_account_activities(
                  len(div_activities), div_skipped_dup, report_counts["to_check"],
                  report_counts["informational"], report_counts["noise"])
 
+    if account_result is not None:
+        account_result["duplicates"] = skipped_dup + div_skipped_dup
     activities.extend(div_activities)
     if holdings_trace is not None:
         holdings_trace.update({
@@ -521,6 +550,12 @@ def report_delivery(outcome: RunOutcome, status: str) -> None:
 
 
 def finalize_run(outcome: RunOutcome, code: int) -> None:
+    """Finalize a completed run; interruptions propagate without a cycle result."""
+    _finalize_notification(outcome, code)
+    log_operational_result(outcome, code)
+
+
+def _finalize_notification(outcome: RunOutcome, code: int) -> None:
     """Send at most one notification for failures or a legacy-token reminder.
 
     Clean successful simulations remain silent. Failures
@@ -593,6 +628,8 @@ def run_sync(outcome: RunOutcome) -> int:
         log.error("Configuration error: %s", exc)
         record_failure(outcome, "config", "invalid_configuration")
         return 1
+    outcome["review_held"] = set()
+    outcome["deferred"] = set()
     state: ReviewState | None = None
     try:
         if config.get("activity_review_file"):
@@ -826,7 +863,6 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
                   len(failed_accounts), len(account_ids), ", ".join(failed_accounts))
         return 1
 
-    log.info("Sync complete")
     return 0
 
 

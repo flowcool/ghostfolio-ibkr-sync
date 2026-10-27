@@ -616,6 +616,8 @@ def ghost_update_cash_balance(
     without a base currency, sends no PUT and returns False.  A dry run still
     does the read-only GET and the check, so the preview matches a live run.
     """
+    evidence = config.setdefault("_cash_outcomes", {})
+    evidence[account_id] = "not updated"
     if not base_currency:
         log.error("Cash balance not updated for account %s: the report has no base currency "
                   "(Account Information CurrencyPrimary missing from the Flex Query)", account_id)
@@ -635,6 +637,7 @@ def ghost_update_cash_balance(
         return False
     log_lab_evidence("cash", {"accountId": account_id, "balance": balance, "currency": base_currency})
     if config.get("dry_run"):
+        evidence[account_id] = "simulated"
         log.info("[DRY RUN] would set cash balance for account %s to %.2f (no PUT sent)",
                  account_id, balance)
         return True
@@ -646,6 +649,7 @@ def ghost_update_cash_balance(
         "name": account_data["name"],
         "platformId": account_data.get("platformId") or config.get("ghost_platform_id") or None,
     }
+    evidence[account_id] = "uncertain/failed"
     resp = requests.put(url, headers=ghost_headers(config["ghost_token"]),
                         json=payload, timeout=30, allow_redirects=False)
     if ghost_response_is_redirect(resp):
@@ -654,6 +658,7 @@ def ghost_update_cash_balance(
     if resp.status_code >= 400:
         log.error("Failed to update cash balance (%d): %s", resp.status_code, resp.text)
         return False
+    evidence[account_id] = "request reported successful"
     log.info("Updated cash balance for account %s to %.2f", account_id, balance)
     return True
 

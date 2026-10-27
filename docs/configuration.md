@@ -562,3 +562,19 @@ holds. Nonblocking findings without a user action keep first/change/resumption
 notifications. Automatic evidence maintenance remains a retry and is reported as
 such; it does not request approval. Token renewal and invalid or missing TZ also
 notify in simulation. Correct the named setting; simulation does not resolve it.
+
+
+### Cycle result
+
+Completed cycles report `success`, `success with user action required`, or
+`failure`. Failure takes priority. Exit codes keep their existing meaning.
+Accepted imports or simulated proposals, duplicate skips, unique review-held
+events, other holds and deferred automatic work appear separately. Decision
+counts can overlap. Unknown evidence reads `unavailable`, never an invented zero.
+Cash is reported per account as `simulated`, `request reported successful`,
+`not updated` or `uncertain/failed`. Request success is not independent balance
+readback. Cash success does not mean held activities were imported.
+
+For example, `success with user action required` can report zero accepted imports,
+review-held events and `cash=request reported successful`. The notification result
+appears beside the cycle result. Automatic deferral alone remains `success`.

@@ -15,7 +15,17 @@ class Failure(TypedDict):
     ordinal: int | None
 
 
+class AccountResult(TypedDict):
+    simulated: bool
+    accepted: int | None
+    duplicates: int | None
+    held: set[str] | None
+    deferred: set[str] | None
+    cash: str
+
+
 class RunOutcome(TypedDict):
+    account_results: dict[str, AccountResult]
     actions: dict[str, set[str]]
     failures: list[Failure]
     dropped: int
@@ -55,7 +65,7 @@ def is_token_rejection(exc: BaseException) -> bool:
 
 def new_run_outcome() -> RunOutcome:
     """Return an empty run-local outcome."""
-    return {"actions": {}, "failures": [], "dropped": 0, "accounts_total": 0, "accounts_failed": 0}
+    return {"account_results": {}, "actions": {}, "failures": [], "dropped": 0, "accounts_total": 0, "accounts_failed": 0}
 
 
 def record_failure(outcome: RunOutcome, stage: str, reason: str, ordinal: object = None) -> None:
@@ -64,6 +74,7 @@ def record_failure(outcome: RunOutcome, stage: str, reason: str, ordinal: object
         stage, reason = "unexpected", "unhandled_error"
     if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1:
         ordinal = None
+    record_action(outcome, "processing_failure", f"{stage}:{ordinal}")
     if len(outcome["failures"]) >= MAX_OUTCOME_FAILURES:
         outcome["dropped"] += 1
         return
@@ -73,6 +84,8 @@ def record_failure(outcome: RunOutcome, stage: str, reason: str, ordinal: object
 # Private event keys never enter external summaries. Instructions and resolution
 # proof are fixed text; callers supply only the observed code and private scope.
 ACTION_INSTRUCTIONS = {
+    "processing_failure": "Inspect the fixed failure reason and private configuration or service log. Preserve financial recovery fences and verify uncertain requests before any resend. Resolution: current prerequisite and processing evidence pass.",
+    "cash_missing": "Inspect the Flex cash report configuration. Cash was not updated. Resolution: the current report supplies a valid BASE_SUMMARY and base currency.",
     "corporate_action": "Inspect the corporate-action conclusions and restore the stated evidence or state. Holds require fresh source and destination agreement; acknowledgment or state reset cannot release them. Resolution: current conclusions prove safe continuation or the historical discrepancy is resolved.",
     "token_renewal": "Regenerate GHOST_TOKEN or switch to GHOST_ACCESS_TOKEN. Resolution: a current credential is outside the configured expiry warning window.",
     "timezone_correction": "Set TZ to the intended valid IANA timezone. Resolution: the next run validates TZ; simulation alone does not correct it.",
@@ -110,3 +123,25 @@ def action_summary(outcome: RunOutcome) -> str:
     return "\n".join(f"- {reason} ({len(keys)}): {ACTION_INSTRUCTIONS[reason]}"
                      for reason, keys in sorted(outcome["actions"].items())
                      if reason in ACTION_INSTRUCTIONS and keys)
+
+
+def log_operational_result(outcome: RunOutcome, code: int) -> None:
+    """Report only observed acceptance evidence; never imply balance readback."""
+    log = logging.getLogger(__name__)
+    result = "failure" if code else "success with user action required" if outcome["actions"] else "success"
+    level = logging.ERROR if code else logging.WARNING if outcome["actions"] else logging.INFO
+    held = outcome.get("review_held")
+    deferred = outcome.get("deferred")
+    log.log(level, "Cycle result: %s; unique review-held events=%s; deferred automatic work=%s; notification=%s; "
+            "decision counts can overlap", result, len(held) if held is not None else "unavailable",
+            len(deferred) if deferred is not None else "unavailable", outcome.get("delivery", "unavailable"))
+    if not outcome["account_results"]:
+        log.info("Account evidence: imports=unavailable; duplicates=unavailable; cash=unavailable")
+    for key, account in outcome["account_results"].items():
+        log.info("Account evidence %s: %s=%s; duplicates=%s; other held events=%s; "
+                 "deferred automatic work=%s; cash=%s", key,
+                 "simulated proposals" if account["simulated"] else "accepted imports",
+                 account["accepted"] if account["accepted"] is not None else "unavailable",
+                 account["duplicates"] if account["duplicates"] is not None else "unavailable",
+                 len(account["held"]) if account["held"] is not None else "unavailable",
+                 len(account["deferred"]) if account["deferred"] is not None else "unavailable", account["cash"])
