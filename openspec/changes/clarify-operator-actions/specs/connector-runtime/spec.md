@@ -136,6 +136,8 @@ Rejections SHALL log distinct reasons, never mark rejected payments imported, an
 
 ### Requirement: Diagnostic execution and visibility
 
+Each diagnostic item SHALL declare either a user action with an observable resolution condition or an informational evidence limitation. An evidence limitation remains visible but does not trigger a reminder.
+
 The diagnostic SHALL use existing reads, ENV and logs without persistence or financial writes. INFO SHALL summarize coverage/categories. Items requiring user checks SHALL emit at least WARNING; anomaly/uncertainty details SHALL include reasons, activity IDs and source references with quantities/monetary deltas when supported. The per-account import line SHALL include the same `to check`, `informational` and `noise` counts as the dividend report, so its duplicate count cannot be mistaken for the report result. Logs remain private. Findings SHALL NOT alter exits. Items requiring user action SHALL join Notifications in simulation too. Information and noise alone SHALL not trigger a required-action notification; technical failures retain current behavior. Live runs SHALL NOT execute the diagnostic. README SHALL explain one-off Docker DRY_RUN without CRON, categories, limits and unchanged financial state.
 
 #### Scenario: Dry-run report
@@ -251,13 +253,16 @@ The following inventory SHALL be covered without changing conversion, diagnostic
 | Unverified symbol fallback or different-symbol holding conflict | Verify the destination security or correct the configured mapping |
 | Manual-trade proximity needing verification or reference repair | Compare source and destination before any manual edit |
 | Dividend proximity discrepancy or diagnostic item to check | Inspect the comparison; amount agreement does not authorize cleanup |
+| Signed tax or reversal with zero-net/negative evidence, orphan withholding, or rejected payable event | Inspect the preserved source and destination evidence; do not invent or resend a transaction |
+| Evidence-limited diagnostic representation | Read the named report limitation and its impact; no user correction is requested until a concrete source or destination action exists |
+| Nonblocking corporate evidence-maintenance finding | Inspect or restore the named evidence/state file; automatic retry remains distinct from a user intervention |
 | Payable source event omitted for missing, invalid or conflicting evidence | Inspect the rejection and required source fields; never invent payment or quantity |
 | Missing BASE_SUMMARY | Inspect report cash configuration; disclose that cash was not updated |
 | Invalid configuration, authentication, source acquisition or unsuccessful financial processing | Inspect the stated reason and configuration/service; preserve recovery fences |
 | Required token renewal or timezone correction | Correct the named setting before affected live processing |
 | Required notification cannot be sent | Configure or repair Apprise; use the local log without recursive notification |
 
-Approved work awaiting a later qualified cycle SHALL be reported as deferred automatic work, not a new approval request. Future-dated events, normal exclusions, accepted rounding information, deliberate simulation and recovered retries SHALL not create a required action by themselves. Representation limits SHALL explain their impact without asking for an impossible correction.
+Approved work awaiting a later qualified cycle SHALL be reported as deferred automatic work, not a new approval request. Future-dated events, normal exclusions, accepted rounding information, deliberate simulation and recovered retries SHALL not create a required action by themselves. Representation limits SHALL explain their impact without asking for an impossible correction. An informational limitation SHALL not enter the required-action summary unless the implementation names a concrete user action and an observable resolution condition. A required action SHALL name the evidence that proves resolution; a repeated diagnostic limitation SHALL remain visible as information when no such action exists.
 
 Re-evaluate relevant action evidence from the acquired reports and existing destination/review state, including events already skipped as duplicates. An unresolved mapping or review action SHALL not vanish merely because an import completed earlier. Add no persistent alert store or broker request. Missing current evidence SHALL NOT be described as resolution. Retained review/state findings SHALL keep their visibility. State coverage limits without certifying unobserved lifetime history.
 
@@ -269,7 +274,7 @@ Baseline: app.py, sync.py, activity_review.py and diagnostics.py already emit op
 
 ### Requirement: Final operational result
 
-Every completed cycle SHALL distinguish `success`, `success with user action required`, and `failure`, independently of the unchanged exit code. Failure SHALL take priority and retain its action details. The result SHALL use ERROR for failure, WARNING for action-only success and INFO for clean success. Separately report proven accepted imports or simulated proposals, duplicate skips, unique review-held source events, other justified holds, deferred automatic work and cash outcomes per account. Unknown counts SHALL read `unavailable`, never zero. Label overlapping decisions; do not add them into a false reconciliation total. Proposal count SHALL not stand for held-event count.
+Every completed cycle SHALL distinguish `success`, `success with user action required`, and `failure`, independently of the unchanged exit code. A cycle with only automatic deferred work or an evidence limitation that has no user-resolvable action SHALL remain `success` and SHALL report that fact separately. Failure SHALL take priority and retain its action details. The result SHALL use ERROR for failure, WARNING for action-only success and INFO for clean success. Separately report proven accepted imports or simulated proposals, duplicate skips, unique review-held source events, other justified holds, deferred automatic work and cash outcomes per account. Unknown counts SHALL read `unavailable`, never zero. Label overlapping decisions; do not add them into a false reconciliation total. Proposal count SHALL not stand for held-event count.
 
 Cash outcomes SHALL distinguish simulated, request reported successful, not updated and uncertain/failed outcomes, using existing evidence. A successful request SHALL NOT be described as independent balance readback. No new financial readback is introduced. Cash success SHALL not imply held activities were imported. Show notification outcome alongside the cycle result without claiming device delivery. Early failures SHALL report unavailable fields honestly. Exits and financial processing SHALL remain unchanged.
 

@@ -10,6 +10,9 @@ Make required actions explicit without changing financial decisions. Keep existi
 
 ## Decisions
 
+- Every repeated reminder needs a concrete user action and observable resolution proof. Representation limits and automatically retried maintenance stay visible without manufacturing an impossible user action.
+- Log `ghostfolio-ibkr-sync build <APP_VERSION>` so a stable image copied from a qualified RC does not present its build provenance as a published release version.
+
 - Extend `outcome.py` with typed, run-local action records and fixed public reason codes. Existing selectors, converters, review and diagnostic functions return reporting evidence to `process_account` and `run_sync`. Register decisions explicitly; do not infer actions from log text or count every WARNING. Recompute relevant checks from acquired reports and existing destination/review evidence, including deduplicated events. Group repeated observations of one event/reason without adding them twice. Separate records that need user action from approved work awaiting a later cycle.
 - Reuse `finalize_run`, `build_failure_summary` and `send_notification`. Add required-action counts and safe instructions to the existing single dispatch. Failures retain priority. Report disabled, invalid, sent, failed, timeout and not-required delivery states. Keep worker isolation and one attempt. Existing corporate notification fingerprints remain independent; no fingerprint suppresses an active required action.
 - Reuse `process_review`, `classify_dividend_findings` and the current formatters. Report unique held events separately from proposal counts. Explain normal approval, missing proof, historical maintenance and uncertain requests. Reuse configured container paths and document volume resolution. Avoid Docker socket access or a host-path ENV.
