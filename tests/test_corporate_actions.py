@@ -1639,3 +1639,26 @@ def test_holds_distinct_sources_cannot_certify_shared_destination_ownership(
             assert positions["qty"][("TARGET", "SAMPLE.T")] == 100
     finally:
         ca.close_store(store)
+
+
+@pytest.mark.parametrize("status", ["sent", "failed", "timeout"])
+def test_operator_action_corporate_repeats_with_review_and_fingerprint_loss(monkeypatch, tmp_path, status):
+    from ghostfolio_ibkr_sync import app, corporate_actions as ca
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome, record_action
+    tmp_path.chmod(0o700)
+    monkeypatch.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    monkeypatch.setenv("DRY_RUN", "true")
+    sent = []
+    monkeypatch.setattr(app, "send_notification", lambda cfg, title, body: sent.append(body) or status)
+    filename = str(tmp_path / "state.yaml")
+    decision = notification_decision(False)
+    decision["findings"]["EVENT1"]["conclusions"]["history"] = "bounded_cost_dates_differ"
+    for _ in range(2):
+        out = new_run_outcome()
+        ca.prepare_notifications(out, filename, {"PRIVATE": decision})
+        record_action(out, "review_approval", "PRIVATE-REVIEW")
+        app.finalize_run(out, 0)
+        assert len(out["actions"]["corporate_action"]) == 1
+    assert len(sent) == 2
+    assert all("corporate_action (1)" in body and "review_approval (1)" in body for body in sent)
+    assert all("PRIVATE" not in body and "EVENT1" not in body and str(tmp_path) not in body for body in sent)

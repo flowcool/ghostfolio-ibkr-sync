@@ -300,3 +300,9 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull r
 ## Credits and license
 
 Forked from [obol89/ghostfolio-ibkr-sync](https://github.com/obol89/ghostfolio-ibkr-sync), with thanks to its contributors. See [LICENSE](LICENSE) for the inherited **MIT NON-AI License** and its additional restrictions.
+
+
+Required user actions send one consolidated notification per completed run,
+including simulation, until current evidence resolves them. Clean success sends
+no heartbeat. Private logs contain the affected scope and safe next action.
+Notification delivery does not change financial processing or exit codes.

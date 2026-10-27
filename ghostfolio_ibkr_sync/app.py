@@ -25,7 +25,6 @@ from ghostfolio_ibkr_sync.activity_review import (
     source_events,
 )
 from ghostfolio_ibkr_sync.config import (
-    dry_run_requested,
     load_config,
     load_notification_delivery,
     timezone_preview_reason,
@@ -524,7 +523,7 @@ def report_delivery(outcome: RunOutcome, status: str) -> None:
 def finalize_run(outcome: RunOutcome, code: int) -> None:
     """Send at most one notification for failures or a legacy-token reminder.
 
-    Ordinary warnings and successful simulations remain silent. Failures
+    Clean successful simulations remain silent. Failures
     notify in every mode, including invalid configuration. Delivery never changes
     the exit code. A reminder on a failed run joins its failure notification.
     """
@@ -534,7 +533,7 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     corporate = outcome.get("corporate_notification")
     corporate_due = corporate is not None and bool(corporate["sent"])
     maintenance_due = outcome.get("corporate_maintenance", False)
-    if code == 0 and not actions and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
+    if code == 0 and not actions and not corporate_due and not maintenance_due and days is None and not preview:
         report_delivery(outcome, "not required")
         return
     label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
@@ -548,19 +547,18 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
             title, body = NOTIFY_TITLE, build_failure_summary(outcome)
         elif corporate_due or maintenance_due:
             title, body = "ghostfolio-ibkr-sync: corporate actions", "Corporate-action evidence summary."
-            if not dry_run_requested():
-                if preview:
-                    body += "\n" + build_forced_preview_summary(preview)
-                if days is not None:
-                    body += "\n" + build_token_expiry_summary(days)
-        elif actions:
-            title, body = "ghostfolio-ibkr-sync: user action required", "User action required."
+            if preview:
+                body += "\n" + build_forced_preview_summary(preview)
+            if days is not None:
+                body += "\n" + build_token_expiry_summary(days)
         elif preview:
             title, body = FORCED_PREVIEW_NOTIFY_TITLE, build_forced_preview_summary(preview)
             if days is not None:
                 body += "\n" + build_token_expiry_summary(days)
+        elif days is not None:
+            title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(days)
         else:
-            title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(cast(int, days))
+            title, body = "ghostfolio-ibkr-sync: user action required", "User action required."
         if corporate_due and corporate is not None:
             body += "\n" + "\n".join(f"- corporate_actions: {key} ({value})"
                                        for key, value in corporate["counts"].items()
@@ -579,7 +577,7 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     report_delivery(outcome, delivery)
     if status == "sent":
         if corporate_due and corporate is not None:
-            ca.confirm_notification(cast(ca.NotificationPlan, corporate))
+            ca.confirm_notification(corporate)
         log.info("%s notification sent", label)
     elif status == "timeout":
         log.warning("%s notification timed out (it may still arrive; not retried)", label)
@@ -686,6 +684,7 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     if reason:
         config["dry_run"] = True
         outcome["forced_preview"] = reason
+        record_action(outcome, "timezone_correction", "TZ")
         log.warning("%s: whole run forced to DRY_RUN, no Ghostfolio writes", reason)
     if config["dry_run"]:
         log.info("DRY RUN enabled (DRY_RUN) — no writes will be sent to Ghostfolio")
@@ -700,6 +699,7 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     days = legacy_token_expiry_days(config)
     if days is not None:
         outcome["token_expiry_days"] = days
+        record_action(outcome, "token_renewal", "GHOST_TOKEN")
         if days:
             log.warning("Legacy GHOST_TOKEN expires in %d day(s); regenerate it or "
                         "switch to GHOST_ACCESS_TOKEN", days)
@@ -960,5 +960,5 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
     if outcome is not None:
         if store is not None and store["maintenance_warning"]:
             outcome["corporate_maintenance"] = True
-        ca.prepare_notifications(outcome, config.get("corporate_action_state_file")
+        ca.prepare_notifications(cast(RunOutcome, outcome), config.get("corporate_action_state_file")
                                  if notification_state_safe else None, decisions)

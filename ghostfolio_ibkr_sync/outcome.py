@@ -1,9 +1,12 @@
 """Run-local failures and delivery bookkeeping; external summaries use fixed codes."""
 
 import logging
-from typing import Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 import requests
+
+if TYPE_CHECKING:
+    from ghostfolio_ibkr_sync.corporate_actions import NotificationPlan
 
 
 class Failure(TypedDict):
@@ -20,7 +23,7 @@ class RunOutcome(TypedDict):
     accounts_failed: int
     token_expiry_days: NotRequired[int]
     forced_preview: NotRequired[str]
-    corporate_notification: NotRequired[dict[str, Any]]
+    corporate_notification: NotRequired[NotificationPlan]
     corporate_maintenance: NotRequired[bool]
     delivery: NotRequired[str]
     review_held: NotRequired[set[str]]
@@ -70,6 +73,9 @@ def record_failure(outcome: RunOutcome, stage: str, reason: str, ordinal: object
 # Private event keys never enter external summaries. Instructions and resolution
 # proof are fixed text; callers supply only the observed code and private scope.
 ACTION_INSTRUCTIONS = {
+    "corporate_action": "Inspect the corporate-action conclusions and restore the stated evidence or state. Holds require fresh source and destination agreement; acknowledgment or state reset cannot release them. Resolution: current conclusions prove safe continuation or the historical discrepancy is resolved.",
+    "token_renewal": "Regenerate GHOST_TOKEN or switch to GHOST_ACCESS_TOKEN. Resolution: a current credential is outside the configured expiry warning window.",
+    "timezone_correction": "Set TZ to the intended valid IANA timezone. Resolution: the next run validates TZ; simulation alone does not correct it.",
     "dividend_rejected": "Inspect the rejected payable event and missing or conflicting Flex quantity, cash or tax evidence. Never invent payment or quantity. Resolution: complete consistent current source evidence supports the event.",
     "dividend_reversal": "Compare the reversal with the original dividend in Ghostfolio and preserved Flex cash rows. Do not resend. Resolution: source and destination prove the reversal outcome or documented manual resolution.",
     "dividend_signed_tax": "Inspect signed withholding, refunds and orphan tax against the original payment in Ghostfolio. Do not invent or resend a transaction. Resolution: current payment and tax evidence reconcile or documented manual resolution.",

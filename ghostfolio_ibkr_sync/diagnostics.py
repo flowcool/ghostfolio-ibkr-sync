@@ -23,6 +23,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     _dividend_decimal,
     dividend_input_compatible,
 )
+from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 from ghostfolio_ibkr_sync.sync import (
     DIVIDEND_MATCH_DAYS,
     Positions,
@@ -35,8 +36,6 @@ from ghostfolio_ibkr_sync.sync import (
     dividend_structured_quantity,
     resolve_symbol,
 )
-
-from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 
 log = logging.getLogger(__name__)
 

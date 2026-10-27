@@ -504,3 +504,16 @@ def test_operator_action_delivery_interrupted(env, caplog, exc):
     with pytest.raises(exc):
         app.finalize_run(out, 0)
     assert len(sent) == 1 and "Notification result:" not in caplog.text
+
+
+@pytest.mark.parametrize("mode", [None, "", "true", "false"])
+def test_operator_action_prerequisite_timezone_in_simulation(env, mode):
+    if mode is None:
+        env.delenv("DRY_RUN")
+    else:
+        env.setenv("DRY_RUN", mode)
+    env.delenv("TZ")
+    sent = spy_send(env)
+    accounts(env, ALL_OK)
+    assert app.main() == 0 and len(sent) == 1
+    assert "timezone_correction (1)" in sent[0]["body"]

@@ -553,3 +553,12 @@ manual resolution proves resolution. Information, accepted rounding and noise
 alone send no reminder. Named representation or coverage limits remain visible
 as evidence limitations without requesting an impossible correction. No diagnostic
 changes financial selection, grants cleanup authority or writes a correction.
+
+
+Corporate-action holds and concrete historical discrepancies repeat in the same
+summary as other actions. Private conclusions name scope and the configured state
+path. Restore the stated evidence; acknowledgment and state reset do not release
+holds. Nonblocking findings without a user action keep first/change/resumption
+notifications. Automatic evidence maintenance remains a retry and is reported as
+such; it does not request approval. Token renewal and invalid or missing TZ also
+notify in simulation. Correct the named setting; simulation does not resolve it.
