@@ -100,7 +100,8 @@ def test_clean_run_records_no_failure(env):
     holder = capture_outcome(env)
     stub_accounts(env, {"U111": ({}, True), "U222": ({}, True), "U333": ({}, True)})
     assert app.main() == 0
-    assert holder["outcome"] == {"failures": [], "dropped": 0, "accounts_total": 3, "accounts_failed": 0}
+    assert {key: holder["outcome"][key] for key in ("failures", "dropped", "accounts_total", "accounts_failed")} == {"failures": [], "dropped": 0, "accounts_total": 3, "accounts_failed": 0}
+    assert holder["outcome"]["actions"] == {}
 
 
 def test_a_failed_run_leaves_nothing_in_the_next_run_outcome(env):
@@ -112,7 +113,8 @@ def test_a_failed_run_leaves_nothing_in_the_next_run_outcome(env):
     stub_accounts(env, {"U111": ({}, True), "U222": ({}, True), "U333": ({}, True)})
     assert app.main() == 0
     assert holder["outcome"] is not first
-    assert holder["outcome"] == {"failures": [], "dropped": 0, "accounts_total": 3, "accounts_failed": 0}
+    assert {key: holder["outcome"][key] for key in ("failures", "dropped", "accounts_total", "accounts_failed")} == {"failures": [], "dropped": 0, "accounts_total": 3, "accounts_failed": 0}
+    assert holder["outcome"]["actions"] == {}
 
 
 def test_warning_only_run_records_no_failure(env):
@@ -204,7 +206,8 @@ def test_failed_and_crashing_accounts_record_ordinals_and_the_others_still_run(e
         {"stage": "account", "reason": "unexpected_error", "ordinal": 1},
         {"stage": "account", "reason": "account_failed", "ordinal": 3}]
     assert (out["accounts_total"], out["accounts_failed"]) == (3, 2)
-    text = json.dumps(out)
+    from ghostfolio_ibkr_sync.notify import build_failure_summary
+    text = build_failure_summary(out)
     for leak in (CANARY, AMOUNT, "U111", "U333", "ghost:3333", "KeyError"):
         assert leak not in text
 

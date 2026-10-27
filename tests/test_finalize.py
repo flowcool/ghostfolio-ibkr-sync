@@ -263,7 +263,7 @@ def test_real_hanging_worker_cannot_change_the_outcome(env, tmp_path, caplog):
 
 
 @pytest.mark.parametrize("mode", ["missing", "empty", "conflict", "short"])
-def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifications(env, mode):
+def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notify(env, mode):
 
     xml = structured_input_xml(mode)
     w = World(env, xml)
@@ -271,7 +271,7 @@ def test_dividend_structured_input_rejections_keep_trades_cash_exit_and_notifica
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
     sent = spy_send(env)
     assert app.main() == 0
-    assert sent == []
+    assert len(sent) == 1 and "dividend_rejected" in sent[0]["body"]
     assert len(w.cash_calls) == 3
     assert any(a["type"] == "BUY" for a in w.activities)
     dividends = [a for a in w.activities if a["type"] == "DIVIDEND"]
@@ -307,7 +307,7 @@ def test_historical_diagnostic_findings_preserve_success_and_notifications(env, 
     for verb in ("post", "put", "patch", "delete"):
         env.setattr(requests, verb, lambda *a, **kw: pytest.fail("financial HTTP write"))
     caplog.set_level(logging.INFO)
-    assert app.main() == 0 and sent == []
+    assert app.main() == 0 and len(sent) == 1
     assert "Historical dividends" in caplog.text
 
 
@@ -366,15 +366,15 @@ def test_historical_diagnostic_preflight_valid_tz_keeps_live_run_silent(env, cap
     assert "forced to DRY_RUN" not in caplog.text
 
 
-def test_historical_diagnostic_preflight_raw_dry_run_stays_silent(env):
+def test_historical_diagnostic_preflight_raw_dry_run_reports_timezone(env):
     env.delenv("TZ")
     env.setenv("DRY_RUN", "1")
     sent = spy_send(env)
     accounts(env, ALL_OK)
-    assert app.main() == 0 and sent == []
+    assert app.main() == 0 and len(sent) == 1
 
 
-def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, caplog):
+def test_historical_diagnostic_actionable_blocks_join_notifications(env, caplog):
     env.setenv("DRY_RUN", "1")
     ids, comments, pos = read(env, [destination(comment="legacy", date="2026-07-17T00:00:00Z")])
     xml = report(divs=div_xml())
@@ -383,7 +383,7 @@ def test_historical_diagnostic_actionable_blocks_never_reach_notifications(env, 
     env.setattr(app, "ghost_get_existing_orders", lambda cfg: (ids, comments, pos))
     sent = spy_send(env)
     caplog.set_level(logging.INFO)
-    assert app.main() == 0 and sent == []
+    assert app.main() == 0 and len(sent) == 1
     assert "skipped by proximity" in caplog.text and "failed_checks=" in caplog.text
 
 
@@ -412,7 +412,7 @@ def test_dry_run_modes_notification_compatibility(env, mode, failed, configured,
     invalid = mode == "invalid"
     assert app.main() == int(failed or invalid)
     assert calls == ([] if invalid else ["U111", "U222", "U333"])
-    should_notify = configured and (failed or invalid or mode == "false")
+    should_notify = configured
     assert len(sent) == int(should_notify)
     if sent:
         title = notify.NOTIFY_TITLE if failed or invalid else (
@@ -517,3 +517,41 @@ def test_operator_action_prerequisite_timezone_in_simulation(env, mode):
     accounts(env, ALL_OK)
     assert app.main() == 0 and len(sent) == 1
     assert "timezone_correction (1)" in sent[0]["body"]
+
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_operator_action_integrated_cycles_keep_financial_requests_and_resolve(env, caplog, failed):
+    from _sync_helpers import CFG, ACC, ISIN_KO, trade_xml
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+    caplog.set_level(logging.INFO)
+    sent = spy_send(env, "failed")
+    xml = report(trade_xml("T1"), div_xml())
+    world = World(env, xml)
+    for resolved in (False, False, True):
+        ids, comments, pos = read(env, [destination(unitPrice=0.25 if resolved else 0.26)])
+        out = outcome.new_run_outcome()
+        out["review_held"] = set() if resolved else {"IBKR#v2#U1:TRADE:T1"}
+        out["deferred"] = set()
+        if not resolved:
+            outcome.record_action(out, "review_approval", "IBKR#v2#U1:TRADE:T1")
+            ca.prepare_notifications(out, None, {"U1": {
+                "account_held": False, "symbols": set(), "effective": {}, "dates": {}, "normalized": set(),
+                "findings": {"private-event": {"held": False, "reasons": [],
+                    "conclusions": {"history": "bounded_cost_dates_differ"}, "symbols": ["KO"]}}}})
+            if failed:
+                outcome.record_failure(out, "account", "account_failed", 1)
+        cfg = {**CFG, "dry_run": True, "_corporate_outcome": out, "_review_holds": out["review_held"]}
+        _, ok = app.process_account(cfg, "U1", "q1", "IBKR", {ISIN_KO: "KO"} if resolved else {},
+                                    {"T1"}, comments, pos)
+        assert ok
+        app.finalize_run(out, int(failed and not resolved))
+        assert world.activities == []
+        if not resolved:
+            assert {"review_approval", "mapping_unverified", "dividend_check", "corporate_action"} <= set(out["actions"])
+            assert out["delivery"] == "failed"
+        else:
+            assert out["actions"] == {} and out["delivery"] == "not required"
+    assert len(sent) == 2 and len(world.cash_calls) == 3
+    assert all("U1" not in item["body"] and ISIN_KO not in item["body"] for item in sent)
+    assert ("Cycle result: failure" if failed else "success with user action required") in caplog.text

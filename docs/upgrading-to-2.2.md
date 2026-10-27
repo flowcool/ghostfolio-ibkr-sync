@@ -8,7 +8,7 @@ additions are worth making:
    in at every run. Set only one of the two: both together stop the run with exit 1. See
    [Choose how the sync authenticates](configuration.md#configuration-reference).
 2. **Turn on failure alerts** with `APPRISE_URLS` (and optionally `APPRISE_TIMEOUT`). See
-   [Failure notifications](configuration.md#failure-notifications-apprise).
+   [Failure notifications](configuration.md#notifications-apprise).
 
 Then pull the image and **recreate** the container (a restart keeps the old image), run once
 with `DRY_RUN=1`, and check the version in the start-up log. The image now also contains Apprise

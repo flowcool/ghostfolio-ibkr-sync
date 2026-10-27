@@ -422,7 +422,7 @@ def select_account_activities(
     div_skipped_dup = 0
     candidates = []
     for div in dividends:
-        if div.get("isin") and div["isin"] not in mapping:
+        if div["amount"] > 0 and div.get("isin") and div["isin"] not in mapping:
             record_action(outcome, "mapping_unverified", f"{ibkr_account_id}:{div['isin']}")
         if any(format_versioned_activity_identity(ibkr_account_id, "DIVIDEND", row.get("actionID", ""))
                in review_holds for row in div["payments"]):
@@ -995,6 +995,13 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
     config["_corporate_decisions"] = decisions
     outcome = config.get("_corporate_outcome")
     if outcome is not None:
+        if any(decision["account_held"] or decision["symbols"] for decision in decisions.values()):
+            log.warning("Corporate-action holds require current source/destination proof; "
+                        "CORPORATE_ACTION_STATE_FILE container path=%s; "
+                        "CORPORATE_ACTION_EVIDENCE_FILE container path=%s; "
+                        "restore the named evidence; do not reset state to release a hold",
+                        config.get("corporate_action_state_file") or "unavailable",
+                        config.get("corporate_action_evidence_file") or "not configured")
         if store is not None and store["maintenance_warning"]:
             outcome["corporate_maintenance"] = True
         ca.prepare_notifications(cast(RunOutcome, outcome), config.get("corporate_action_state_file")

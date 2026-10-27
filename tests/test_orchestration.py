@@ -843,7 +843,7 @@ class HttpResp:
             raise requests.HTTPError(f"{self.status_code} for url: https://x/?t=SECRET-TOK")
 
 
-def test_ibkr_get_retries_network_errors_then_succeeds(monkeypatch):
+def test_operator_action_inventory_retry_recovers_without_user_action(monkeypatch):
     attempts, sleeps = [], []
     def get(url, params, timeout, **kwargs):
         attempts.append(1)
@@ -1400,7 +1400,8 @@ def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monk
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(app, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
     assert app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, ids, comments, pos) == ({}, True)
-    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING
+                and record.name != "ghostfolio_ibkr_sync.diagnostics"]
     assert len(warnings) == (0 if existing else 1)
     assert "Historical dividends" in caplog.text
     if existing:

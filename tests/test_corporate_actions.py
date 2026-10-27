@@ -513,7 +513,7 @@ def test_retention_reporting_cleanup_warning_is_not_a_financial_failure(tmp_path
               "_corporate_store": store, "_corporate_outcome": outcome}
     sent = []
     monkeypatch.setenv("DRY_RUN", "true" if simulation else "false")
-    monkeypatch.setattr(app, "load_notification_config", lambda: {} if configured else None)
+    monkeypatch.setattr(app, "load_notification_delivery", lambda: ({}, "configured") if configured else (None, "disabled"))
     monkeypatch.setattr(app, "send_notification", lambda *args: sent.append(args) or "sent")
     app.refresh_corporate_decisions(config, {}, {"activities": [], "count": 0}, {"qty": defaultdict(float)})
     assert not config["_corporate_decisions"]["SOURCE"]["account_held"]

@@ -35,9 +35,9 @@ propagation in its PR.
 
 ## Durable work state
 
-- OpenSpec change `clarify-operator-actions` is planning-complete and validated. Planning PRs 319 and 320 are merged.
-- Beads parent `infra-8tt.93` remains in progress. Implementation child `infra-8tt.93.1` is open and owns the ten-task checklist in `openspec/changes/clarify-operator-actions/tasks.md`.
-- No runtime implementation or release child exists yet. Create the release child only after offline implementation acceptance.
+- OpenSpec change `clarify-operator-actions` is implemented and archived at `openspec/changes/archive/2026-10-27-clarify-operator-actions/`. All ten tasks have offline acceptance proof.
+- Beads implementation `infra-8tt.93.1` is complete. Release child `infra-8tt.93.2` owns publication, exact-candidate lab qualification and stable promotion.
+- Parent `infra-8tt.93` remains in progress until release acceptance. No publication or production GO was granted by implementation.
 
 ## Working mode: fast-track
 
