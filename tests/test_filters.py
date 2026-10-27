@@ -374,3 +374,16 @@ def test_v2_accepted_state_split_manual_fills_remain_source_scoped(side):
     assert gate(trades, pos, source_account="U1") == []
     assert ids(gate(trades, pos, source_account="U2")) == ["T1", "T2"]
     assert pos["qty"][(ACC, "KO")] == 100
+
+
+@pytest.mark.parametrize("kind,reason", [("manual", "trade_manual"), ("symbol", "mapping_conflict"),
+                                        ("negative", "trade_position")])
+def test_operator_action_inventory_trade_decisions(kind, reason):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    pos = (positions(manual_buys={(ACC, "KO"): [("2026-08-01", 5)]}) if kind == "manual" else
+           positions(qty={(ACC, "OTHER"): 10}, isin_symbols={(ACC, ISIN): {"OTHER"}}) if kind == "symbol" else
+           positions(qty={(ACC, "KO"): 1}))
+    trade = tr("T1", 5 if kind == "manual" else -5)
+    kept = sync.filter_trades_by_holdings([trade], pos, ACC, {}, set(), source_account="U1", outcome=out)
+    assert kept == [] and len(out["actions"][reason]) == 1

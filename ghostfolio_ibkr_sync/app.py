@@ -75,6 +75,7 @@ from ghostfolio_ibkr_sync.outcome import (
     action_summary,
     is_token_rejection,
     new_run_outcome,
+    record_action,
     record_failure,
 )
 from ghostfolio_ibkr_sync.sync import (
@@ -223,7 +224,8 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             existing_dividend_comments, positions, query_id=query_id,
             diagnostic_preview=bool(config.get("dry_run")),
             review_holds=config.get("_review_holds"),
-            corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id))
+            corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id),
+            outcome=config.get("_corporate_outcome"))
     except InvalidActivityIdentityError:
         return {}, False
     ok = ok and selection_ok
@@ -281,6 +283,7 @@ def select_account_activities(
     holdings_trace: dict[str, Any] | None = None,
     review_holds: set[str] | None = None,
     corporate_decision: ca.Decision | None = None,
+    outcome: RunOutcome | None = None,
 ) -> tuple[list[Activity], dict[str, DividendContext], Unmapped, bool]:
     """Select without fetching or dispatching; mutate only manual-match state.
 
@@ -323,9 +326,15 @@ def select_account_activities(
 
     unique, skipped_dup, conflicts = unique_trades(trades)
     if conflicts:
+        for trade_id in conflicts:
+            record_action(outcome, "trade_invalid", f"{ibkr_account_id}:{trade_id}")
         log.error("Conflicting repeated trade IDs excluded: %s", ", ".join(sorted(conflicts)))
         ok = False
 
+    for trade in trades:
+        isin = trade.get("isin", "")
+        if isin and isin not in mapping and resolve_symbol(isin, trade.get("symbol"), mapping):
+            record_action(outcome, "mapping_unverified", f"{ibkr_account_id}:{isin}")
     for trade in unique:
         trade_id = trade.get("tradeID", "")
         if format_versioned_activity_identity(ibkr_account_id, "TRADE", trade_id) in review_holds:
@@ -350,6 +359,8 @@ def select_account_activities(
         trade_unmapped: Unmapped = {}
         activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
         if activity is None or not date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+            if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+                record_action(outcome, "trade_invalid", f"{ibkr_account_id}:{trade_id}")
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
             ok = False
@@ -365,7 +376,7 @@ def select_account_activities(
                                 "_activity": activity, "_unmapped": trade_unmapped})
 
     trades = filter_trades_by_holdings(prepared_trades, positions, ghost_account_id, mapping,
-                                      existing_trade_ids, source_account=ibkr_account_id)
+                                      existing_trade_ids, source_account=ibkr_account_id, outcome=outcome)
     activities: list[Activity] = []
     for kept in trades:
         activities.append(kept["_activity"])

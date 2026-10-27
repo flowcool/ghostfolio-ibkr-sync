@@ -523,3 +523,13 @@ APPRISE_TIMEOUT when a required notification is disabled or invalid. `sent`
 means the transport reported success; it does not prove device receipt. A timeout
 can still deliver later. The connector makes one attempt and does not retry.
 Delivery failure does not change the financial result or process exit code.
+
+
+Mapping and trade reminders use `mapping_unverified`, `mapping_conflict`,
+`trade_manual`, `trade_position` or `trade_invalid`. Private logs identify the
+source scope. Verify the intended security in Ghostfolio or correct MAPPING_FILE.
+For manual matches, compare source and destination before any reference repair.
+Current valid source fields and verified destination ownership prove resolution.
+Mapping checks still run for already imported trades in the acquired window.
+Normal CASH/OPT exclusions, absent positions and recovered network retries do not
+create required-action reminders by themselves.

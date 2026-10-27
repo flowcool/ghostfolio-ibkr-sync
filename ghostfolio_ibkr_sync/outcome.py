@@ -70,6 +70,10 @@ def record_failure(outcome: RunOutcome, stage: str, reason: str, ordinal: object
 # Private event keys never enter external summaries. Instructions and resolution
 # proof are fixed text; callers supply only the observed code and private scope.
 ACTION_INSTRUCTIONS = {
+    "trade_invalid": "Inspect the omitted trade and required Flex fields. Do not invent a trade. Resolution: valid current source evidence permits safe conversion.",
+    "trade_manual": "Compare the source trade with the manual Ghostfolio activity before any reference repair. Resolution: verified reference ownership or documented manual resolution.",
+    "trade_position": "Compare current Ghostfolio holdings and source trades. Resolution: verified holdings support the intended sale; no automatic repair is authorized.",
+    "mapping_conflict": "Inspect the different-symbol holding in Ghostfolio and MAPPING_FILE. Resolution: the intended security and holding use a verified explicit mapping.",
     "review_approval": "Read the exact proposal in ACTIVITY_REVIEW_FILE. Edit only approve between runs; lowercase literal yes approves an eligible normal-run correction. Resolution: current evidence confirms the intended correction or documented manual resolution.",
     "review_evidence": "Inspect ACTIVITY_REVIEW_FILE and obtain the stated missing proof. yes cannot make blocked work executable. Resolution: current source and destination evidence qualify the proposal.",
     "review_maintenance": "Follow the historical maintenance preparation guide and obtain separate operation authorization. Normal sync cannot execute it. Resolution: verified maintenance or documented manual resolution.",

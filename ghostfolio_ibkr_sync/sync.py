@@ -31,6 +31,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     parse_ibkr_datetime,
 )
 from ghostfolio_ibkr_sync.models import DividendContext
+from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 
 log = logging.getLogger(__name__)
 
@@ -579,7 +580,8 @@ def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]]
 
 def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions,
                               ghost_account_id: str, mapping: Mapping[str, str],
-                              existing_trade_ids: set[str], *, source_account: str) -> list[dict[str, Any]]:
+                              existing_trade_ids: set[str], *, source_account: str,
+                              outcome: RunOutcome | None = None) -> list[dict[str, Any]]:
     """Drop trades whose import would duplicate a manual entry or drive a
     Ghostfolio position negative.
 
@@ -640,6 +642,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
                 log.debug("Not importing sell %s of %s: already entered manually in Ghostfolio",
                           trade_id, ticker)
             else:
+                record_action(outcome, "trade_manual", f"{source_account}:{trade_id}")
                 log.warning("Not importing buy %s of %s (qty %.4g, %s): matches a manual Ghostfolio "
                             "buy of %.4g on %s — set that entry's comment to %s to silence "
                             "this", trade_id, ticker, abs(qty), trade.get("dateTime", ""),
@@ -663,10 +666,15 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
         ids = [t.get("tradeID", "") for t in fills]
         if len(fills) > 1 and match_one(summed, ticker, isin, side)[0] == "match":
             (manual_recorded if side == "SELL" else manual_buys).update(ids)
+            if side == "BUY":
+                for trade_id in ids:
+                    record_action(outcome, "trade_manual", f"{source_account}:{trade_id}")
             log.log(logging.DEBUG if side == "SELL" else logging.WARNING,
                     "Not importing %ss %s of %s: fills sum to a manual Ghostfolio %s",
                     side.lower(), ",".join(ids), ticker, side.lower())
             continue
+        for trade_id in ids:
+            record_action(outcome, "trade_manual", f"{source_account}:{trade_id}")
         ambiguous.update(ids)
         log.warning("Not importing %s(s) %s of %s (qty %.4g, %s): a manual Ghostfolio %s "
                     "within 2 days has another quantity — check for a duplicate by hand",
@@ -684,6 +692,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             others = sorted(sym for sym in positions["isin_symbols"].get((ghost_account_id, info["isin"]), ())
                             if abs(qty_by_symbol.get((ghost_account_id, sym), 0.0)) >= 0.001)
             if others:
+                record_action(outcome, "mapping_conflict", f"{source_account}:{info['isin']}")
                 rejected.add(ticker)
                 log.warning("Not importing sells for %s: Ghostfolio holds this ISIN under %s — "
                             "add mapping symbol_mapping: '%s: %s'",
@@ -700,6 +709,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             log.debug("Not importing %s: net new trades %.4g but Ghostfolio holds no position "
                       "(sold manually or never tracked)", label, info["pending"])
         else:
+            record_action(outcome, "trade_position", f"{source_account}:{ticker}")
             log.error("Not importing %s: Ghostfolio holds %.4g, net new trades %.4g would go "
                       "negative — fix the position in Ghostfolio manually",
                       label, held, info["pending"])

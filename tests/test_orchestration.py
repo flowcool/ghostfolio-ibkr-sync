@@ -2002,3 +2002,31 @@ def test_v2_source_qualification_retained_identity_is_not_financial_reconciliati
     assert world.run(pos=world.pos)[1] is True
     assert world.activities == []  # Exact stored identities remain trusted.
     # This limit cannot certify that an unobserved vendor revision is safe.
+
+
+@pytest.mark.parametrize("existing", [set(), {"T1"}])
+def test_operator_action_inventory_mapping_trade_survives_dedup(existing):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    for source in ("U1", "U2"):
+        xml = report(trade_xml("T1")).replace('accountId="U1"', f'accountId="{source}"')
+        for _ in range(2):
+            activities, _, _, ok = app.select_account_activities(
+                xml, source, ACC, {}, set(existing), set(), positions(), outcome=out)
+            assert ok
+            assert len(activities) == int(not existing)
+    assert len(out["actions"]["mapping_unverified"]) == 2
+    resolved = new_run_outcome()
+    app.select_account_activities(report(trade_xml("T1")), "U1", ACC, {ISIN_KO: "KO"},
+                                  {"T1"}, set(), positions(), outcome=resolved)
+    assert resolved["actions"] == {}
+
+
+def test_operator_action_inventory_trade_invalid_and_normal_exclusions():
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    activities, _, _, ok = app.select_account_activities(
+        report(trade_xml("T1").replace('tradePrice="60"', 'tradePrice="bad"')),
+        "U1", ACC, {ISIN_KO: "KO"}, set(), set(), positions(), outcome=out)
+    assert not ok and not activities
+    assert out["actions"]["trade_invalid"] == {"U1:T1"}
