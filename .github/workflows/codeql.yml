@@ -1,8 +1,7 @@
 name: CodeQL
 
 on:
-  push:
-    branches: [main]
+  # main is analyzed weekly; PRs are analyzed before merge (no re-run after merge).
   pull_request:
     branches: [main]
   schedule:
@@ -16,7 +15,35 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Documentation-only PRs (docs/, openspec/, *.md) skip the work below; the
+  # required checks still report (skipped = success). Fails open: any scope
+  # error runs everything.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          code=true
+          if [ -n "$PR" ]; then
+            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   analyze:
+    needs: scope
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

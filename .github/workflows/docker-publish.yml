@@ -1,13 +1,13 @@
 name: Validate Docker image
 
 on:
+  # main is validated on the PR before merge; no re-run after merge.
   push:
     branches:
-      - main
       - staging
     tags:
       - "v*"
-  # Every PR runs required checks, including documentation-only changes.
+  # Every PR reports the required checks; documentation-only PRs skip the work.
   pull_request:
     branches:
       - main
@@ -24,7 +24,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Documentation-only PRs (docs/, openspec/, *.md) skip the work below; the
+  # required checks still report (skipped = success). Fails open: any scope
+  # error runs everything.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          code=true
+          if [ -n "$PR" ]; then
+            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only)
+            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: scope
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -42,6 +70,8 @@ jobs:
           PYTHON: python
 
   dependency-audit:
+    needs: scope
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,6 +88,12 @@ jobs:
 
   container-check:
     name: container-check (${{ matrix.arch }})
+    # Matrix job names only expand when the job runs, so it always runs and
+    # its steps are skipped for documentation-only PRs.
+    needs: scope
+    if: ${{ !cancelled() }}
+    env:
+      RUN_WORK: ${{ needs.scope.result != 'success' || needs.scope.outputs.code != 'false' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -70,10 +106,13 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_WORK == 'true'
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        if: env.RUN_WORK == 'true'
       - name: Build without publishing
+        if: env.RUN_WORK == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
@@ -86,6 +125,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
       - name: Check isolated read-only runtime modes
+        if: env.RUN_WORK == 'true'
         run: |
           docker load --input "${{ runner.temp }}/image.tar"
           # Trace the synthetic outputs and scheduled container logs for evidence.
@@ -98,6 +138,7 @@ jobs:
       # scan below instead of blocking every PR. Python deps are also gated by
       # pip-audit in the dependency-audit job.
       - name: Scan image for fixable high and critical vulnerabilities (blocking)
+        if: env.RUN_WORK == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: ${{ runner.temp }}/image.tar
@@ -111,7 +152,7 @@ jobs:
       # supercronic binary skipped above) for visibility, but never blocks the
       # merge. Runs even if the blocking scan failed.
       - name: Advisory vulnerability scan (never blocks)
-        if: always()
+        if: always() && env.RUN_WORK == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: ${{ runner.temp }}/image.tar
