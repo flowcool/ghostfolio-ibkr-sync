@@ -33,6 +33,12 @@ propagation in its PR.
   [python conventions](.claude/rules/python-conventions.md),
   [security rules](.claude/rules/security.md).
 
+## Durable work state
+
+- OpenSpec change `clarify-operator-actions` is planning-complete and validated. Planning PRs 319 and 320 are merged.
+- Beads parent `infra-8tt.93` remains in progress. Implementation child `infra-8tt.93.1` is open and owns the ten-task checklist in `openspec/changes/clarify-operator-actions/tasks.md`.
+- No runtime implementation or release child exists yet. Create the release child only after offline implementation acceptance.
+
 ## Working mode: fast-track
 
 This mode replaces the global per-step ceremony. The invariants above still apply.
