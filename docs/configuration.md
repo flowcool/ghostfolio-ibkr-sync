@@ -544,3 +544,12 @@ and never resend an uncertain transaction. Complete consistent current evidence,
 verified destination agreement or documented manual resolution proves resolution.
 Ordinary zero-net payments without signed tax remain exclusions. Future dates
 remain deferred work. A representation limit alone does not request correction.
+
+
+Simulation reports dividend items to check at WARNING. Concrete comparisons
+that require intervention join the same `dividend_check` reminder. Inspect the
+named activity and both sides of the comparison. Current agreement or documented
+manual resolution proves resolution. Information, accepted rounding and noise
+alone send no reminder. Named representation or coverage limits remain visible
+as evidence limitations without requesting an impossible correction. No diagnostic
+changes financial selection, grants cleanup authority or writes a correction.

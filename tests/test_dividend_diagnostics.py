@@ -1288,3 +1288,30 @@ def test_coherent_dividend_keep_quantity_has_no_tolerance(monkeypatch, source_qu
     if label != "Keep":
         assert "Action: Compare activity dividend-1" in block
         assert "compare the quantity by hand" in block
+
+
+@pytest.mark.parametrize("price,expected", [(0.25, False), (0.26, True)])
+def test_operator_action_diagnostic_warning_and_summary(monkeypatch, caplog, price, expected):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    findings = comparison(monkeypatch, [destination(unitPrice=price)])
+    counts = diagnostics.log_historical_dividend_comparison(findings, ACC, outcome=out)
+    assert bool(out["actions"].get("dividend_check")) == expected
+    blocks = [r for r in caplog.records if "Dividend to check:" in r.message]
+    assert bool(blocks) == expected
+    assert all(r.levelno >= logging.WARNING for r in blocks)
+    if expected:
+        assert counts["to_check"] > 0
+        assert all(r.message.count("Action:") == 1 for r in blocks)
+
+
+def test_operator_action_diagnostic_limitation_has_no_impossible_reminder(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    xml = report(divs=div_xml(amount="15") + div_xml(amount="10").replace('actionID="A1"', 'actionID="A2"'))
+    findings = comparison(monkeypatch, [destination(unitPrice=0.15), destination(id="dividend-2", unitPrice=0.10)], xml)
+    assert findings[0]["reason"] == "component partition identity not proven"
+    diagnostics.log_historical_dividend_comparison(findings, ACC, outcome=out)
+    assert out["actions"] == {}
+    assert "Evidence limitation" in caplog.text

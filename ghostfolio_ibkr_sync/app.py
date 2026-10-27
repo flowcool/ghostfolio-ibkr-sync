@@ -392,7 +392,7 @@ def select_account_activities(
         findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
                                                  historical_dividend_report_window(xml_text),
                                                  existing_dividend_comments)
-        report_counts = log_historical_dividend_comparison(findings, ghost_account_id)
+        report_counts = log_historical_dividend_comparison(findings, ghost_account_id, outcome=outcome)
     div_activities: list[Activity] = []
     proposed_dividend_context: dict[str, DividendContext] = {}
     div_skipped_dup = 0
