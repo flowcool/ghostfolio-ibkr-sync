@@ -240,7 +240,7 @@ class ReviewServer:
         return response
 
 
-def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_run=False, rows=None):
+def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_run=False, rows=None, run_outcome=None):
     path = tmp_path / "review.yaml"
     server = ReviewServer(monkeypatch, rows, outcome)
     proposals = preview(rows)
@@ -250,7 +250,7 @@ def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_
     path.chmod(0o600)
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "secret", "dry_run": dry_run,
-              "activity_review_file": str(path)}
+              "activity_review_file": str(path), "_corporate_outcome": run_outcome}
     # This is an isolated execution-budget fixture, not image qualification.
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-image", 2, 0.5))
     blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
@@ -1218,5 +1218,51 @@ def test_review_date_correction_confirms_after_derived_profile_recalculation(tmp
         assert review.instant(review.inspect_reverse(entry, server.rows[0])["date"]) == review.instant(row["date"])
         blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
         assert not blocked and not held and len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("approval,expected", [(None, "review_approval"), (True, "review_approval"), ("YES", "review_approval")])
+def test_operator_action_review_pending_private_path(tmp_path, monkeypatch, caplog, approval, expected):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    server, state, config, blocked, held = run_review(tmp_path, monkeypatch, approval=approval, run_outcome=out)
+    try:
+        assert out["actions"][expected] == held
+        assert str(state["path"]) in caplog.text and "activity_corrections" in caplog.text
+        assert "only lowercase literal yes" in caplog.text
+        assert not server.writes and not blocked
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("case,expected", [("unqualified", "review_evidence"), ("historical", "review_maintenance"),
+                                          ("blocked", "review_evidence"), ("uncertain", "review_uncertain"),
+                                          ("source unavailable", "review_evidence"), ("deferred", None)])
+def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, case, expected):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    proposal = next(iter(preview().values()))
+    proposal["approve"] = "yes"
+    if case == "historical":
+        proposal["execution path"] = "historical maintenance"
+    if case == "blocked":
+        proposal.update(actionable=False, status="missing proof")
+    if case == "source unavailable":
+        proposal["status"] = case
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", None if case == "unqualified" else ("synthetic", 2, 0))
+    state = review.open_review(str(tmp_path / "custom.yaml"), [])
+    config = {"_corporate_outcome": out, "dry_run": True}
+    try:
+        review.report_review_outcome(state, config, {proposal["key"]: proposal}, {proposal["source event"]},
+                                     {proposal["source event"]} if case == "uncertain" else set())
+        assert set(out["actions"]) == ({expected} if expected else set())
+        assert out["review_held"] == {proposal["source event"]}
+        if case == "uncertain":
+            assert "Do not resend, delete or edit the journal" in caplog.text
+        if case == "deferred":
+            assert out["deferred"] == {proposal["source event"]}
+        else:
+            assert str(state["path"]) in caplog.text
     finally:
         review.close_review(state)

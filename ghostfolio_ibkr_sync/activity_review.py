@@ -897,14 +897,53 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     publish_review(state, {"version": 1, "proposals": refreshed})
     held = {item["source event"] for item in refreshed.values()} | unresolved_events
-    from ghostfolio_ibkr_sync.outcome import record_action
-    for item in refreshed.values():
-        if item.get("approve") == "yes" and item.get("actionable") and item.get("execution path") == "normal run" and QUALIFIED_EXECUTION is not None:
-            continue
-        record_action(config.get("_corporate_outcome"), "review_approval", item["source event"])
-    if held:
-        log.warning("Activity review holds %d source event(s); pending approvals remain in %s", len(held), state["path"])
+    pending = {entry["source event"] for entry in state["journal"]["entries"].values()
+               if entry["status"] != "confirmed"}
+    report_review_outcome(state, config, refreshed, held, pending)
     return blocked, held
+
+
+
+def report_review_outcome(state: ReviewState, config: dict[str, Any], proposals: dict[str, Any],
+                          held: set[str], uncertain: set[str]) -> None:
+    """Report decisions without changing approvals, holds or execution state."""
+    from ghostfolio_ibkr_sync.outcome import ACTION_INSTRUCTIONS, record_action
+
+    outcome = config.get("_corporate_outcome")
+    deferred: set[str] = set()
+    for key, item in sorted(proposals.items()):
+        event = item["source event"]
+        if event in uncertain:
+            reason = "review_uncertain"
+        elif item.get("execution path") == "historical maintenance":
+            reason = "review_maintenance"
+        elif (not item.get("actionable") or item.get("status") in
+              ("source unavailable", "target missing or unavailable") or QUALIFIED_EXECUTION is None):
+            reason = "review_evidence"
+        elif item.get("approve") == "yes":
+            deferred.add(event)
+            log.info("Activity review deferred automatic work: %s; container path=%s; section=%s; key=%s; "
+                     "approval retained; hold remains; simulation=%s", event, state["path"],
+                     item.get("section", "proposals"), key, bool(config.get("dry_run")))
+            continue
+        else:
+            reason = "review_approval"
+        log.warning("User action required: %s; ACTIVITY_REVIEW_FILE container path=%s; section=%s; "
+                    "key=%s; held event=%s; reason=%s; %s; only lowercase literal yes approves "
+                    "an eligible normal-run proposal; simulation=%s", reason, state["path"],
+                    item.get("section", "proposals"), key, event, item.get("status"),
+                    ACTION_INSTRUCTIONS[reason], bool(config.get("dry_run")))
+        record_action(outcome, reason, event)
+    for event in uncertain:
+        record_action(outcome, "review_uncertain", event)
+        log.warning("Review journal needs exact readback; container path=%s; held event=%s; %s",
+                    state["journal_path"], event, ACTION_INSTRUCTIONS["review_uncertain"])
+    if outcome is not None:
+        outcome["review_held"] = set(held)
+        outcome["deferred"] = deferred - uncertain
+    if held:
+        log.warning("Activity review holds %d unique source event(s); %d proposal(s); "
+                    "ACTIVITY_REVIEW_FILE container path=%s", len(held), len(proposals), state["path"])
 
 
 def apply_corporate_review_holds(config: dict[str, Any], proposals: dict[str, Any],
