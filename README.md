@@ -139,6 +139,18 @@ Set the required credentials and target details in `.env`. The [full configurati
 
 Secrets belong in the environment or a private `.env` file with restricted permissions. Do not place them in Compose committed to Git. Use `docker compose config --quiet` for validation; resolved output can expose secrets.
 
+## Operational results
+
+Required user actions send one consolidated notification per completed run,
+including simulation, until current evidence resolves them. Clean success sends
+no heartbeat. Private logs contain the affected scope and safe next action.
+Notification delivery does not change financial processing or exit codes.
+
+`Cycle result` separates success, success with user action required, and failure.
+Per-account imports and cash are separate evidence. `request reported successful`
+for cash does not claim independent balance readback or release activity holds.
+Unavailable evidence is shown explicitly. See [configuration](docs/configuration.md).
+
 ## Corporate-action safety
 
 The Flex query must select **Corporate Actions**, including when it is empty.

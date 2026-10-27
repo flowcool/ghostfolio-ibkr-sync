@@ -188,3 +188,27 @@ Offline journal inspection can prepare a guarded reverse payload for an unchange
 confirmed row only. Reversal requires separate authority and never runs automatically.
 See [maintenance](cleanup.md#activity-review-journals) and
 [release qualification](releasing.md#activity-review-qualification).
+
+
+### User action required and container path
+
+The private log names the configured ACTIVITY_REVIEW_FILE container path, section,
+proposal key, held event and reason. A proposal count is not a held-event count.
+Resolve the host path from your Compose volume mapping. For example,
+`./review:/state` maps `/state/activity-review.yaml` to
+`./review/activity-review.yaml`, relative to the Compose project directory.
+The connector does not discover host mounts.
+
+For an eligible `normal run` proposal, compare current and proposed values and
+execution path. Edit only `approve` between runs. Only lowercase literal `yes`
+approves that exact eligible proposal. Never approve proposals in bulk. Simulation
+executes no financial write. Already approved work waiting for the qualified limit
+remains automatic work; do not approve again or force reruns.
+
+For missing proof, invalid/stale choices or conflicts, inspect the reason and
+restore current source and destination proof. `yes` cannot make blocked work
+executable. Historical maintenance needs the documented preparation and separate
+operation authorization; normal sync cannot execute it. For an uncertain request,
+inspect the preserved journal and exact destination readback. Do not resend,
+delete or edit the journal to release a hold. False matches need the documented
+manual resolution and retain separate cleanup authority.

@@ -31,6 +31,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     parse_ibkr_datetime,
 )
 from ghostfolio_ibkr_sync.models import DividendContext
+from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +104,49 @@ def resolve_symbol(isin: str | None, ibkr_symbol: str | None,
     return None
 
 
-def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False
+
+DIVIDEND_REJECTION_ACTIONS = {
+    'cash partition does not conserve source totals': "dividend_rejected",
+    'conflicting payment association keys': "dividend_rejected",
+    'conflicting payment day': "dividend_rejected",
+    'contradictory cash currencies': "dividend_rejected",
+    'contradictory component quantities': "dividend_rejected",
+    'contradictory negative-net cash action': "dividend_rejected",
+    'contradictory structured quantities': "dividend_rejected",
+    'incompatible numeric cash amount': "dividend_rejected",
+    'incompatible numeric cash totals': "dividend_rejected",
+    'incompatible numeric price': "dividend_rejected",
+    'incompatible numeric price or fee after scaling': "dividend_rejected",
+    'incompatible numeric quantity': "dividend_rejected",
+    'incompatible structured quantity': "dividend_rejected",
+    'missing accrual association keys': "dividend_rejected",
+    'missing net-positive quantity evidence': "dividend_rejected",
+    'missing or conflicting withholding association': "dividend_rejected",
+    'missing or contradictory payment reversal evidence': "dividend_rejected",
+    'missing payment association keys': "dividend_rejected",
+    'missing structured quantity evidence': "dividend_rejected",
+    'no symbol resolved': "dividend_rejected",
+    'source action split across cash groups': "dividend_rejected",
+    "signed zero-net withholding": "dividend_signed_tax",
+    "orphan withholding": "dividend_signed_tax",
+    "withholding refund": "dividend_signed_tax",
+    "orphan reversal": "dividend_reversal",
+}
+
+
+def dividend_scope(dividend: Mapping[str, Any]) -> str:
+    """Stable private scope shared by repeated observations of a source group."""
+    accounts = sorted({row.get("accountId", "") for row in dividend.get("cash_rows", [])})
+    return f"{','.join(accounts)}:{dividend.get('isin') or dividend.get('symbol')}:{dividend['date']}"
+
+
+def report_dividend_rejection(dividend: DividendGroup, reason: str, outcome: RunOutcome | None) -> None:
+    """Report an enumerated decision, never infer an action from warning text."""
+    record_action(outcome, DIVIDEND_REJECTION_ACTIONS[reason], dividend_scope(dividend))
+
+
+def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False,
+                               outcome: RunOutcome | None = None
                                ) -> dict[tuple[str, str], Decimal] | None:
     """Return exact quantities keyed by source account/action for positive cash.
 
@@ -114,6 +157,7 @@ def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False
     """
     def reject(reason: str) -> dict[tuple[str, str], Decimal] | None:
         if not quiet:
+            report_dividend_rejection(dividend, reason, outcome)
             log.warning("Dividend %s %s: %s — not imported",
                         dividend["symbol"], dividend["date"], reason)
         return None
@@ -172,18 +216,20 @@ def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False
     return action_quantities
 
 
-def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False) -> Decimal | None:
+def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False,
+                                 outcome: RunOutcome | None = None) -> Decimal | None:
     """Return the common quantity of the historical aggregate projection.
 
     The action writer calls this only after partitioning each action. Keep the
     scalar helper for historical comparisons, never to combine new actions.
     """
-    quantities = dividend_action_quantities(dividend, quiet=quiet)
+    quantities = dividend_action_quantities(dividend, quiet=quiet, outcome=outcome)
     if quantities is None:
         return None
     common_quantity = next(iter(quantities.values()))
     if any(quantity != common_quantity for quantity in quantities.values()):
         if not quiet:
+            report_dividend_rejection(dividend, "contradictory component quantities", outcome)
             log.warning("Dividend %s %s: contradictory component quantities — not imported",
                         dividend["symbol"], dividend["date"])
         return None
@@ -330,7 +376,8 @@ def convert_trade_to_activity(trade: Mapping[str, str], ghost_account_id: str,
 
 
 def partition_dividend_actions(dividend: DividendGroup,
-                               report_dividends: Sequence[DividendGroup] = ()
+                               report_dividends: Sequence[DividendGroup] = (),
+                               outcome: RunOutcome | None = None
                                ) -> list[DividendGroup] | None:
     """Partition cash exactly before quantity validation or fee clamping.
 
@@ -338,6 +385,7 @@ def partition_dividend_actions(dividend: DividendGroup,
     separate boundary. Keep zero-net actions for cash accounting, not dispatch.
     """
     def reject(reason: str) -> list[DividendGroup] | None:
+        report_dividend_rejection(dividend, reason, outcome)
         log.error("Dividend %s %s: %s — no action imported; account failed",
                   dividend["symbol"], dividend["date"], reason)
         return None
@@ -404,7 +452,8 @@ def partition_dividend_actions(dividend: DividendGroup,
 
 def convert_dividend_actions(dividend: DividendGroup, ghost_account_id: str,
                              mapping: Mapping[str, str], unmapped: Unmapped,
-                             report_dividends: Sequence[DividendGroup] = ()
+                             report_dividends: Sequence[DividendGroup] = (),
+                             outcome: RunOutcome | None = None
                              ) -> tuple[list[Activity], bool]:
     """Prepare the complete historical group; never expose a partial proposal.
 
@@ -412,7 +461,7 @@ def convert_dividend_actions(dividend: DividendGroup, ghost_account_id: str,
     rejections keep their local outcome. The scalar converter below remains
     the historical projection used to compare old financial values.
     """
-    parts = partition_dividend_actions(dividend, report_dividends)
+    parts = partition_dividend_actions(dividend, report_dividends, outcome=outcome)
     if parts is None:
         return [], False
     activities = []
@@ -421,12 +470,13 @@ def convert_dividend_actions(dividend: DividendGroup, ghost_account_id: str,
             tax = _dividend_cash_sum([row for row in part["cash_rows"]
                                       if row.get("type") == WITHHOLDING_CASH_TYPE])
             if tax:
+                report_dividend_rejection(part, "signed zero-net withholding", outcome)
                 log.warning("Dividend %s %s: action %s nets to zero but carries signed "
                             "withholding %s %s — not imported, check by hand",
                             dividend["symbol"], dividend["date"],
                             part["payments"][0]["actionID"], tax, dividend["currency"])
             continue
-        activity = convert_dividend_to_activity(part, ghost_account_id, mapping, unmapped)
+        activity = convert_dividend_to_activity(part, ghost_account_id, mapping, unmapped, outcome=outcome)
         if activity is None:
             return [], True
         row = part["payments"][0]
@@ -437,7 +487,8 @@ def convert_dividend_actions(dividend: DividendGroup, ghost_account_id: str,
 
 
 def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
-                                 mapping: Mapping[str, str], unmapped: Unmapped) -> Activity | None:
+                                 mapping: Mapping[str, str], unmapped: Unmapped,
+                                 outcome: RunOutcome | None = None) -> Activity | None:
     """Convert a parse_cash_dividends() entry to a Ghostfolio DIVIDEND activity.
 
     Returns None if the dividend cannot be processed.
@@ -452,11 +503,13 @@ def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
 
     if amount <= 0:
         if amount < 0:
+            report_dividend_rejection(dividend, "orphan reversal", outcome)
             # a reversal dated apart from its payment: the original stays in Ghostfolio
             log.warning("Dividend %s %s: reversal of %.4g %s without a payment on the "
                         "same day — not imported, check the original dividend by hand",
                         ibkr_symbol, dividend["date"], -amount, currency)
         elif dividend["tax"]:
+            report_dividend_rejection(dividend, "orphan withholding", outcome)
             log.warning("Dividend %s %s: withholding tax %.4g %s without a dividend on the "
                         "same day (tax correction?) — not imported, check by hand",
                         ibkr_symbol, dividend["date"], dividend["tax"], currency)
@@ -471,19 +524,22 @@ def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
             # setdefault: keep the description a trade for the same ISIN may have set
             unmapped.setdefault(isin, {"symbol": ibkr_symbol, "description": ""})
     else:
+        report_dividend_rejection(dividend, "no symbol resolved", outcome)
         log.warning("No symbol resolved for dividend (ISIN: %s), skipping", isin)
         return None
 
     # IBKR reports withholding as a negative amount; a net refund is not a fee
     if dividend["tax"] > 0:
+        report_dividend_rejection(dividend, "withholding refund", outcome)
         log.warning("Dividend %s %s: net withholding refund %.4g %s — recorded as 0",
                     ibkr_symbol, dividend["date"], dividend["tax"], currency)
 
-    quantity = dividend_structured_quantity(dividend)
+    quantity = dividend_structured_quantity(dividend, outcome=outcome)
     if quantity is None:
         return None
     qty = float(quantity)
     if not isfinite(qty) or qty <= 0:
+        report_dividend_rejection(dividend, "incompatible numeric quantity", outcome)
         log.warning("Dividend %s %s: incompatible numeric quantity — not imported",
                     ibkr_symbol, dividend["date"])
         return None
@@ -493,6 +549,7 @@ def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
     tax = _dividend_cash_sum([row for row in cash_rows
                              if row.get("type") == WITHHOLDING_CASH_TYPE])
     if gross is None or tax is None or gross <= 0:
+        report_dividend_rejection(dividend, "incompatible numeric cash totals", outcome)
         log.warning("Dividend %s %s: incompatible numeric cash totals — not imported",
                     ibkr_symbol, dividend["date"])
         return None
@@ -501,6 +558,7 @@ def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
             context.prec = 50
             unit_price_decimal = gross / quantity
     except DecimalException:
+        report_dividend_rejection(dividend, "incompatible numeric price", outcome)
         log.warning("Dividend %s %s: incompatible numeric price — not imported",
                     ibkr_symbol, dividend["date"])
         return None
@@ -520,6 +578,7 @@ def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
 
     if (not isfinite(unit_price) or unit_price <= 0
             or not isfinite(wht) or wht < 0 or (fee_decimal > 0 and wht == 0)):
+        report_dividend_rejection(dividend, "incompatible numeric price or fee after scaling", outcome)
         log.warning("Dividend %s %s: incompatible numeric price or fee after scaling — not imported",
                     ibkr_symbol, dividend["date"])
         return None
@@ -579,7 +638,8 @@ def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]]
 
 def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions,
                               ghost_account_id: str, mapping: Mapping[str, str],
-                              existing_trade_ids: set[str], *, source_account: str) -> list[dict[str, Any]]:
+                              existing_trade_ids: set[str], *, source_account: str,
+                              outcome: RunOutcome | None = None) -> list[dict[str, Any]]:
     """Drop trades whose import would duplicate a manual entry or drive a
     Ghostfolio position negative.
 
@@ -640,6 +700,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
                 log.debug("Not importing sell %s of %s: already entered manually in Ghostfolio",
                           trade_id, ticker)
             else:
+                record_action(outcome, "trade_manual", f"{source_account}:{trade_id}")
                 log.warning("Not importing buy %s of %s (qty %.4g, %s): matches a manual Ghostfolio "
                             "buy of %.4g on %s — set that entry's comment to %s to silence "
                             "this", trade_id, ticker, abs(qty), trade.get("dateTime", ""),
@@ -663,10 +724,15 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
         ids = [t.get("tradeID", "") for t in fills]
         if len(fills) > 1 and match_one(summed, ticker, isin, side)[0] == "match":
             (manual_recorded if side == "SELL" else manual_buys).update(ids)
+            if side == "BUY":
+                for trade_id in ids:
+                    record_action(outcome, "trade_manual", f"{source_account}:{trade_id}")
             log.log(logging.DEBUG if side == "SELL" else logging.WARNING,
                     "Not importing %ss %s of %s: fills sum to a manual Ghostfolio %s",
                     side.lower(), ",".join(ids), ticker, side.lower())
             continue
+        for trade_id in ids:
+            record_action(outcome, "trade_manual", f"{source_account}:{trade_id}")
         ambiguous.update(ids)
         log.warning("Not importing %s(s) %s of %s (qty %.4g, %s): a manual Ghostfolio %s "
                     "within 2 days has another quantity — check for a duplicate by hand",
@@ -684,6 +750,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             others = sorted(sym for sym in positions["isin_symbols"].get((ghost_account_id, info["isin"]), ())
                             if abs(qty_by_symbol.get((ghost_account_id, sym), 0.0)) >= 0.001)
             if others:
+                record_action(outcome, "mapping_conflict", f"{source_account}:{info['isin']}")
                 rejected.add(ticker)
                 log.warning("Not importing sells for %s: Ghostfolio holds this ISIN under %s — "
                             "add mapping symbol_mapping: '%s: %s'",
@@ -700,6 +767,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             log.debug("Not importing %s: net new trades %.4g but Ghostfolio holds no position "
                       "(sold manually or never tracked)", label, info["pending"])
         else:
+            record_action(outcome, "trade_position", f"{source_account}:{ticker}")
             log.error("Not importing %s: Ghostfolio holds %.4g, net new trades %.4g would go "
                       "negative — fix the position in Ghostfolio manually",
                       label, held, info["pending"])
@@ -758,7 +826,8 @@ def _source_dividend_fee(div: DividendGroup) -> Decimal | None:
     return None if tax is None else max(Decimal(0), tax.copy_negate())
 
 
-def log_dividend_proximity_skip(symbol: str, div: DividendGroup, entry: DividendEntry) -> None:
+def log_dividend_proximity_skip(symbol: str, div: DividendGroup, entry: DividendEntry,
+                                outcome: RunOutcome | None = None) -> None:
     """Make a proximity skip visible: INFO when gross agrees, else one WARNING."""
     source_text, text, agree = _proximity_amounts(div, entry)
     fees = f"source fee {_source_dividend_fee(div)}, existing fee {entry[3]}"
@@ -767,6 +836,7 @@ def log_dividend_proximity_skip(symbol: str, div: DividendGroup, entry: Dividend
                  "the same payment (not imported); amounts agree (%s; %s)",
                  symbol, div["date"], entry[0], text, fees)
         return
+    record_action(outcome, "dividend_check", dividend_scope(div))
     log.warning("Dividend %s %s: Ghostfolio has a dividend of this symbol on %s, skipped as "
                 "the same payment (not imported), but gross differs: source %s, existing %s; %s. "
                 "Check IBKR; if the payment is distinct, add it by hand in Ghostfolio",

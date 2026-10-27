@@ -63,8 +63,9 @@ the container. The image sets no default.
 **Symptom if not done.** Nothing is imported, and the log shows
 `TZ is missing: whole run forced to DRY_RUN, no Ghostfolio writes` (or
 `TZ is not a valid IANA timezone: ...`). With `APPRISE_URLS` set, one notification names the reason,
-even when every account succeeds, if `DRY_RUN` is explicitly false. Successful
-default/blank/truthy simulations stay silent; failed simulations send Failure.
+even when every account succeeds, including default/blank/truthy simulation.
+Required user actions repeat in the same consolidated summary until resolved.
+Clean success sends no heartbeat; failed simulations send Failure.
 
 ## 2. Add the time zone to the Flex query times (breaking)
 

@@ -23,6 +23,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     _dividend_decimal,
     dividend_input_compatible,
 )
+from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 from ghostfolio_ibkr_sync.sync import (
     DIVIDEND_MATCH_DAYS,
     Positions,
@@ -928,7 +929,26 @@ def _plain_counts(counts: Mapping[str, int]) -> str:
     return ",".join(f"{name}:{count}" for name, count in sorted(counts.items())) or "none"
 
 
-def log_historical_dividend_comparison(findings: Sequence[Finding], account_id: str) -> dict[str, int]:
+
+# These are limits of the comparison, not a request for the user to invent
+# evidence or change financially valid rows to fit a representation.
+DIAGNOSTIC_LIMITATIONS = frozenset({
+    "component partition identity not proven", "incomplete or conflicting component coverage",
+    "original JSON numeric evidence unavailable", "unsupported decimal range", "unsupported currency",
+    "destination outside proven source coverage",
+    "destination UTC date outside explicit report window; source evidence unavailable",
+    "inactive destination outside proven source coverage",
+})
+
+
+def diagnostic_requires_action(finding: Finding) -> bool:
+    """Keep explicit comparison limits distinct from user-resolvable findings."""
+    return (finding["readable"]["class"] == "to_check"
+            and finding["reason"] not in DIAGNOSTIC_LIMITATIONS)
+
+
+def log_historical_dividend_comparison(findings: Sequence[Finding], account_id: str,
+                                      outcome: RunOutcome | None = None) -> dict[str, int]:
     """Report private diagnostic evidence without changing outcomes or persistence.
 
     Information blocks come first, then the summary line, then each item to check.
@@ -940,6 +960,8 @@ def log_historical_dividend_comparison(findings: Sequence[Finding], account_id: 
     unavailable: defaultdict[str, int] = defaultdict(int)
     to_check = []
     for finding in findings:
+        if finding["reason"] in DIAGNOSTIC_LIMITATIONS:
+            log.info("Evidence limitation: %s; no user correction is requested", finding["reason"])
         counts[finding["category"]] += 1
         classes[finding["readable"]["class"]] += 1
         for check in finding.get("identity_checks", []):
@@ -957,7 +979,13 @@ def log_historical_dividend_comparison(findings: Sequence[Finding], account_id: 
     log.info("[DRY RUN] Dividend report: %d to check, %d informational, %d noise",
              classes["to_check"], classes["information"], classes["noise"])
     for finding in to_check:
-        log.info("%s", format_historical_dividend_finding(finding, account_id))
+        log.warning("%s", format_historical_dividend_finding(finding, account_id))
+        if diagnostic_requires_action(finding):
+            key = f"{account_id}:{finding['source']}:{','.join(sorted(finding['activity_ids']))}"
+            record_action(outcome, "dividend_check", key)
+        else:
+            log.warning("Evidence limitation: %s; comparison cannot certify this representation; "
+                        "no user correction is requested", finding["reason"])
     log.info("[DRY RUN] Historical dividends account=%s coverage=%d source_groups=%d "
              "unmatched_destination=%d categories=%s failed_checks=%s unavailable_checks=%s",
              account_id, len(findings),

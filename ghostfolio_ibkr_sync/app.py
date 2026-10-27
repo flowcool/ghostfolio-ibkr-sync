@@ -25,9 +25,8 @@ from ghostfolio_ibkr_sync.activity_review import (
     source_events,
 )
 from ghostfolio_ibkr_sync.config import (
-    dry_run_requested,
     load_config,
-    load_notification_config,
+    load_notification_delivery,
     timezone_preview_reason,
 )
 from ghostfolio_ibkr_sync.diagnostics import (
@@ -71,9 +70,13 @@ from ghostfolio_ibkr_sync.notify import (
     send_notification,
 )
 from ghostfolio_ibkr_sync.outcome import (
+    AccountResult,
     RunOutcome,
+    action_summary,
     is_token_rejection,
+    log_operational_result,
     new_run_outcome,
+    record_action,
     record_failure,
 )
 from ghostfolio_ibkr_sync.sync import (
@@ -144,6 +147,11 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
     """
     log.info("Processing IBKR account %s (Ghostfolio: %s)", ibkr_account_id, ghost_account_name)
     ok = True
+    outcome = config.get("_corporate_outcome")
+    account_result: AccountResult = {"simulated": bool(config.get("dry_run")), "accepted": None,
+                                     "duplicates": None, "held": None, "deferred": None, "cash": "unavailable"}
+    if outcome is not None:
+        outcome["account_results"][f"{ibkr_account_id}:{query_id}"] = account_result
 
     # Fetch the Flex Query report
     try:
@@ -222,7 +230,8 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             existing_dividend_comments, positions, query_id=query_id,
             diagnostic_preview=bool(config.get("dry_run")),
             review_holds=config.get("_review_holds"),
-            corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id))
+            corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id),
+            outcome=outcome, account_result=account_result)
     except InvalidActivityIdentityError:
         return {}, False
     ok = ok and selection_ok
@@ -232,6 +241,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
 
     # Create buys/dividends first. A server-skipped BUY cannot back a later SELL,
     # even in this account's batch. Dry-run uses proposed buys for simulation.
+    account_result["accepted"] = 0
     phases = split_import_phases(activities)
     for phase in phases:
         if not phase:
@@ -248,6 +258,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
         if not phase:
             continue
         imported, import_ok = ghost_import_activities(config, phase)
+        account_result["accepted"] = (account_result["accepted"] or 0) + len(imported)
         # Only accepted rows (or proposals in isolated simulation state) advance
         # the run. DIVIDEND identities must never act as trade IDs or holdings.
         record_accepted_activities(imported, positions, existing_trade_ids,
@@ -259,12 +270,20 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
     try:
         cash_balance = parse_cash_report(xml_text)
         if cash_balance is not None:
-            if not ghost_update_cash_balance(config, ghost_account_id, cash_balance,
-                                         parse_base_currency(xml_text)):
+            config.setdefault("_cash_outcomes", {}).pop(ghost_account_id, None)
+            cash_ok = ghost_update_cash_balance(config, ghost_account_id, cash_balance,
+                                               parse_base_currency(xml_text))
+            account_result["cash"] = config.get("_cash_outcomes", {}).get(
+                ghost_account_id, ("simulated" if config.get("dry_run") else "request reported successful")
+                if cash_ok else "uncertain/failed")
+            if not cash_ok:
                 ok = False
         else:
+            account_result["cash"] = "not updated"
+            record_action(outcome, "cash_missing", f"{ibkr_account_id}:BASE_SUMMARY")
             log.warning("No BASE_SUMMARY cash balance found in report")
     except Exception as exc:
+        account_result["cash"] = config.get("_cash_outcomes", {}).get(ghost_account_id, "uncertain/failed")
         log.error("Failed to update cash balance: %s", exc)
         ok = False
 
@@ -280,21 +299,27 @@ def select_account_activities(
     holdings_trace: dict[str, Any] | None = None,
     review_holds: set[str] | None = None,
     corporate_decision: ca.Decision | None = None,
+    outcome: RunOutcome | None = None,
+    account_result: AccountResult | None = None,
 ) -> tuple[list[Activity], dict[str, DividendContext], Unmapped, bool]:
     """Select without fetching or dispatching; mutate only manual-match state.
 
     Offline callers supply a captured clock and isolated holdings state.
     """
     ok = True
+    if account_result is not None:
+        account_result["held"] = set()
+        account_result["deferred"] = set()
     review_holds = review_holds or set()
     date_is_current = date_is_current or activity_date_is_current
     # Parse trades and dividends
     trades: list[dict[str, Any]] = parse_trades(xml_text)
-    dividends = parse_cash_dividends(xml_text)
+    dividends = parse_cash_dividends(xml_text, outcome=outcome)
     if dividends is None:
         log.error("Flex Query %s has no Cash Transactions section: dividends not synced. "
                   "Add Cash Transactions (Dividends, Payment In Lieu Of Dividends, "
                   "Withholding Tax) to the query, see README", query_id)
+        record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:cash_section")
         ok = False
         dividends = []
     log.debug("Found %d trades and %d dividend payments in Flex Query report",
@@ -322,9 +347,15 @@ def select_account_activities(
 
     unique, skipped_dup, conflicts = unique_trades(trades)
     if conflicts:
+        for trade_id in conflicts:
+            record_action(outcome, "trade_invalid", f"{ibkr_account_id}:{trade_id}")
         log.error("Conflicting repeated trade IDs excluded: %s", ", ".join(sorted(conflicts)))
         ok = False
 
+    for trade in trades:
+        isin = trade.get("isin", "")
+        if isin and isin not in mapping and resolve_symbol(isin, trade.get("symbol"), mapping):
+            record_action(outcome, "mapping_unverified", f"{ibkr_account_id}:{isin}")
     for trade in unique:
         trade_id = trade.get("tradeID", "")
         if format_versioned_activity_identity(ibkr_account_id, "TRADE", trade_id) in review_holds:
@@ -349,11 +380,17 @@ def select_account_activities(
         trade_unmapped: Unmapped = {}
         activity = convert_trade_to_activity(trade, ghost_account_id, mapping, trade_unmapped)
         if activity is None or not date_is_current(activity) or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+            if activity is None or not all(isfinite(activity[field]) for field in ("quantity", "unitPrice", "fee")):
+                record_action(outcome, "trade_invalid", f"{ibkr_account_id}:{trade_id}")
+            if activity is not None and not date_is_current(activity) and account_result is not None and account_result["deferred"] is not None:
+                account_result["deferred"].add(f"{ibkr_account_id}:{trade_id}")
             log.error("Trade %s cannot be converted safely; excluded before holdings checks", trade_id)
             skipped_other += 1
             ok = False
             continue
         if corporate_decision is not None and ca.candidate_held(corporate_decision, activity):
+            if account_result is not None and account_result["held"] is not None:
+                account_result["held"].add(f"{ibkr_account_id}:{trade_id}")
             log.warning("Corporate-action BUY/SELL candidate held for %s", activity["symbol"])
             ok = False
             continue
@@ -364,7 +401,7 @@ def select_account_activities(
                                 "_activity": activity, "_unmapped": trade_unmapped})
 
     trades = filter_trades_by_holdings(prepared_trades, positions, ghost_account_id, mapping,
-                                      existing_trade_ids, source_account=ibkr_account_id)
+                                      existing_trade_ids, source_account=ibkr_account_id, outcome=outcome)
     activities: list[Activity] = []
     for kept in trades:
         activities.append(kept["_activity"])
@@ -379,12 +416,14 @@ def select_account_activities(
         findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
                                                  historical_dividend_report_window(xml_text),
                                                  existing_dividend_comments)
-        report_counts = log_historical_dividend_comparison(findings, ghost_account_id)
+        report_counts = log_historical_dividend_comparison(findings, ghost_account_id, outcome=outcome)
     div_activities: list[Activity] = []
     proposed_dividend_context: dict[str, DividendContext] = {}
     div_skipped_dup = 0
     candidates = []
     for div in dividends:
+        if div["amount"] > 0 and div.get("isin") and div["isin"] not in mapping:
+            record_action(outcome, "mapping_unverified", f"{ibkr_account_id}:{div['isin']}")
         if any(format_versioned_activity_identity(ibkr_account_id, "DIVIDEND", row.get("actionID", ""))
                in review_holds for row in div["payments"]):
             continue
@@ -392,12 +431,13 @@ def select_account_activities(
             div, ghost_account_id, mapping, positions, existing_dividend_comments)
         if dedup == "not_payable":
             # Preserve existing diagnostics for reversals and tax-only rows.
-            convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped)
+            convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped, outcome=outcome)
             continue
         if dedup == "existing":
             div_skipped_dup += 1
             continue
         if dedup == "partial":
+            record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:{div['isin']}:{div['date']}")
             log.error("Dividend %s %s: partial versioned action coverage — not imported; "
                       "account failed; automatic reruns will refuse while this group stays "
                       "in the report window; explicit reviewed recovery required",
@@ -405,13 +445,14 @@ def select_account_activities(
             ok = False
             continue
         if dedup == "action_conflict":
+            record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:{div['isin']}:{div['date']}")
             log.error("Dividend %s %s: versioned action-context conflict or unknown overlap — "
                       "not imported; account failed; manual review required",
                       symbol or div.get("symbol") or "unknown", div["date"])
             ok = False
             continue
         if dedup == "proximity":
-            log_dividend_proximity_skip(cast(str, symbol), div, cast(DividendEntry, matched))
+            log_dividend_proximity_skip(cast(str, symbol), div, cast(DividendEntry, matched), outcome=outcome)
             div_skipped_dup += 1
             continue
         candidates.append(div)
@@ -433,11 +474,13 @@ def select_account_activities(
     if dividend_input_compatible(candidates):
         for div in candidates:
             proposed, partition_ok = convert_dividend_actions(
-                div, ghost_account_id, mapping, unmapped, dividends)
+                div, ghost_account_id, mapping, unmapped, dividends, outcome=outcome)
             if not partition_ok:
                 ok = False
                 continue
             if any(not date_is_current(activity) for activity in proposed):
+                if account_result is not None and account_result["deferred"] is not None:
+                    account_result["deferred"].update(activity["comment"] for activity in proposed)
                 log.error("Future or invalid dividend date; deferred until a later run")
                 ok = False
                 continue
@@ -445,6 +488,10 @@ def select_account_activities(
             for activity in proposed:
                 proposed_dividend_context[activity["comment"]] = dividend_context(
                     {**activity, "isin": div["isin"]}, activity["date"])
+
+    else:
+        for div in candidates:
+            record_action(outcome, "dividend_rejected", f"{ibkr_account_id}:{div['isin']}:{div['date']}")
 
     if report_counts is None:
         log.info("New dividend activities: %d, duplicates skipped: %d",
@@ -455,6 +502,8 @@ def select_account_activities(
                  len(div_activities), div_skipped_dup, report_counts["to_check"],
                  report_counts["informational"], report_counts["noise"])
 
+    if account_result is not None:
+        account_result["duplicates"] = skipped_dup + div_skipped_dup
     activities.extend(div_activities)
     if holdings_trace is not None:
         holdings_trace.update({
@@ -491,59 +540,85 @@ def record_accepted_activities(
             existing_dividend_comments.add((activity["accountId"], comment))
 
 
+
+def report_delivery(outcome: RunOutcome, status: str) -> None:
+    """Log one fixed transport result; never retry or change financial status."""
+    outcome["delivery"] = status
+    warning = status not in ("sent", "not required")
+    log.log(logging.WARNING if warning else logging.INFO, "Notification result: %s%s", status,
+            "; inspect APPRISE_URLS/APPRISE_TIMEOUT and the local log" if warning else "")
+
+
 def finalize_run(outcome: RunOutcome, code: int) -> None:
+    """Finalize a completed run; interruptions propagate without a cycle result."""
+    _finalize_notification(outcome, code)
+    log_operational_result(outcome, code)
+
+
+def _finalize_notification(outcome: RunOutcome, code: int) -> None:
     """Send at most one notification for failures or a legacy-token reminder.
 
-    Ordinary warnings and successful simulations remain silent. Failures
+    Clean successful simulations remain silent. Failures
     notify in every mode, including invalid configuration. Delivery never changes
     the exit code. A reminder on a failed run joins its failure notification.
     """
+    actions = action_summary(outcome)
     days = outcome.get("token_expiry_days")
     preview = outcome.get("forced_preview")
     corporate = outcome.get("corporate_notification")
     corporate_due = corporate is not None and bool(corporate["sent"])
     maintenance_due = outcome.get("corporate_maintenance", False)
-    if code == 0 and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
+    if code == 0 and not actions and not corporate_due and not maintenance_due and days is None and not preview:
+        report_delivery(outcome, "not required")
         return
     label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
-                                   ("Forced preview" if preview else "Token expiry"))
+                                   ("Forced preview" if preview else
+                                    "Token expiry" if days is not None else "User action"))
     try:
-        settings = load_notification_config()
+        settings, configuration = load_notification_delivery()
         if settings is None:
+            report_delivery(outcome, configuration)
             return
         if code:
             title, body = NOTIFY_TITLE, build_failure_summary(outcome)
         elif corporate_due or maintenance_due:
             title, body = "ghostfolio-ibkr-sync: corporate actions", "Corporate-action evidence summary."
-            if not dry_run_requested():
-                if preview:
-                    body += "\n" + build_forced_preview_summary(preview)
-                if days is not None:
-                    body += "\n" + build_token_expiry_summary(days)
+            if preview:
+                body += "\n" + build_forced_preview_summary(preview)
+            if days is not None:
+                body += "\n" + build_token_expiry_summary(days)
         elif preview:
             title, body = FORCED_PREVIEW_NOTIFY_TITLE, build_forced_preview_summary(preview)
             if days is not None:
                 body += "\n" + build_token_expiry_summary(days)
+        elif days is not None:
+            title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(days)
         else:
-            title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(cast(int, days))
+            title, body = "ghostfolio-ibkr-sync: user action required", "User action required."
         if corporate_due and corporate is not None:
             body += "\n" + "\n".join(f"- corporate_actions: {key} ({value})"
                                        for key, value in corporate["counts"].items()
                                        if key in ("active_holds", "changed_findings", "resumptions") and type(value) is int)
         if maintenance_due:
             body += "\n- corporate_actions: maintenance_incomplete (1)"
+        if actions:
+            body += "\n" + actions
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
+        report_delivery(outcome, "failed")
         return
+    delivery = {"sent": "sent", "timeout": "timeout, delivery unconfirmed",
+                "invalid_destination": "invalid configuration"}.get(status, "failed")
+    report_delivery(outcome, delivery)
     if status == "sent":
         if corporate_due and corporate is not None:
-            ca.confirm_notification(cast(ca.NotificationPlan, corporate))
+            ca.confirm_notification(corporate)
         log.info("%s notification sent", label)
     elif status == "timeout":
         log.warning("%s notification timed out (it may still arrive; not retried)", label)
     else:
-        log.warning("%s notification not delivered: %s", label, status)
+        log.warning("%s notification not delivered: %s", label, delivery)
 
 
 def run_sync(outcome: RunOutcome) -> int:
@@ -554,6 +629,8 @@ def run_sync(outcome: RunOutcome) -> int:
         log.error("Configuration error: %s", exc)
         record_failure(outcome, "config", "invalid_configuration")
         return 1
+    outcome["review_held"] = set()
+    outcome["deferred"] = set()
     state: ReviewState | None = None
     try:
         if config.get("activity_review_file"):
@@ -645,6 +722,7 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     if reason:
         config["dry_run"] = True
         outcome["forced_preview"] = reason
+        record_action(outcome, "timezone_correction", "TZ")
         log.warning("%s: whole run forced to DRY_RUN, no Ghostfolio writes", reason)
     if config["dry_run"]:
         log.info("DRY RUN enabled (DRY_RUN) — no writes will be sent to Ghostfolio")
@@ -659,6 +737,7 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     days = legacy_token_expiry_days(config)
     if days is not None:
         outcome["token_expiry_days"] = days
+        record_action(outcome, "token_renewal", "GHOST_TOKEN")
         if days:
             log.warning("Legacy GHOST_TOKEN expires in %d day(s); regenerate it or "
                         "switch to GHOST_ACCESS_TOKEN", days)
@@ -785,7 +864,6 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
                   len(failed_accounts), len(account_ids), ", ".join(failed_accounts))
         return 1
 
-    log.info("Sync complete")
     return 0
 
 
@@ -795,7 +873,8 @@ def main() -> int:
     SystemExit and KeyboardInterrupt propagate untouched: an interrupted run is
     not a completed run and sends no notification.
     """
-    log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
+    log.info("Starting IBKR to Ghostfolio sync")
+    log.info("ghostfolio-ibkr-sync build %s", os.environ.get("APP_VERSION", "dev"))
     if not os.environ.get("DRY_RUN", "").strip():
         log.warning("DRY_RUN not set: simulation, nothing written")
     outcome = new_run_outcome()
@@ -917,7 +996,14 @@ def refresh_corporate_decisions(config: dict[str, Any], mapping: dict[str, str],
     config["_corporate_decisions"] = decisions
     outcome = config.get("_corporate_outcome")
     if outcome is not None:
+        if any(decision["account_held"] or decision["symbols"] for decision in decisions.values()):
+            log.warning("Corporate-action holds require current source/destination proof; "
+                        "CORPORATE_ACTION_STATE_FILE container path=%s; "
+                        "CORPORATE_ACTION_EVIDENCE_FILE container path=%s; "
+                        "restore the named evidence; do not reset state to release a hold",
+                        config.get("corporate_action_state_file") or "unavailable",
+                        config.get("corporate_action_evidence_file") or "not configured")
         if store is not None and store["maintenance_warning"]:
             outcome["corporate_maintenance"] = True
-        ca.prepare_notifications(outcome, config.get("corporate_action_state_file")
+        ca.prepare_notifications(cast(RunOutcome, outcome), config.get("corporate_action_state_file")
                                  if notification_state_safe else None, decisions)

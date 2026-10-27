@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "ghostfolio-ibkr-sync version ${APP_VERSION:-dev}"
+echo "ghostfolio-ibkr-sync build ${APP_VERSION:-dev}"
 
 if [ -n "$CRON" ]; then
     # Five numeric cron fields only; never interpolate an environment command.
@@ -22,7 +22,7 @@ if [ -n "$CRON" ]; then
         exit 1
     fi
     echo 'Running with validated cron schedule'
-    exec supercronic "$crontab_path"
+    exec supercronic -passthrough-logs -split-logs "$crontab_path"
 else
     echo "Running once (no CRON schedule set)"
     exec python -m ghostfolio_ibkr_sync

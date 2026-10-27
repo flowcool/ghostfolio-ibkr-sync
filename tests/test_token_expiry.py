@@ -151,13 +151,14 @@ def test_reminder_delivery_problem_does_not_fail_sync_or_leak(env, caplog, statu
 
 
 @pytest.mark.parametrize("mode", [None, "", "  ", "1", "true", "yes", "on"])
-def test_dry_run_modes_expiry_only_warns_without_notification(env, caplog, mode):
+def test_operator_action_prerequisite_dry_run_modes_expiry_notifies(env, caplog, mode):
     if mode is None:
         env.delenv("DRY_RUN")
     else:
         env.setenv("DRY_RUN", mode)
     sent = notifications(env)
-    assert app.main() == 0 and sent == []
+    assert app.main() == 0 and len(sent) == 1
+    assert "token_renewal (1)" in sent[0][1]
     assert "expires in 3 day(s)" in caplog.text
 
 

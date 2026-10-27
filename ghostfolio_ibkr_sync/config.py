@@ -175,7 +175,7 @@ def load_config() -> ConfigDict:
     }
 
 
-def load_notifications() -> NotificationSettings | None:
+def notification_configuration() -> tuple[NotificationSettings | None, str]:
     """Parse APPRISE_URLS and APPRISE_TIMEOUT; None means notifications are off.
 
     APPRISE_URLS is a JSON list of Apprise URL strings (blank or [] = off);
@@ -185,7 +185,7 @@ def load_notifications() -> NotificationSettings | None:
     """
     raw = os.environ.get("APPRISE_URLS", "")
     if not raw.strip():
-        return None
+        return None, "disabled"
     try:
         urls = json.loads(raw) if len(raw) <= NOTIFY_PAYLOAD_MAX else None
     except ValueError:
@@ -199,10 +199,23 @@ def load_notifications() -> NotificationSettings | None:
                        for u in urls)
             or not 1 <= timeout <= APPRISE_TIMEOUT_MAX):
         log.warning("APPRISE_URLS or APPRISE_TIMEOUT is invalid: failure notifications disabled")
-        return None
+        return None, "invalid configuration"
     if not urls:
-        return None
-    return NotificationSettings(urls=tuple(urls), timeout=timeout)
+        return None, "disabled"
+    return NotificationSettings(urls=tuple(urls), timeout=timeout), "configured"
+
+
+
+def load_notifications() -> NotificationSettings | None:
+    """Return validated settings; invalid and disabled settings both disable send."""
+    return notification_configuration()[0]
+
+
+def load_notification_delivery() -> tuple[NotificationConfigDict | None, str]:
+    """Expose validation state without disclosing destination values."""
+    settings, status = notification_configuration()
+    return ({"urls": list(settings.urls), "timeout": settings.timeout}
+            if settings is not None else None), status
 
 
 def load_notification_config() -> NotificationConfigDict | None:

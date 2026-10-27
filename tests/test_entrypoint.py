@@ -34,6 +34,8 @@ def run_entrypoint(tmp_path):
         '    fi\n'
         'else\n'
         '    echo run >> "$CALLS"\n'
+        '    printf "%s\\n" "$*" >> "$RUNTIME_DIR/scheduler-args"\n'
+        '    shift 2\n'
         '    umask > "$RUNTIME_DIR/runtime-umask"\n'
         '    cat "$1"\n'
         'fi\n'
@@ -88,7 +90,7 @@ def test_invalid_cron_is_rejected_without_echoing_input(run_entrypoint, cron):
     result, crontab, calls = run_entrypoint(cron)
     assert result.returncode == 1
     assert result.stderr == 'Invalid CRON: expected five numeric schedule fields\n'
-    assert result.stdout == 'ghostfolio-ibkr-sync version test\n'
+    assert result.stdout == 'ghostfolio-ibkr-sync build test\n'
     assert not crontab.exists()
     assert not calls.exists()
 
@@ -97,7 +99,7 @@ def test_supercronic_validation_failure_prevents_start(run_entrypoint):
     result, crontab, calls = run_entrypoint('99 99 * * *', validation_status=1)
     assert result.returncode == 1
     assert result.stderr == 'Invalid CRON: schedule validation failed\n'
-    assert result.stdout == 'ghostfolio-ibkr-sync version test\n'
+    assert result.stdout == 'ghostfolio-ibkr-sync build test\n'
     assert calls.read_text().splitlines() == ['test']
 
 
@@ -136,3 +138,10 @@ def test_no_cron_preserves_one_off_run(run_entrypoint, cron):
     assert result.returncode == 0
     assert calls.read_text() == 'python -m ghostfolio_ibkr_sync\n'
     assert not crontab.exists()
+
+
+def test_operator_action_logging_scheduler_flags_and_build(run_entrypoint):
+    result, crontab, calls = run_entrypoint('* * * * *')
+    assert result.returncode == 0
+    assert 'ghostfolio-ibkr-sync build test' in result.stdout
+    assert '-passthrough-logs -split-logs' in (calls.parent / 'scheduler-args').read_text()

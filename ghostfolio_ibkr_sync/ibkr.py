@@ -19,6 +19,8 @@ from urllib.parse import quote, quote_plus
 
 import requests
 
+from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
+
 log = logging.getLogger(__name__)
 
 IBKR_SEND_URL = (
@@ -340,7 +342,7 @@ def _dividend_cash_sum(rows: Iterable[Mapping[str, str]]) -> Decimal | None:
             return None
 
 
-def parse_cash_dividends(xml_text: str) -> list[DividendGroup] | None:
+def parse_cash_dividends(xml_text: str, outcome: RunOutcome | None = None) -> list[DividendGroup] | None:
     """Parse dividend payments from the Cash Transactions section.
 
     Structure: FlexQueryResponse > FlexStatements > FlexStatement > CashTransactions > CashTransaction
@@ -370,6 +372,8 @@ def parse_cash_dividends(xml_text: str) -> list[DividendGroup] | None:
         amount = _parse_float(row.get("amount"))
         date_iso = parse_ibkr_datetime(row.get("dateTime", ""))
         if amount is None or not date_iso:
+            record_action(outcome, "dividend_rejected",
+                          f"{row.get('accountId')}:{row.get('actionID')}:{row.get('dateTime')}")
             log.warning("Skipping cash transaction %s for %s: invalid amount or date",
                         tx_type, row.get("symbol", ""))
             continue

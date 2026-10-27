@@ -358,7 +358,9 @@ def test_access_mode_dry_run_modes_login_reads_preview_and_failure(env, mode, fa
         assert writes[1][2]["platformId"] == "synthetic-platform"
     else:
         assert writes == []
-    assert len(sent) == int(failed)
+    assert len(sent) == 1
     if failed:
         assert sent[0][0] == notify.NOTIFY_TITLE
+    else:
+        assert "dividend_rejected" in sent[0][1]
     assert reads and all(auth == "Bearer fresh-bearer" for _, auth in reads)

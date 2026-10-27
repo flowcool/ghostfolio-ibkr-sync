@@ -843,7 +843,7 @@ class HttpResp:
             raise requests.HTTPError(f"{self.status_code} for url: https://x/?t=SECRET-TOK")
 
 
-def test_ibkr_get_retries_network_errors_then_succeeds(monkeypatch):
+def test_operator_action_inventory_retry_recovers_without_user_action(monkeypatch):
     attempts, sleeps = [], []
     def get(url, params, timeout, **kwargs):
         attempts.append(1)
@@ -1400,7 +1400,8 @@ def test_historical_diagnostic_coherent_import_warnings_only_for_candidates(monk
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(app, "ghost_update_cash_balance", lambda *a: True)  # cash guard has its own tests
     assert app.process_account({**CFG, "dry_run": True}, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, ids, comments, pos) == ({}, True)
-    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING
+                and record.name != "ghostfolio_ibkr_sync.diagnostics"]
     assert len(warnings) == (0 if existing else 1)
     assert "Historical dividends" in caplog.text
     if existing:
@@ -2002,3 +2003,73 @@ def test_v2_source_qualification_retained_identity_is_not_financial_reconciliati
     assert world.run(pos=world.pos)[1] is True
     assert world.activities == []  # Exact stored identities remain trusted.
     # This limit cannot certify that an unobserved vendor revision is safe.
+
+
+@pytest.mark.parametrize("existing", [set(), {"T1"}])
+def test_operator_action_inventory_mapping_trade_survives_dedup(existing):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    for source in ("U1", "U2"):
+        xml = report(trade_xml("T1")).replace('accountId="U1"', f'accountId="{source}"')
+        for _ in range(2):
+            activities, _, _, ok = app.select_account_activities(
+                xml, source, ACC, {}, set(existing), set(), positions(), outcome=out)
+            assert ok
+            assert len(activities) == int(not existing)
+    assert len(out["actions"]["mapping_unverified"]) == 2
+    resolved = new_run_outcome()
+    app.select_account_activities(report(trade_xml("T1")), "U1", ACC, {ISIN_KO: "KO"},
+                                  {"T1"}, set(), positions(), outcome=resolved)
+    assert resolved["actions"] == {}
+
+
+def test_operator_action_inventory_trade_invalid_and_normal_exclusions():
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    activities, _, _, ok = app.select_account_activities(
+        report(trade_xml("T1").replace('tradePrice="60"', 'tradePrice="bad"')),
+        "U1", ACC, {ISIN_KO: "KO"}, set(), set(), positions(), outcome=out)
+    assert not ok and not activities
+    assert out["actions"]["trade_invalid"] == {"U1:T1"}
+
+
+@pytest.mark.parametrize("mode", ["missing", "empty", "conflict", "short"])
+def test_operator_action_inventory_dividend_selection_unchanged(mode):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    xml = structured_input_xml(mode)
+    out = new_run_outcome()
+    args = (xml, "U1", ACC, {ISIN_KO: "KO", ISIN_PEP: "PEP"}, set(), set())
+    baseline = app.select_account_activities(*args, positions())
+    reported = app.select_account_activities(*args, positions(), outcome=out)
+    assert reported == baseline
+    assert out["actions"]["dividend_rejected"]
+
+
+@pytest.mark.parametrize("dry,cash_ok,missing,expected", [(False, True, False, "request reported successful"),
+    (True, True, False, "simulated"), (False, False, False, "uncertain/failed"),
+    (False, True, True, "not updated")])
+def test_operator_action_result_independent_cash(monkeypatch, caplog, dry, cash_ok, missing, expected):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    caplog.set_level(logging.INFO)
+    xml = report(trade_xml("T1"))
+    if missing:
+        xml = xml.replace('currency="BASE_SUMMARY"', 'currency="USD"')
+    w = World(monkeypatch, xml, cash_ok=cash_ok)
+    out = new_run_outcome()
+    cfg = {**CFG, "dry_run": dry, "_corporate_outcome": out}
+    _, ok = app.process_account(cfg, "U1", "q1", "IBKR", {ISIN_KO: "KO"}, set(), set(), positions())
+    app.finalize_run(out, int(not ok))
+    assert expected in caplog.text
+    assert ("simulated proposals=1" if dry else "accepted imports=1") in caplog.text
+    assert "independent balance readback" not in caplog.text
+    assert len(w.cash_calls) == int(not missing)
+
+
+def test_operator_action_result_early_failure_has_no_invented_zeros(monkeypatch, caplog):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    caplog.set_level(logging.INFO)
+    out = new_run_outcome()
+    app.finalize_run(out, 1)
+    assert "Cycle result: failure" in caplog.text
+    assert "imports=unavailable" in caplog.text and "cash=unavailable" in caplog.text
+    assert "notification=disabled" in caplog.text

@@ -112,6 +112,58 @@ echo "$scheduled_logs"
 grep -q 'Starting IBKR to Ghostfolio sync' <<< "$scheduled_logs"
 grep -q 'python -m ghostfolio_ibkr_sync' <<< "$scheduled_logs"
 
+# Keep actual scheduled application streams separate. Supercronic lifecycle
+# records can share a stream, but must not wrap application timestamp/level.
+docker logs "$scheduled_id" > "$mapping_dir/scheduled.stdout" 2> "$mapping_dir/scheduled.stderr"
+python3 - "$mapping_dir/scheduled.stdout" "$mapping_dir/scheduled.stderr" <<'PY_STREAMS'
+import re
+import sys
+from pathlib import Path
+stdout, stderr = [Path(name).read_text() for name in sys.argv[1:]]
+pattern = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\] ")
+assert stdout.count("Starting IBKR to Ghostfolio sync") == 1, stdout
+assert "Starting IBKR to Ghostfolio sync" not in stderr
+assert "Missing required environment variables: IBKR_TOKEN" in stderr
+assert "Missing required environment variables: IBKR_TOKEN" not in stdout
+for stream, allowed in ((stdout, {"DEBUG", "INFO"}), (stderr, {"WARNING", "ERROR", "CRITICAL"})):
+    for line in stream.splitlines():
+        if match := pattern.match(line):
+            assert match[1] in allowed, line
+        assert not ("channel=" in line and re.search(r"\[(DEBUG|INFO|WARNING|ERROR)\]", line)), line
+print("Scheduled application streams and native framing passed")
+PY_STREAMS
+
+# Exercise the installed CLI with synthetic work at every level. No network,
+# credentials, financial action or alternate logging implementation is used.
+docker run --rm "${real_options[@]}" --entrypoint python "$image" -c '
+import logging
+from ghostfolio_ibkr_sync import __main__ as cli
+from ghostfolio_ibkr_sync.ibkr import log_lab_evidence
+import os
+os.environ["LOG_LEVEL"] = "DEBUG"
+def synthetic():
+    for level in (10, 20, 30, 40, 50):
+        logging.getLogger("probe").log(level, "STREAM_PROBE_%s", logging.getLevelName(level))
+    log_lab_evidence("window", {"escaped": "one\ntwo"})
+    return 0
+cli.main = synthetic
+raise SystemExit(cli.run())
+' > "$mapping_dir/direct.stdout" 2> "$mapping_dir/direct.stderr"
+python3 - "$mapping_dir/direct.stdout" "$mapping_dir/direct.stderr" <<'PY_DIRECT'
+import json
+import sys
+from pathlib import Path
+stdout, stderr = [Path(name).read_text() for name in sys.argv[1:]]
+for name in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+    selected, other = (stdout, stderr) if name in ("DEBUG", "INFO") else (stderr, stdout)
+    assert selected.count("STREAM_PROBE_" + name) == 1
+    assert "STREAM_PROBE_" + name not in other
+lines = [line for line in stdout.splitlines() if "LAB_EVIDENCE " in line]
+assert len(lines) == 1 and "[DEBUG] LAB_EVIDENCE " in lines[0]
+assert json.loads(lines[0].split("LAB_EVIDENCE ", 1)[1]) == {"kind": "window", "value": {"escaped": "one\ntwo"}}
+print("Installed CLI levels and LAB_EVIDENCE streams passed")
+PY_DIRECT
+
 # Notification worker with its production argv, from a directory that holds no
 # source: -I leaves the current directory and PYTHON* variables out of module
 # lookup, so only the installed package can answer. Malformed stdin must exit 10

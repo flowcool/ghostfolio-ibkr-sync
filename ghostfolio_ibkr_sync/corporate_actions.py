@@ -31,6 +31,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     IBKR_MAX_XML_BYTES,
     parse_ibkr_datetime,
 )
+from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 
 log = logging.getLogger(__name__)
 
@@ -1575,8 +1576,18 @@ def plan_notifications(
 
 
 def prepare_notifications(
-    outcome: dict[str, Any], filename: str | None, decisions: dict[str, Decision]
+    outcome: RunOutcome, filename: str | None, decisions: dict[str, Decision]
 ) -> None:
+    for source, decision in decisions.items():
+        if decision["account_held"]:
+            record_action(outcome, "corporate_action", f"{source}:account_hold")
+        for event_key, event in decision["findings"].items():
+            if event["held"] or event["conclusions"].get("history") == "bounded_cost_dates_differ":
+                record_action(outcome, "corporate_action", f"{source}:{event_key}")
+                log.warning("Corporate-action user action: source=%s event=%s; reasons=%s; "
+                            "conclusions=%s; state container path=%s; inspect source/destination proof; "
+                            "acknowledgment and state reset do not release holds", source, event_key,
+                            event["reasons"], event["conclusions"], filename or "unavailable")
     plan = plan_notifications(filename, decisions)
     if plan["sent"]:
         outcome["corporate_notification"] = plan
