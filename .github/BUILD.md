@@ -104,3 +104,17 @@ add offline regression fixtures where needed. The watcher never probes a
 running deployment or changes a deployed version. Disable
 `upstream-release-watch.yml` in Actions
 and revert its merge to roll back; existing notices can be closed.
+
+### Automatic image identity
+
+Release preflight derives the target software version `X.Y.Z` from the exact
+validated stable or RC tag and obtains the full source commit from Git.
+It supplies `APP_VERSION` and `APP_REVISION` to both native build calls.
+OCI version and revision labels use these same values. The isolated runtime gate
+verifies the configuration and startup text before publication; published native
+configuration digests must still match those checked locally.
+
+Candidate registry tags and cosign identities retain `X.Y.Z-rc.N` and the full RC
+release tag respectively. The target software version does not claim stable status.
+Startup reports `ghostfolio-ibkr-sync version X.Y.Z — commit <12-character SHA>`.
+Local builds without release metadata report `dev` and `unknown`.

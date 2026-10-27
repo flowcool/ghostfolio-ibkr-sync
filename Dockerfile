@@ -34,9 +34,10 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.txt \
     && rm -rf /build \
     && pip uninstall -y pip
 
-# Set by CI from `git describe --tags --always`; logged at start
+# Derived by release preflight from the exact tag and source commit.
 ARG APP_VERSION=dev
-ENV APP_VERSION=${APP_VERSION}
+ARG APP_REVISION=unknown
+ENV APP_VERSION=${APP_VERSION} APP_REVISION=${APP_REVISION}
 
 COPY entrypoint.sh .
 RUN chmod 0555 /app /app/entrypoint.sh \

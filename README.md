@@ -93,6 +93,11 @@ The committed [`compose.yaml`](compose.yaml) and [`.env.example`](.env.example) 
 
 Stable images are published at `ghcr.io/flowcool/ghostfolio-ibkr-sync:latest`. Use a full `:X.Y.Z` tag for a controlled upgrade, or record and pin the matching `@sha256:...` manifest digest. The `:latest` tag follows only the current stable release. A `vX.Y.Z-rc.N` image is a separate prerelease track and never moves `:latest`.
 
+New release images report `ghostfolio-ibkr-sync version X.Y.Z — commit <12-character SHA>` at startup.
+The build sets this identity automatically. The target software version also
+appears in an RC; the registry tag identifies its publication channel.
+Stable promotion preserves the qualified image digest and its embedded identity.
+
 Before an upgrade, record the digest of the image that is actually running. A tag alone can move. Runtime rollback restores the selected image with its existing environment and mounts; it does not undo financial writes. See the [release and rollback procedure](docs/releasing.md).
 
 ## Safety first

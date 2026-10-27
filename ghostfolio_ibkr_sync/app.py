@@ -874,7 +874,9 @@ def main() -> int:
     not a completed run and sends no notification.
     """
     log.info("Starting IBKR to Ghostfolio sync")
-    log.info("ghostfolio-ibkr-sync build %s", os.environ.get("APP_VERSION", "dev"))
+    revision = os.environ.get("APP_REVISION", "")
+    commit = revision[:12] if len(revision) == 40 and all(c in "0123456789abcdef" for c in revision) else "unknown"
+    log.info("ghostfolio-ibkr-sync version %s — commit %s", os.environ.get("APP_VERSION") or "dev", commit)
     if not os.environ.get("DRY_RUN", "").strip():
         log.warning("DRY_RUN not set: simulation, nothing written")
     outcome = new_run_outcome()

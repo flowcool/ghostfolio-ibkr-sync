@@ -140,8 +140,22 @@ Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
 
 For stable publication with an RC, the workflow copies the highest RC index.
 Stable and latest must have the same digest as that qualified RC. It does not
-rebuild either architecture. `APP_VERSION` and OCI version labels retain the RC
-tag. Changing those values would change the accepted image bytes.
+rebuild either architecture. The build derives the target software version
+`X.Y.Z` from the validated tag. `APP_VERSION` and the OCI version label contain
+that target software version. `APP_REVISION` and the OCI revision label contain
+the full source commit. Startup reports
+`ghostfolio-ibkr-sync version X.Y.Z — commit <12-character SHA>`.
+These values are automatic and do not change on promotion. An RC reports its
+target software version before stable publication. Candidate registry tags and
+cosign certificate identities retain the full RC identity.
+
+Older qualified images retain their original exact RC `APP_VERSION` and OCI
+version label, and their old startup text. The shared promotion/recovery verifier
+accepts that original form only without `APP_REVISION`. It rejects mixed metadata
+or conflicting runtime/OCI versions and commits, including disagreement between
+architectures. Both forms still require the same qualification, signature,
+source and exact-digest checks. Changing image metadata would change its bytes;
+never rebuild or overwrite an already qualified candidate to change its display.
 
 Before publishing stable, a maintainer reviews both lab result files and attaches
 one `lab-qualification.json` asset to the RC prerelease. This record attests the
@@ -222,7 +236,7 @@ not rebuild or deploy. The exact accepted digest keeps its existing lab proof.
 2. Record the current latest digest as the expected rollback target. Prepare one
    non-prerelease draft named `vX.Y.Z`, with `--target` set to the exact highest
    RC commit. Include the complete stable changelog, accepted digest, retained
-   RC APP_VERSION and qualification limits. Do not create the stable tag yet.
+   embedded APP_VERSION, APP_REVISION (when present) and qualification limits. Do not create the stable tag yet.
 3. Dispatch the reviewed executor on main:
 
    ```bash

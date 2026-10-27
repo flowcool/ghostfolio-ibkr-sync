@@ -7,6 +7,26 @@ import sys
 import pytest
 
 
+@pytest.mark.parametrize('version,revision,expected', [
+    ('3.3.1', 'abcdef012345' + 'a' * 28, '3.3.1 — commit abcdef012345'),
+    ('', '', 'dev — commit unknown'),
+    ('dev', 'a' * 39 + '\n', 'dev — commit unknown'),
+])
+def test_release_identity_application_startup(version, revision, expected):
+    # Run actual CLI logging and app.main; replace only financial work/finalization.
+    code = """
+from ghostfolio_ibkr_sync import __main__ as cli, app
+app.run_sync = lambda outcome: 0
+app.finalize_run = lambda outcome, code: None
+raise SystemExit(cli.run())
+"""
+    env = {'PATH': os.environ['PATH'], 'APP_VERSION': version, 'APP_REVISION': revision, 'DRY_RUN': 'true'}
+    result = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert '[INFO] ghostfolio-ibkr-sync version ' + expected in result.stdout
+    assert not result.stderr
+
+
 @pytest.mark.parametrize("level", ["DEBUG", "INFO", "WARNING"])
 def test_operator_action_logging_streams_and_evidence(level):
     code = """

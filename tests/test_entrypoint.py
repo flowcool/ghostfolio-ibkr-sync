@@ -45,17 +45,19 @@ def run_entrypoint(tmp_path):
     python.write_text('#!/bin/bash\nprintf "python %s\\n" "$*" >> "$CALLS"\n')
     python.chmod(0o755)
 
-    def run(cron=None, validation_status=0, mktemp_status=0):
+    def run(cron=None, validation_status=0, mktemp_status=0, version="test", revision=None):
         # Do not inherit developer credentials, notifications or scheduler settings.
         env = {
             'PATH': f'{tmp_path}:/usr/bin:/bin',
-            'APP_VERSION': 'test',
+            'APP_VERSION': version,
             'CALLS': str(calls),
             'VALIDATION_STATUS': str(validation_status),
             'MKTEMP_STATUS': str(mktemp_status),
             'RUNTIME_DIR': str(tmp_path),
             'CRONTAB_PATHS': str(created_paths),
         }
+        if revision is not None:
+            env['APP_REVISION'] = revision
         if cron is not None:
             env['CRON'] = cron
         result = subprocess.run(
@@ -90,7 +92,7 @@ def test_invalid_cron_is_rejected_without_echoing_input(run_entrypoint, cron):
     result, crontab, calls = run_entrypoint(cron)
     assert result.returncode == 1
     assert result.stderr == 'Invalid CRON: expected five numeric schedule fields\n'
-    assert result.stdout == 'ghostfolio-ibkr-sync build test\n'
+    assert result.stdout == 'ghostfolio-ibkr-sync version test — commit unknown\n'
     assert not crontab.exists()
     assert not calls.exists()
 
@@ -99,7 +101,7 @@ def test_supercronic_validation_failure_prevents_start(run_entrypoint):
     result, crontab, calls = run_entrypoint('99 99 * * *', validation_status=1)
     assert result.returncode == 1
     assert result.stderr == 'Invalid CRON: schedule validation failed\n'
-    assert result.stdout == 'ghostfolio-ibkr-sync build test\n'
+    assert result.stdout == 'ghostfolio-ibkr-sync version test — commit unknown\n'
     assert calls.read_text().splitlines() == ['test']
 
 
@@ -143,5 +145,18 @@ def test_no_cron_preserves_one_off_run(run_entrypoint, cron):
 def test_operator_action_logging_scheduler_flags_and_build(run_entrypoint):
     result, crontab, calls = run_entrypoint('* * * * *')
     assert result.returncode == 0
-    assert 'ghostfolio-ibkr-sync build test' in result.stdout
+    assert 'ghostfolio-ibkr-sync version test — commit unknown' in result.stdout
     assert '-passthrough-logs -split-logs' in (calls.parent / 'scheduler-args').read_text()
+
+
+@pytest.mark.parametrize('cron', [None, '* * * * *'])
+@pytest.mark.parametrize('version,revision,expected', [
+    ('3.3.1', 'abcdef012345' + 'a' * 28, '3.3.1 — commit abcdef012345'),
+    ('', None, 'dev — commit unknown'),
+    ('dev', 'short', 'dev — commit unknown'),
+    ('dev', 'a' * 39 + '\n', 'dev — commit unknown'),
+])
+def test_release_identity_startup(run_entrypoint, cron, version, revision, expected):
+    result, _, _ = run_entrypoint(cron, version=version, revision=revision)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[0] == 'ghostfolio-ibkr-sync version ' + expected
