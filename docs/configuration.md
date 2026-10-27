@@ -513,3 +513,13 @@ Required actions send one consolidated reminder on every completed run, includin
 simulation. Repeated observations of one event and reason count once. Reminders
 continue while current evidence requires action. Clean success sends no heartbeat.
 Review approval does not suppress a reminder when missing proof still blocks work.
+
+
+### Notification result
+
+Each completed run reports `not required`, `disabled`, `invalid configuration`,
+`sent`, `failed`, or `timeout, delivery unconfirmed`. Configure APPRISE_URLS and
+APPRISE_TIMEOUT when a required notification is disabled or invalid. `sent`
+means the transport reported success; it does not prove device receipt. A timeout
+can still deliver later. The connector makes one attempt and does not retry.
+Delivery failure does not change the financial result or process exit code.

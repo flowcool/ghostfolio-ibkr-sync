@@ -22,6 +22,7 @@ class RunOutcome(TypedDict):
     forced_preview: NotRequired[str]
     corporate_notification: NotRequired[dict[str, Any]]
     corporate_maintenance: NotRequired[bool]
+    delivery: NotRequired[str]
 
 
 # Allowed failure reasons per stage. External summaries use only these codes,

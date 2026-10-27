@@ -27,7 +27,7 @@ from ghostfolio_ibkr_sync.activity_review import (
 from ghostfolio_ibkr_sync.config import (
     dry_run_requested,
     load_config,
-    load_notification_config,
+    load_notification_delivery,
     timezone_preview_reason,
 )
 from ghostfolio_ibkr_sync.diagnostics import (
@@ -492,6 +492,15 @@ def record_accepted_activities(
             existing_dividend_comments.add((activity["accountId"], comment))
 
 
+
+def report_delivery(outcome: RunOutcome, status: str) -> None:
+    """Log one fixed transport result; never retry or change financial status."""
+    outcome["delivery"] = status
+    warning = status not in ("sent", "not required")
+    log.log(logging.WARNING if warning else logging.INFO, "Notification result: %s%s", status,
+            "; inspect APPRISE_URLS/APPRISE_TIMEOUT and the local log" if warning else "")
+
+
 def finalize_run(outcome: RunOutcome, code: int) -> None:
     """Send at most one notification for failures or a legacy-token reminder.
 
@@ -506,13 +515,14 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     corporate_due = corporate is not None and bool(corporate["sent"])
     maintenance_due = outcome.get("corporate_maintenance", False)
     if code == 0 and not actions and not corporate_due and not maintenance_due and (dry_run_requested() or (days is None and not preview)):
-        log.info("Notification result: not required")
+        report_delivery(outcome, "not required")
         return
     label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
                                    ("Forced preview" if preview else "Token expiry"))
     try:
-        settings = load_notification_config()
+        settings, configuration = load_notification_delivery()
         if settings is None:
+            report_delivery(outcome, configuration)
             return
         if code:
             title, body = NOTIFY_TITLE, build_failure_summary(outcome)
@@ -542,7 +552,11 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
+        report_delivery(outcome, "failed")
         return
+    delivery = {"sent": "sent", "timeout": "timeout, delivery unconfirmed",
+                "invalid_destination": "invalid configuration"}.get(status, "failed")
+    report_delivery(outcome, delivery)
     if status == "sent":
         if corporate_due and corporate is not None:
             ca.confirm_notification(cast(ca.NotificationPlan, corporate))
@@ -550,7 +564,7 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
     elif status == "timeout":
         log.warning("%s notification timed out (it may still arrive; not retried)", label)
     else:
-        log.warning("%s notification not delivered: %s", label, status)
+        log.warning("%s notification not delivered: %s", label, delivery)
 
 
 def run_sync(outcome: RunOutcome) -> int:

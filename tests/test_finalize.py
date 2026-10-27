@@ -469,3 +469,38 @@ def test_operator_action_summary_redacts_and_keeps_failure_priority(env):
     assert len(sent) == 1 and sent[0]["title"] == notify.NOTIFY_TITLE
     assert all(reason in sent[0]["body"] for reason in out["actions"])
     assert CANARY not in sent[0]["body"] and AMOUNT not in sent[0]["body"]
+
+
+@pytest.mark.parametrize("raw,status,expected", [
+    (None, "sent", "disabled"), ("[]", "sent", "disabled"),
+    ("invalid-SECRET", "sent", "invalid configuration"),
+    (json.dumps(URLS), "sent", "sent"),
+    (json.dumps(URLS), "failed", "failed"),
+    (json.dumps(URLS), "timeout", "timeout, delivery unconfirmed"),
+    (json.dumps(URLS), "invalid_destination", "invalid configuration"),
+    (json.dumps(URLS), RuntimeError(URL_SECRET), "failed"),
+])
+def test_operator_action_delivery_explicit(env, caplog, raw, status, expected):
+    caplog.set_level(logging.INFO)
+    if raw is None:
+        env.delenv("APPRISE_URLS")
+    else:
+        env.setenv("APPRISE_URLS", raw)
+    sent = spy_send(env, status)
+    out = outcome.new_run_outcome()
+    outcome.record_action(out, "review_approval", "private")
+    app.finalize_run(out, 0)
+    assert f"Notification result: {expected}" in caplog.text
+    assert len(sent) == int(raw == json.dumps(URLS))
+    assert URL_SECRET not in caplog.text and "invalid-SECRET" not in caplog.text
+    assert out["delivery"] == expected
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt, SystemExit])
+def test_operator_action_delivery_interrupted(env, caplog, exc):
+    sent = spy_send(env, exc())
+    out = outcome.new_run_outcome()
+    outcome.record_action(out, "review_approval", "private")
+    with pytest.raises(exc):
+        app.finalize_run(out, 0)
+    assert len(sent) == 1 and "Notification result:" not in caplog.text
