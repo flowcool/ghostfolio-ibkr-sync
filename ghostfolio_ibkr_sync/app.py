@@ -872,7 +872,8 @@ def main() -> int:
     SystemExit and KeyboardInterrupt propagate untouched: an interrupted run is
     not a completed run and sends no notification.
     """
-    log.info("Starting IBKR to Ghostfolio sync (version %s)", os.environ.get("APP_VERSION", "dev"))
+    log.info("Starting IBKR to Ghostfolio sync")
+    log.info("ghostfolio-ibkr-sync build %s", os.environ.get("APP_VERSION", "dev"))
     if not os.environ.get("DRY_RUN", "").strip():
         log.warning("DRY_RUN not set: simulation, nothing written")
     outcome = new_run_outcome()
