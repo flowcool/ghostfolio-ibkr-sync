@@ -243,3 +243,62 @@ def test_legacy_migration_readback_rebuilds_pending_financial_correction(tmp_pat
         assert item["changed fields"] == ["quantity"] and item["approve"] is None
     finally:
         review.close_review(state)
+
+
+def test_conformity_unrelated_missing_isin_and_actual_conflict():
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    from test_activity_review import destination
+    events = matching_events(report(divs=div_xml()))
+    consistent = destination("IBKR#v2#U1:DIVIDEND:A1", type="DIVIDEND", date="2026-07-15T00:00:00Z",
+                             quantity=D("100"), unitPrice=D("0.25"), fee=D("0"))
+    unrelated = dict(consistent, id="unrelated", comment="IBKR#v2#U1:DIVIDEND:OTHER",
+                     assetProfile={"id": "p2", "symbol": "PEP", "dataSource": "YAHOO"})
+    proposals, held = refresh_proposals({}, events, [consistent, unrelated], {"U1": "acc"})
+    assert proposals == {} and not held
+    proposals, _ = refresh_proposals({}, events, [dict(consistent, fee=D("1")), unrelated], {"U1": "acc"})
+    assert next(iter(proposals.values()))["actionable"]
+    related = dict(unrelated, assetProfile=consistent["assetProfile"])
+    proposals, held = refresh_proposals({}, events, [consistent, related], {"U1": "acc"})
+    item = next(iter(proposals.values()))
+    assert not item["actionable"] and "unrelated" in item["status"] and held
+
+
+def test_conformity_distinct_legacy_dividends_are_not_exact_action_identities():
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    from test_activity_review import destination
+    cash = div_xml(amount="25") + div_xml(amount="50").replace('actionID="A1"', 'actionID="A2"')
+    events = matching_events(report(divs=cash))
+    rows = [destination("dividend#KO#2026-07-15", type="DIVIDEND", date="2026-07-15T00:00:00Z",
+                        quantity=D("100"), unitPrice=D(price), fee=D("0"), id=key)
+            for price, key in [("0.25", "one"), ("0.50", "two")]]
+    proposals, _ = refresh_proposals({}, events, rows, {"U1": "acc"}, reconciliation="balanced")
+    eligible = [item for item in proposals.values() if item["automatic eligible"]]
+    assert len(eligible) == 2
+    assert all(item["match reason"] == "legacy alias" and item["changed fields"] == ["comment"] for item in eligible)
+
+
+def test_conformity_blocked_differences_remain_visible_and_partial_scope_holds():
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    from test_activity_review import destination
+    cash = div_xml() + div_xml().replace('actionID="A1"', 'actionID="A2"')
+    row = destination("IBKR#v2#U1:DIVIDEND:A1", type="DIVIDEND", date="2026-07-15T00:00:00Z")
+    proposals, held = refresh_proposals({}, matching_events(report(divs=cash)), [row], {"U1": "acc"})
+    item = next(iter(proposals.values()))
+    assert not item["actionable"] and "quantity" in item["changed fields"]
+    assert held
+
+
+@pytest.mark.parametrize("tax,refund,fee", [("-3", "1", "2"), ("-1", "3", "0")])
+def test_conformity_signed_tax_keeps_validated_source_fee(tax, refund, fee):
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    from test_activity_review import destination
+    taxes = "".join(div_xml(amount=value).replace('type="Dividends"', 'type="Withholding Tax"') for value in (tax, refund))
+    events = matching_events(report(divs=div_xml() + taxes))
+    row = destination("IBKR#v2#U1:DIVIDEND:A1", type="DIVIDEND", date="2026-07-15T00:00:00Z",
+                      quantity=D("100"), unitPrice=D("0.25"), fee=D(fee))
+    proposals, held = refresh_proposals({}, events, [row], {"U1": "acc"})
+    assert not proposals and not held

@@ -1017,6 +1017,8 @@ def dividend_action_conflict(div: DividendGroup, symbol: str | None,
                 return True
             if div["isin"] and context.isin:
                 continue  # Distinct ISINs prove disjoint security; symbols can change.
+            if symbol and context.symbol and symbol != context.symbol:
+                continue  # Resolved distinct symbols do not overlap by missing ISIN alone.
             return True
     return False
 

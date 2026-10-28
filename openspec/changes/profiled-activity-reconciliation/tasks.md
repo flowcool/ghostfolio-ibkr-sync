@@ -20,7 +20,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 5. Conformity and dividend conflicts
 
-- [ ] 5.1 Classify conforming v2 identities before unrelated context guards. Name actual counterparts; retain partial-source holds. Cover distinct legacy dividend pairs and signed tax cases. Requirements: Relevant conflicts and conforming activities. Files: activity_review.py, sync.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "conformity"`.
+- [x] 5.1 Classify conforming v2 identities before unrelated context guards. Name actual counterparts; retain partial-source holds. Cover distinct legacy dividend pairs and signed tax cases. Requirements: Relevant conflicts and conforming activities. Files: activity_review.py, sync.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "conformity"`.
 
 ## 6. Compact review and private state
 
