@@ -2,12 +2,12 @@
 
 ## Why
 
-The first installation requires editing a two-account deployment. Two Docker examples omit persistent safety state. Several guides contradict the current notification contract. A new user cannot reliably follow one complete path.
+Installation requires editing a two-account deployment. Two Docker examples omit persistent safety state. Several guides contradict the current notification contract. A new user cannot reliably follow one complete path.
 
 ## What Changes
 
-- Make one account the default Compose example. Retain the existing primary service and ENV names. Provide a separate multi-account example.
-- Add a complete first-install guide: obtain files, configure services and mapping, prepare private state, preview, review, then explicitly enable writes and scheduling.
+- Make one account the default Compose example. Retain the existing primary service and ENV names. Provide a root-level multi-account example and migration instructions.
+- Add a first-install guide: obtain files, configure services and mapping, prepare private state, preview, review, then explicitly enable writes and scheduling.
 - Correct both autonomous Docker examples and all current notification instructions.
 - Keep CHANGELOG.md as a link to GitHub Releases, the existing release-history authority.
 - Shorten README and link detailed corporate-action, review and maintenance guides. Preserve old entry points and anchors.
@@ -17,7 +17,7 @@ The first installation requires editing a two-account deployment. Two Docker exa
 
 ### New Capabilities
 
-- `user-documentation`: Complete installation examples, progressive navigation and consistent current instructions.
+- `user-documentation`: Complete installation examples, progressive navigation and consistent instructions.
 
 ### Modified Capabilities
 
@@ -27,7 +27,7 @@ The first installation requires editing a two-account deployment. Two Docker exa
 
 ## Flex Record Scope
 
-Retained Flex reports establish the first six record types. Parser tests cover AssetSummary; the current spec covers optional OpenPosition evidence. Neither appears in the inspected reports. No source or parser change is proposed.
+Retained Flex reports establish the first six record types. Parser tests cover AssetSummary; the current spec covers optional OpenPosition evidence. Neither appears in the inspected reports.
 
 | Record type | Documentation scope | Runtime change |
 | --- | --- | --- |
@@ -46,4 +46,4 @@ No runtime changes, empty mapping default, automatic mapping suggestions, new di
 
 ## Impact
 
-User Markdown, Compose examples, .env.example and their existing compatibility checks. One implementation branch and PR. No dependency, API, credential or production change. Existing deployments keep their supported configuration.
+User Markdown, Compose examples, .env.example and their existing compatibility checks. One implementation branch and PR. No dependency, API, credential or production change. Multi-account users must select the matching Compose file; preserve their ENV, project identity and state.
