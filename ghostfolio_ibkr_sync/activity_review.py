@@ -764,6 +764,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     satisfied: set[str] = set()
     automatic = automatic_pairs(events, rows, reconciliation, timezone)
     migration_pairs = automatic_pairs(events, rows, "permissive", timezone)
+    historical_pairs = {(item["source event"], item["destination account"], item["activity id"])
+                        for item in previous.values() if item.get("execution path") == "historical maintenance"}
     for event_id, event in sorted(events.items()):
         exact_exists = any(marker_of(row) == event_id or (marker_of(row) in event["legacy"]
                            and row.get("accountId") == event["destination account"]) for row in rows)
@@ -776,6 +778,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             except RuntimeError:
                 continue
             if reason is None:
+                continue
+            if (event_id, event["destination account"], row["id"]) in historical_pairs:
                 continue
             key = proposal_key(event_id, event["destination account"], row["id"])
             current: dict[str, Any] = {}
@@ -883,6 +887,9 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
         event_id = old["source event"]
         if event_id in satisfied or key in result:
             continue
+        if old.get("execution path") == "historical maintenance":
+            result[key] = {**old, "automatic eligible": False}
+            continue
         if event_id not in events:
             result[key] = {**old, "status": "source unavailable"}
             continue
@@ -909,7 +916,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     rejected = {(item["source event"], item["activity id"]) for item in result.values() if item.get("rejected")}
     automatic = automatic_pairs(events, rows, reconciliation, timezone, rejected)
     for item in result.values():
-        item["automatic eligible"] = bool(item["actionable"] and not item.get("rejection cooldown")
+        item["automatic eligible"] = bool(item.get("execution path") == "normal run"
+            and item["actionable"] and not item.get("rejection cooldown")
             and item["source event"] in events and (item["source event"], item["activity id"]) in automatic)
         old = previous.get(item["key"])
         retained = old.get("first eligible") if old and old["review revision"] == item["review revision"] else None

@@ -127,11 +127,11 @@ The `execution path` tells you how an approved proposal can run:
 | `historical maintenance` | `identity_migration.py prepare`, then separately authorized `apply` from the checkout | Required; yes alone never authorizes maintenance |
 
 Historical conversion uses this same file, but runs outside the daily connector.
-For example, an old global trade reference may need historical cross-account
-proof that current runtime reports cannot supply. Keep the connector and other
-review-file writers stopped while staging, approving, preparing and applying
-that maintenance selection. Normal refresh can replace the staged evidence and
-clear its approval. Do not copy a yes onto a new proposal.
+Keep the connector and other review-file writers stopped while staging, deciding,
+preparing and applying that maintenance selection. A runtime proposal and a
+historical proposal cannot reserve the same source-target pair. Normal refresh
+preserves a staged historical path. Profiles never authorize it. Do not copy a
+yes onto a new proposal.
 
 Follow the [shared-file historical workflow](maintenance/identity-migration.md#historical-maintenance-with-the-shared-review-file).
 Preparation checks the exact subset you approved. A proof for all candidates

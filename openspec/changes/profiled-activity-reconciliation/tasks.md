@@ -40,7 +40,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 10. Historical maintenance compatibility
 
-- [ ] 10.1 Adapt root identity_migration.py, identity_maintenance.py and shared review codecs to compact decisions and private evidence. Keep separate operation authority and exact selected-subset replay. Requirement: connector-runtime, Historical maintenance from the shared approval file; scenario Shared compact maintenance adapter. Update docs/activity-review.md commands and synthetic examples. Verify: `python -m pytest -q tests/test_identity_migration.py -k 'shared_review or preservation'`.
+- [x] 10.1 Adapt root identity_migration.py, identity_maintenance.py and shared review codecs to compact decisions and private evidence. Keep separate operation authority and exact selected-subset replay. Requirement: connector-runtime, Historical maintenance from the shared approval file; scenario Shared compact maintenance adapter. Update docs/activity-review.md commands and synthetic examples. Verify: `python -m pytest -q tests/test_identity_migration.py -k 'shared_review or preservation'`.
 
 ## 11. Integrated compatibility
 

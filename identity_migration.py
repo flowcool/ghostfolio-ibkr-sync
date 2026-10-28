@@ -65,6 +65,7 @@ from identity_maintenance import (
     publish_private,
     read_evidence,
     require,
+    review_state_path,
     safe_path,
 )
 
@@ -559,7 +560,7 @@ def bind_selection(manifest: dict[str, Any], reports: dict[str, tuple[str, str]]
     root = Path(__file__).resolve().parent
     paths = ["identity_migration.py", "identity_maintenance.py", "cleanup_recovery.py",
              *[f"ghostfolio_ibkr_sync/{name}.py" for name in
-               ("app", "sync", "ghostfolio", "ibkr", "models", "activity_review", "activity_preservation")]]
+               ("app", "sync", "ghostfolio", "ibkr", "models", "activity_review", "activity_reconciliation", "activity_preservation")]]
     manifest["preservation_semantics"] = "stable-business-v1"
     manifest["implementation"] = {path: digest((root / path).read_bytes()) for path in paths}
     approved = {replacement["id"]: replacement["new_comment"]
@@ -652,7 +653,7 @@ def migration_evidence(inputs: Path, review_file: Path | None = None) -> tuple[d
         review.safe_path(path, list(captured))
         data = path.read_bytes()
         document = review.load_review(path, list(captured))
-        state_path = Path(str(path) + ".state.yaml")
+        state_path = review_state_path(path)
         captured[state_path] = state_path.read_bytes()
         require(review.read_yaml(data).get("version") == 3, "Historical preparation requires compact schema 3")
         review.refresh_proposals(document["proposals"], {}, snapshot["activities"], config["accounts"])
@@ -682,7 +683,9 @@ def migration_evidence(inputs: Path, review_file: Path | None = None) -> tuple[d
                 "Conflicting shared review approvals")
         chosen_ids = {expected[key]["activity id"] for key in selected}
         manifest["replacements"] = [item for item in manifest["replacements"] if item["id"] in chosen_ids]
-        manifest["review_selection"] = {"schema": 3, "sha256": digest(data), "keys": sorted(selected)}
+        manifest["review_selection"] = {"schema": 3, "sha256": digest(data),
+                                        "state_sha256": digest(captured[state_path]),
+                                        "keys": sorted(selected)}
         captured[path] = data
     bind_selection(manifest, saved_reports, snapshot["activities"], config)
     manifest["limitations"].append(
@@ -756,6 +759,11 @@ def stage_review(inputs: Path, review_file: Path) -> int:
         # consent after a rollback or a failed review-file cleanup.
         previous = {key: item for key, item in previous.items()
                     if item.get("execution path") != "historical maintenance"}
+        runtime_pairs = {(item["source event"], item["destination account"], item["activity id"])
+                         for item in previous.values()}
+        require(not any((item["source event"], item["destination account"], item["activity id"])
+                        in runtime_pairs for item in staged.values()),
+                "Historical pair already has a runtime proposal")
         for path, data in captured.items():
             require(safe_path(path).read_bytes() == data, "Historical input changed during staging")
         review.publish_review(state, {"version": 1, "proposals": {**previous, **staged}})
@@ -934,7 +942,9 @@ def _apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
     payloads = {}
     from ghostfolio_ibkr_sync import activity_review as review
 
-    consent = review.decode_review(review.read_yaml(captured[safe_path(review_file)]), review.read_yaml(captured[Path(str(safe_path(review_file)) + ".state.yaml")]))["proposals"]
+    consent = review.decode_review(
+        review.read_yaml(captured[safe_path(review_file)]),
+        review.read_yaml(captured[review_state_path(review_file)]))["proposals"]
     consent_by_id = {consent[key]["activity id"]: (key, consent[key]["review revision"])
                      for key in proposed["review_selection"]["keys"]}
     for replacement in replacements:

@@ -34,6 +34,11 @@ def read_evidence(path: Path, expected_hash: str) -> bytes:
     return data
 
 
+def review_state_path(path: Path) -> Path:
+    """Resolve the bound private companion without following symlinks."""
+    return safe_path(Path(str(safe_path(path)) + ".state.yaml"))
+
+
 def exact_json(data: bytes) -> Any:
     def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}

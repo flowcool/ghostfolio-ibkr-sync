@@ -1435,7 +1435,7 @@ def test_v2_migration_apply_rollback_only_invalid_approval_root(rollback_case, v
     assert len(state.puts) == 2
 
 
-@pytest.mark.parametrize("choice", [None, "no", "Yes", True, "yes"])
+@pytest.mark.parametrize("choice", [None, "reject", "no", "Yes", True, "yes"])
 def test_shared_review_selects_only_yes_and_preserves_stored_instant(case, choice):
     from ghostfolio_ibkr_sync import activity_review as review
     root, config, save, inputs, source, snapshot = case
@@ -1458,6 +1458,7 @@ def test_shared_review_selects_only_yes_and_preserves_stored_instant(case, choic
     assert manifest["selection_proof"]["planned_replacements"] == manifest["replacements"]
     assert manifest["selection_proof"]["equal"] is True
     assert manifest["review_selection"]["sha256"] == digest(path.read_bytes())
+    assert manifest["review_selection"]["state_sha256"] == digest(Path(str(path) + ".state.yaml").read_bytes())
     assert len(manifest["review_selection"]["keys"]) == len(manifest["replacements"])
 
 
@@ -1483,6 +1484,58 @@ def test_compact_review_rebuild_retains_bytes_clears_decisions_and_cools_profile
         assert "rejection history lost" in state["document"]["summary"]["recovery"]
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("profile", ["off", "conservative", "balanced", "permissive"])
+def test_shared_review_runtime_retains_historical_path_without_profile_authority(case, profile):
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, config, _, inputs, source, snapshot = case
+    migration_run(case)
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.load_review(path)
+    original = next(iter(document["proposals"].values()))
+    original["approve"] = "reject"
+    source_ref = next(iter(config["reports"].values()))
+    events = review.source_events((root / source_ref["path"]).read_text(),
+                                 source_ref["source_account"], "dest", config["symbol_mapping"])
+    rows = migration.exact_json((root / config["snapshot"]["path"]).read_bytes())["activities"]
+    refreshed, held = review.refresh_proposals(document["proposals"], events, rows,
+                                               config["accounts"], reconciliation=profile)
+    assert list(refreshed) == [original["key"]]
+    assert refreshed[original["key"]]["execution path"] == "historical maintenance"
+    assert not refreshed[original["key"]]["automatic eligible"]
+    assert original["source event"] in held
+    assert not review.selected_proposals(refreshed)[0]
+    bound = review.open_review(str(path), [])
+    try:
+        review.publish_review(bound, {"version": 1, "proposals": refreshed})
+    finally:
+        review.close_review(bound)
+    with pytest.raises(RuntimeError, match="No exact yes"):
+        migration.prepare_review(inputs, path, root / "selected")
+
+
+def test_shared_review_stage_refuses_existing_runtime_pair(case):
+    from ghostfolio_ibkr_sync import activity_review as review
+    root, _, _, inputs, _, _ = case
+    migration_run(case)
+    path = root / "activities.yaml"
+    migration.stage_review(inputs, path)
+    document = review.load_review(path)
+    item = next(iter(document["proposals"].values()))
+    item["execution path"] = "normal run"
+    item["key"] = review.proposal_key(item["source event"], item["destination account"], item["activity id"])
+    document["proposals"] = {item["key"]: item}
+    bound = review.open_review(str(path), [])
+    try:
+        review.publish_review(bound, document)
+    finally:
+        review.close_review(bound)
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError, match="already has a runtime proposal"):
+        migration.stage_review(inputs, path)
+    assert path.read_bytes() == before
 
 
 def test_shared_review_subset_needs_its_own_proof(case, monkeypatch):
