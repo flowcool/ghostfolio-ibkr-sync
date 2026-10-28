@@ -2,10 +2,14 @@
 
 Activity review is an opt-in, qualified workflow. Read the [README safety notes](../README.md#safety-first) before enabling it. The full contract is kept here so the landing page stays readable.
 
+## When to use
+
 Set `ACTIVITY_REVIEW_FILE` to enable persistent proposals for supported BUY,
 SELL and DIVIDEND events. Blank retains the existing additive import path.
 The reader accepts a canonical v2 first line, one blank separator line and
 preserved user notes, even after review is disabled.
+
+## Safety limits
 
 Review dispatch is qualified for Ghostfolio image
 `sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`
@@ -18,19 +22,26 @@ renewed qualification. No ENV setting changes this budget. Production activation
 and stable publication retain their separate approval. See
 [qualification evidence and limits](releasing.md#activity-review-qualification).
 
+## Configure persistent review
+
 Mount a dedicated persistent directory. The parent must exist. Files must be
 owned by the runtime user, readable and writable, mode `0600`. Symlinks, hard
-links and overlap with mapping/source/evidence inputs are refused. Compose additions:
+links and overlap with mapping/source/evidence inputs are refused. Create the
+host `review` directory with mode `0700` owned by `10001:10001`. Merge these
+additions into the existing service; this is not a standalone Compose file:
+
 
 ```yaml
 services:
-  ibkr-sync:
+  ibkr-sync-individual:
     environment:
       DRY_RUN: "true"
       ACTIVITY_REVIEW_FILE: /review/activities.yaml
     volumes:
       - ./review:/review
 ```
+
+## Review a proposal
 
 Review acquires and validates all configured reports once before corrections,
 then reuses them for normal processing. Exact references take priority over
@@ -91,6 +102,8 @@ activity_corrections:
     approve: null
 ```
 
+## Approve a proposal
+
 Edit only `approve`, between runs. Locate the generated proposal and change:
 
 ```yaml
@@ -116,6 +129,8 @@ all former candidates now belong to other identified events. Missing or inactive
 targets stay held. New candidates are checked before ordinary selection resumes;
 that selection can still refuse an import.
 
+## Choose the execution path
+
 The `execution path` tells you how an approved proposal can run:
 
 | Execution path | Command | Separate operation authorization |
@@ -130,7 +145,7 @@ review-file writers stopped while staging, approving, preparing and applying
 that maintenance selection. Normal refresh can replace the staged evidence and
 clear its approval. Do not copy a yes onto a new proposal.
 
-Follow the [shared-file historical workflow](cleanup.md#historical-maintenance-with-the-shared-review-file).
+Follow the [shared-file historical workflow](maintenance/identity-migration.md#historical-maintenance-with-the-shared-review-file).
 Preparation checks the exact subset you approved. A proof for all candidates
 does not authorize a smaller selection. Preparation sends no financial request. Preparation and apply hold the shared
 review lock. Apply requires this file and removes confirmed selections. Staging
@@ -143,6 +158,8 @@ Schema 1 remains readable. The first schema-2 refresh clears old approvals once;
 read the new presentation before setting yes again. Journals retain pending
 request fences. An older connector refuses schema 2. Keep a private file copy
 before upgrade; do not downgrade or edit a pending journal to resume writes.
+
+## Execute an approved correction
 
 After qualification, each unchanged approved correction sends one whitelisted
 PUT. It preserves activity ID, account, owner, tags and non-reference notes.
@@ -159,6 +176,8 @@ identity indexes are rebuilt before ordinary imports; a corrected BUY counts onc
 A correction failure blocks later imports, cash and platform writes on that account.
 Other safe accounts continue. Ordinary import failures keep independent cash.
 Failure notifications retain the single summary without financial details.
+
+## Recovery
 
 Recovery reads immediately, then after 2, 5 and 10 seconds. These waits do not
 prove settlement. Only complete expected-after evidence resolves a request,
@@ -180,13 +199,15 @@ writers and edit the review only between runs. File syntax/schema, unknown
 proposal and lock errors stop all accounts sharing the file. A non-yes approval is skipped; it does not block unrelated account writes. A detected edit preserves operator
 files and pending intent and stops the affected run.
 
+## Disable review
+
 To disable preview, stop the connector and remove the ENV value. Keep its files.
 Do not disable review to bypass uncertainty; stop writers until exact readback
 resolves it. Software rollback does not restore data. After notes-bearing writes,
 retain a qualified notes-compatible reader; bare-v2 rc.5 alone is insufficient.
 Offline journal inspection can prepare a guarded reverse payload for an unchanged
 confirmed row only. Reversal requires separate authority and never runs automatically.
-See [maintenance](cleanup.md#activity-review-journals) and
+See [journal inspection](#activity-review-journals) and
 [release qualification](releasing.md#activity-review-qualification).
 
 
@@ -195,8 +216,9 @@ See [maintenance](cleanup.md#activity-review-journals) and
 The private log names the configured ACTIVITY_REVIEW_FILE container path, section,
 proposal key, held event and reason. A proposal count is not a held-event count.
 Resolve the host path from your Compose volume mapping. For example,
-`./review:/state` maps `/state/activity-review.yaml` to
-`./review/activity-review.yaml`, relative to the Compose project directory.
+`./review:/review` maps `/review/activities.yaml` to
+`./review/activities.yaml`, relative to the Compose project directory.
+Keep the existing corporate-action mount at `/state`; review uses `/review`.
 The connector does not discover host mounts.
 
 For an eligible `normal run` proposal, compare current and proposed values and
@@ -212,3 +234,23 @@ operation authorization; normal sync cannot execute it. For an uncertain request
 inspect the preserved journal and exact destination readback. Do not resend,
 delete or edit the journal to release a hold. False matches need the documented
 manual resolution and retain separate cleanup authority.
+
+
+## Activity review journals
+
+Optional normal-run review uses a separate private journal. It calls no cleanup,
+migration, recovery-submit or deletion executor. Do not pass its journal to those
+tools. Keep `<review-file>.journal.yaml` and its companion lock on the volume.
+Never delete or edit an unresolved journal to release an account. Only live exact
+expected-after evidence resolves it.
+
+For offline inspection, load YAML without mutation. Compare its full `before`,
+`after`, `request`, binding and status with an exact saved JSON snapshot.
+`activity_review.inspect_reverse(entry, observed_row)` prepares a whitelisted
+reverse request only for an unchanged confirmed after image. It sends no request.
+Reversal needs separate explicit authority and fresh ownership/unchanged-row
+checks. Software rollback does not restore financial data.
+
+Runtime and offline identity readers use the first line of notes-bearing v2
+comments. Extended reading does not qualify destructive maintenance tools;
+their existing separate image-qualification boundary remains.
