@@ -54,86 +54,68 @@ Review acquires and validates all configured reports once before corrections,
 then reuses them for normal processing. Exact references take priority over
 proximity, including outside the date window. Other candidates require the same
 account, operation type, security and denomination. Trade proximity is inclusive
-±2 UTC calendar days; dividend proximity is inclusive ±3 days. Amount agreement
+±2 local calendar days; dividend proximity is inclusive ±3 days. Amount agreement
 never grants approval. A manual BUY two days later remains a candidate even when
 its quantity differs. A dividend three days later also remains a candidate.
 Separate fills/actions are never combined. Dividend cash portions from one action
 reuse normal withholding and quantity conversion. Partial action coverage and
-conflicting context remain refused. Legacy dividend aggregates are excluded.
-Current report windows do not prove historical cross-account coverage for
-legacy-global `IBKR#<tradeID>` upgrades; those remain non-actionable.
+conflicting context remain refused. Legacy dividend groups require independently unique one-to-one pairs.
+The configured mapping owns historical trade-reference migration.
 
-The schema-2 YAML contains two sections in the same private file:
+The schema-3 YAML contains a summary, groups, conforming activities and two
+proposal sections in one operator file:
 
-| Section | What you approve | What stays unchanged |
-|---|---|---|
-| `reference_updates` | The connector reference in `comment` only | Date, quantity, price, fee, account, activity ID, tags and notes |
-| `activity_corrections` | The displayed one-to-one replacement, including any financial changes | Activity ID, account, owner, tags and preserved notes |
+| Section | Operation | Preserved values |
+| --- | --- | --- |
+| `reference_updates` | Change the connector comment only | All other activity values |
+| `activity_corrections` | Apply the exact displayed one-to-one correction | ID, account, owner, tags and supported notes |
 
-Each proposal shows `execution path`, `evidence level`, stable keys, source
-account/event, destination account/activity, match reason, current/full proposed
-values, changed fields, status and `approve`. Read the full proposed comment.
-`exact` means the association is proven by the supported identity evidence.
-`probable` means a supported proximity match needs your judgment. `blocked` means
-required evidence is missing or conflicting; even yes cannot make it writable.
-These levels describe the association, not the correctness of a financial amount.
-No confidence percentage grants authority.
+Each entry shows its stable key, revision, source event, destination activity,
+security, type, execution path, association evidence, profile authority and status.
+`current` and `proposed` contain exact values. Read the complete proposed comment.
+`operation fields` lists the fields that this decision can change.
+A blocked status does not replace the association evidence.
+No association label or confidence percentage grants correction authority.
+The private `.state.yaml` companion retains full evidence and recovery bindings.
+Do not edit that file. Do not move entries or add keys to the operator file.
 
-The connector generates this file. Do not add keys or move entries between sections.
-A reference-only proposal has `changed fields: [comment]`. A financial correction
-shows exact before/after values under `current values` and `proposed values`. Numbers are exact plain-decimal text from the transmitted
-payload and original response JSON. Equivalent numeric spellings compare equal;
-financial tolerance never grants authority. Dates compare as full UTC instants.
-
-These excerpts omit bindings and complete values.
-Do not use them as an input file:
+This excerpt omits generated fields. Do not use it as an input file:
 
 ```yaml
-version: 2
+version: 3
 reference_updates:
   "<generated-key>":
-    section: reference_updates
-    evidence level: exact
-    execution path: historical maintenance
-    source event: "IBKR#v2#U1:TRADE:123"
-    activity id: "<existing-activity-id>"
-    changed fields: [comment]
-    approve: yes
-activity_corrections:
-  "<another-generated-key>":
-    section: activity_corrections
-    evidence level: probable
     execution path: normal run
-    changed fields: [comment, quantity]
-    approve: null
+    source event: "IBKR#v2#SOURCE:TRADE:123"
+    destination activity: "<existing-activity-id>"
+    match evidence: legacy alias
+    profile authority: conservative
+    operation fields: [comment]
+    current:
+      comment: "IBKR#123"
+    proposed:
+      comment: "IBKR#v2#SOURCE:TRADE:123"
+    decision: null
 ```
 
-## Approve a proposal
+## Decide on a proposal
 
-Edit only `approve`, between runs. Locate the generated proposal and change:
+Edit only `decision`, between runs. Use lowercase literal `yes` to approve the
+exact displayed operation. Plain and quoted `yes` have the same meaning.
+Use lowercase literal `reject` to reject that source-target association.
+Null stays pending. Boolean `true`, `no`, `y`, `Yes` and typos grant no authority.
+The connector warns about unsupported non-null decisions.
+A profile supplies separate authority. It does not write `yes` for you.
 
-```yaml
-approve: yes
-```
+One source can select one target. One target can select one source.
+Conflicting decisions block every affected correction before dispatch.
+New candidates start blank. Changes to bound operation evidence clear consent.
+An unavailable source suspends consent. No request uses cached source data.
+Deleting an entry permits blank rediscovery. It does not authorize import.
 
-Only lowercase `yes`, plain or quoted, approves the displayed replacement.
-Every other approval value is skipped for that cycle. Blank/null stays pending;
-`no`, `true`, `y`, `Yes` and typos do not approve anything. A non-null skipped
-choice produces a warning. It is not stored as a rejection and does not release
-the related import hold. Unknown fields, invalid bindings and invalid schemas
-remain errors. One source can select one target and one target one source.
-Conflicting approvals dispatch nothing for the affected account. New proposals
-start blank. Changed source, target, owner, tags, notes, mapping or relevant
-identity occupancy clears approval. A shorter report retains `source unavailable`
-with its approval suspended; unchanged evidence can resume on return.
-
-Pending proposals hold related imports before ordinary deduplication and holdings
-selection. Unrelated events continue. Deleting an entry causes blank rediscovery.
-There is no rejection choice: resolve false matches manually in Ghostfolio.
-Release requires an exact manual/connector correction, or positive proof that
-all former candidates now belong to other identified events. Missing or inactive
-targets stay held. New candidates are checked before ordinary selection resumes;
-that selection can still refuse an import.
+Pending candidates hold related imports. Unrelated events continue.
+An exact confirmed correction releases its alternatives without modifying them.
+Ordinary import selection still applies its identity and holdings guards.
 
 ## Choose the execution path
 
@@ -291,3 +273,34 @@ After confirmed migration, the connector rebuilds normal selection.
 Another account's previously suppressed trade can then pass its ordinary
 account-scoped checks. Review the mapping before enabling a profile.
 Historical maintenance retains its separate saved-evidence and operation GO.
+
+### Compact-state recovery and downgrade
+
+Back up the operator YAML, its `.state.yaml` companion and its journal together.
+Keep them private in the same persistent directory. Stop all writers first.
+Readers accept review schemas 1 and 2. The first schema-3 publication clears
+legacy approvals once. New journal entries use version 2. Version-1 unresolved
+requests remain readable with their original keys and revisions.
+Old images refuse the new review and journal schemas.
+
+A missing or corrupt private state stops correction. Do not delete a journal,
+reset a pending request, or resend a request to recover.
+For offline reconstruction, use the saved-input manifest from the maintenance
+workflow. Run from the exact checkout, with all writers stopped:
+
+```bash
+python identity_migration.py rebuild-review --inputs INPUTS --review REVIEW
+```
+
+This command uses saved inputs and sends no HTTP request.
+It retains surviving files under content-addressed `.retained-` names.
+It clears all decisions and discloses lost rejection history.
+It preserves unresolved journals and their account fences.
+Rebuilt candidates cannot receive profile authority during the first later
+live publication cycle. A subsequent run must validate them again.
+A retained previous generation can recover unchanged decisions after interrupted
+publication. An unknown generation stops without replacing either file.
+
+Keep a schema-3 reader until every unresolved request is settled by exact
+readback. A software downgrade does not restore activity data.
+Reverse financial writes require separate authority and fresh preservation proof.

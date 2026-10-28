@@ -63,6 +63,9 @@ class ReviewState(TypedDict):
     journal_original: bytes | None
     document: dict[str, Any]
     journal: dict[str, Any]
+    state_path: Path
+    state_original: bytes | None
+    evidence: dict[str, Any]
 
 
 def read_yaml(data: bytes) -> dict[str, Any]:
@@ -80,7 +83,7 @@ def read_yaml(data: bytes) -> dict[str, Any]:
                 key = key_node.value
                 if key in result:
                     raise RuntimeError("Duplicate review YAML key")
-                result[key] = value(item, key == "approve")
+                result[key] = value(item, key in ("approve", "decision"))
             return result
         if isinstance(node, yaml.SequenceNode):
             return [value(item) for item in node.value]
@@ -148,14 +151,31 @@ def validate_document(document: dict[str, Any], collection: str) -> None:
 SECTIONS = ("reference_updates", "activity_corrections")
 
 
-def decode_review(document: dict[str, Any]) -> dict[str, Any]:
+def proposal_key(event: str, destination: str, activity: str, execution: str = "normal run") -> str:
+    return fingerprint([event, destination, activity, execution])
+
+
+def qualify_proposals(document: dict[str, Any]) -> dict[str, Any]:
+    result = {}
+    for item in document["proposals"].values():
+        key = proposal_key(item["source event"], item["destination account"], item["activity id"],
+                           item.get("execution path", "normal run"))
+        if key in result:
+            raise RuntimeError("Duplicate execution-path review key")
+        result[key] = {**item, "key": key, "approve": None}
+    return {"version": 1, "proposals": result}
+
+
+def decode_review(document: dict[str, Any], evidence: dict[str, Any] | None = None) -> dict[str, Any]:
     """Read both public versions; keep the existing journal and internal map."""
+    if document.get("version") == 3:
+        return decode_compact(document, evidence)
     if type(document.get("version")) is int and document["version"] == 1:
         validate_document(document, "proposals")
         result = deepcopy(document)
         for item in result["proposals"].values():
             item["approve"] = None
-        return result
+        return qualify_proposals(result)
     if (set(document) != {"version", *SECTIONS}
             or type(document.get("version")) is not int or document["version"] != 2):
         raise RuntimeError("Invalid review document schema")
@@ -168,41 +188,127 @@ def decode_review(document: dict[str, Any]) -> dict[str, Any]:
             if (not isinstance(key, str) or not isinstance(item, dict)
                     or key in proposals or item.get("section") != section):
                 raise RuntimeError("Duplicate or misplaced review proposal")
-            proposals[key] = item
-    return {"version": 1, "proposals": proposals}
+            proposals[key] = {**item, "approve": None}
+    return qualify_proposals({"version": 1, "proposals": proposals})
 
 
 def encode_review(document: dict[str, Any]) -> dict[str, Any]:
-    result: dict[str, Any] = {"version": 2, **{section: {} for section in SECTIONS}}
+    proposals = document["proposals"]
+    summary = {"source events": len({item["source event"] for item in proposals.values()}),
+               "destination activities": len({item["activity id"] for item in proposals.values()}),
+               "candidates": len(proposals), **document.get("summary", {})}
+    result: dict[str, Any] = {"version": 3, "summary": summary, "groups": document.get("groups", {}),
+                              "consistent": document.get("consistent", {}), **{section: {} for section in SECTIONS}}
     for key, item in document["proposals"].items():
-        section = item.get("section", "activity_corrections")
-        if section not in SECTIONS:
-            raise RuntimeError("Invalid review section")
-        result[section][key] = {"section": section,
-                                "evidence level": "blocked" if not item.get("actionable") else "probable",
-                                "execution path": "normal run", **item}
+        section = "reference_updates" if item["changed fields"] == ["comment"] else "activity_corrections"
+        common = {"date", "symbol", "type", "currency", *NUMBERS, "comment", *item["changed fields"]}
+        result[section][key] = {"key": key, "revision": item["review revision"],
+            "source event": item["source event"], "destination activity": item["activity id"],
+            "security": item["proposed values"].get("symbol"), "type": item["proposed values"].get("type"),
+            "execution path": item.get("execution path", "normal run"),
+            "match evidence": item["match reason"], "profile authority": item.get("profile", "off"),
+            "automatic eligible": item.get("automatic eligible", False),
+            "status": item["status"], "operation fields": item["changed fields"],
+            "current": {field: value for field, value in item["current values"].items() if field in common},
+            "proposed": {field: value for field, value in item["proposed values"].items() if field in common},
+            "numeric evidence": item.get("numeric evidence", {}),
+            "observed differences": item.get("diagnostic differences", {}),
+            "date context": item.get("profile date context") or item["date context"],
+            "decision": item["approve"]}
+    unsigned = deepcopy(result)
+    for section in SECTIONS:
+        for item in unsigned[section].values():
+            item["decision"] = None
+    result["generation"] = fingerprint(unsigned)
     return result
 
 
-def open_review(filename: str, input_files: Sequence[str]) -> ReviewState:
+def decode_compact(document: dict[str, Any], evidence: dict[str, Any] | None) -> dict[str, Any]:
+    if (set(document) != {"version", "generation", "summary", "groups", "consistent", *SECTIONS}
+            or any(not isinstance(document[name], dict) for name in ("summary", "groups", "consistent", *SECTIONS))):
+        raise RuntimeError("Invalid compact review schema")
+    if (not evidence or set(evidence) != {"version", "current", "previous", "aliases", "rebuild cooldown"}
+            or evidence["version"] != 1 or not isinstance(evidence["aliases"], dict)):
+        raise RuntimeError("Missing or invalid private review state")
+    matched = None
+    for generation in (evidence["current"], evidence["previous"]):
+        if generation is None:
+            continue
+        if (not isinstance(generation, dict) or set(generation) != {"view", "document"}
+                or encode_review(generation["document"]) != generation["view"]):
+            raise RuntimeError("Corrupted private review state")
+        if generation["view"]["generation"] == document["generation"]:
+            matched = generation
+    if matched is None:
+        raise RuntimeError("Unknown review generation; preserve review and state")
+    result = cast(dict[str, Any], deepcopy(evidence["current"]["document"]))
+    for item in result["proposals"].values():
+        item["approve"] = None
+    seen: set[str] = set()
+    for section in SECTIONS:
+        for key, displayed in document[section].items():
+            expected = matched["view"][section].get(key)
+            if key in seen or expected is None or not isinstance(displayed, dict) or set(displayed) != set(expected):
+                raise RuntimeError("Unknown or misplaced compact review proposal")
+            seen.add(key)
+            old = matched["document"]["proposals"][key]
+            current = result["proposals"].get(key)
+            same_view = {k: v for k, v in displayed.items() if k != "decision"} == {k: v for k, v in expected.items() if k != "decision"}
+            if (current and same_view and old["review revision"] == current["review revision"]
+                    and old["binding"] == current["binding"] and old["actionable"] == current["actionable"]
+                    and old.get("execution path") == current.get("execution path")):
+                current["approve"] = displayed["decision"]
+    return result
+
+
+def load_review(path: Path, inputs: Sequence[Path] = ()) -> dict[str, Any]:
+    """Read bound compact decisions without a write or lock side effect."""
+    state_path = Path(str(path) + ".state.yaml")
+    for target in (path, state_path):
+        safe_path(target, inputs)
+    raw = read_yaml(path.read_bytes())
+    evidence = read_yaml(state_path.read_bytes()) if state_path.exists() else None
+    return decode_review(raw, evidence)
+
+
+def open_review(filename: str, input_files: Sequence[str], *, rebuild: bool = False) -> ReviewState:
     path = Path(filename).absolute()
     journal_path = Path(str(path) + ".journal.yaml")
+    state_path = Path(str(path) + ".state.yaml")
     lock_path = Path(str(path) + ".lock")
     inputs = [Path(item).absolute() for item in input_files]
-    for target in (path, journal_path, lock_path):
+    for target in (path, state_path, journal_path, lock_path):
         safe_path(target, inputs)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         original, journal_original = file_bytes(path), file_bytes(journal_path)
-        document = read_yaml(original) if original is not None else {"version": 1, "proposals": {}}
+        state_original = file_bytes(state_path)
+        evidence: dict[str, Any] = read_yaml(state_original) if state_original is not None and not rebuild else {
+            "version": 1, "current": None, "previous": None, "aliases": {}, "rebuild cooldown": 0}
+        if state_original is not None and not rebuild and set(evidence) != {
+                "version", "current", "previous", "aliases", "rebuild cooldown"}:
+            raise RuntimeError("Invalid private review state")
+        if original is None and state_original is not None and not rebuild:
+            raise RuntimeError("Review view missing with existing private state")
+        document: dict[str, Any] = read_yaml(original) if original is not None and not rebuild else {"version": 1, "proposals": {}}
         journal = (read_yaml(journal_original) if journal_original is not None
                    else {"version": 1, "entries": {}})
-        document = decode_review(document)
-        validate_document(journal, "entries")
+        document = decode_review(document, evidence)
+        if journal.get("version") not in (1, 2):
+            raise RuntimeError("Invalid review journal version")
+        validate_document({**journal, "version": 1}, "entries")
+        if rebuild:
+            evidence["rebuild cooldown"] = 2
+        for key in document["proposals"]:
+            evidence["aliases"].setdefault(key, key)
+        for item in document["proposals"].values():
+            legacy_key = fingerprint([item["source event"], item["destination account"], item["activity id"]])
+            evidence["aliases"].setdefault(legacy_key, item["key"])
         return {"path": path, "journal_path": journal_path, "inputs": inputs, "lock": fd,
                 "original": original, "journal_original": journal_original,
-                "document": document, "journal": journal}
+                "document": document, "journal": journal, "state_path": state_path,
+                "state_original": state_original, "evidence": evidence}
     except BaseException:
         os.close(fd)
         raise
@@ -214,14 +320,14 @@ def close_review(state: ReviewState) -> None:
 
 def assert_unchanged(state: ReviewState) -> None:
     for target, original in ((state["path"], state["original"]),
+                             (state["state_path"], state["state_original"]),
                              (state["journal_path"], state["journal_original"])):
         safe_path(target, state["inputs"])
         if file_bytes(target) != original:
             raise RuntimeError("Review or journal changed during this run; writes blocked")
 
 
-def atomic_yaml(path: Path, document: dict[str, Any]) -> bytes:
-    data = yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode()
+def atomic_bytes(path: Path, data: bytes) -> bytes:
     fd, temporary = tempfile.mkstemp(prefix=".activity-review-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
@@ -240,9 +346,24 @@ def atomic_yaml(path: Path, document: dict[str, Any]) -> bytes:
     return data
 
 
+def atomic_yaml(path: Path, document: dict[str, Any]) -> bytes:
+    return atomic_bytes(path, yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode())
+
+
 def publish_review(state: ReviewState, document: dict[str, Any]) -> None:
     assert_unchanged(state)
-    state["original"] = atomic_yaml(state["path"], encode_review(document))
+    view = encode_review(document)
+    previous = state["evidence"]["current"]
+    # Keep the prior view until its successor is durable. A crash can leave
+    # the operator view one generation behind, with recoverable decisions.
+    if previous and previous["view"]["generation"] == view["generation"]:
+        previous = state["evidence"]["previous"]
+    evidence = {**state["evidence"], "previous": previous,
+                "current": {"view": view, "document": deepcopy(document)}}
+    state["state_original"] = atomic_yaml(state["state_path"], evidence)
+    state["evidence"] = evidence
+    assert_unchanged(state)
+    state["original"] = atomic_yaml(state["path"], view)
     state["document"] = document
 
 
@@ -571,6 +692,7 @@ PROPOSAL_FIELDS = {"key", "source account", "source event", "destination account
                    "approve", "actionable", "binding", "date context", "review revision"}
 DISPLAY_FIELDS = {"section", "evidence level", "execution path"}
 AUTOMATIC_FIELDS = {"automatic eligible", "profile", "numeric evidence", "profile date context"}
+EVIDENCE_FIELDS = {"source evidence", "diagnostic differences"}
 
 
 def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]],
@@ -583,7 +705,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     if len(by_id) != len(rows):
         raise RuntimeError("Duplicate destination activity IDs")
     for key, old in previous.items():
-        if (set(old) - AUTOMATIC_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
+        if (set(old) - AUTOMATIC_FIELDS - EVIDENCE_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
                 or (old["destination account"] != accounts.get(old["source account"])
                     and (old["source event"], old["destination account"], old["activity id"])
                     not in (journal_bindings or set()))
@@ -592,7 +714,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 or not isinstance(old["activity id"], str)
                 or not isinstance(old["review revision"], str)
                 or re.fullmatch(r"[0-9a-f]{32}", old["review revision"]) is None
-                or key != fingerprint([old["source event"], old["destination account"], old["activity id"]])):
+                or key != proposal_key(old["source event"], old["destination account"], old["activity id"], old.get("execution path", "normal run"))):
             raise RuntimeError("Unbound or invalid review proposal")
     result: dict[str, Any] = {}
     satisfied: set[str] = set()
@@ -611,15 +733,18 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 continue
             if reason is None:
                 continue
-            key = fingerprint([event_id, event["destination account"], row["id"]])
+            key = proposal_key(event_id, event["destination account"], row["id"])
             current: dict[str, Any] = {}
             proposed = {key: value for key, value in event["values"].items() if key in REPLACED}
             status, actionable = "pending", True
             changes: list[str] = []
+            diagnostics: dict[str, Any] = {}
             try:
                 current = values_of(row)
                 proposed = {**current, **proposed}
                 proposed["comment"] = replacement_comment(row, event)
+                diagnostics = {field: {"current": current[field], "source": proposed[field]}
+                               for field in changed_fields(current, proposed)}
                 legacy_trade = marker_of(row) in event["legacy"] and event["values"]["type"] != "DIVIDEND"
                 legacy_dividend = (marker_of(row) in event["legacy"] and event["values"]["type"] == "DIVIDEND"
                                    and (event["legacy safe"] or (event_id, row["id"]) in migration_pairs))
@@ -669,6 +794,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     "match reason": reason, "current values": current, "proposed values": proposed,
                     "changed fields": changes, "status": status, "approve": None,
                     "actionable": actionable, "binding": binding, "review revision": uuid4().hex,
+                    "source evidence": plain({**event, "payload": wire_values(event["payload"])}),
+                    "diagnostic differences": diagnostics,
                     "date context": "Full instants; proximity uses local calendar dates"}
             item.update(section="reference_updates" if changes == ["comment"] else "activity_corrections",
                         **{"evidence level": ("blocked" if not actionable else
@@ -676,7 +803,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                            "execution path": "normal run"})
             old = previous.get(key)
             if old:
-                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS}
+                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS, *EVIDENCE_FIELDS}
                 comparison = {k: v for k, v in old.items() if k not in ignored}
                 if comparison == {k: v for k, v in item.items() if k not in ignored}:
                     item["approve"] = old["approve"] if actionable else None
@@ -684,8 +811,12 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 else:
                     item["status"] = "changed evidence; approval cleared" if actionable else status
             auto = automatic.get((event_id, row["id"]))
+            try:
+                numbers = reconciliation_rules.numeric_evidence(event, current)
+            except (RuntimeError, KeyError, ArithmeticError, ValueError):
+                numbers = {"cause": "Missing or unsupported exact financial evidence"}
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
-                         "numeric evidence": auto["numeric evidence"] if auto else {},
+                         "numeric evidence": numbers,
                          "profile date context": auto["profile date context"] if auto else {}})
             result[key] = item
     # Keep missing targets and unavailable sources; reassignment needs positive evidence.
@@ -822,14 +953,18 @@ JOURNAL_FIELDS = {"source event", "destination account", "activity id", "host", 
 
 def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
     for key, entry in state["journal"]["entries"].items():
-        if (set(entry) != JOURNAL_FIELDS or entry["host"] != config["ghost_host"]
+        if (set(entry) not in (JOURNAL_FIELDS, JOURNAL_FIELDS | {"authority", "eligibility"})
+                or entry.get("authority", "manual") not in ("manual", "conservative", "balanced", "permissive")
+                or entry["host"] != config["ghost_host"]
                 or entry["status"] not in ("pending", "confirmed")
                 or not isinstance(entry["before"], dict) or not isinstance(entry["after"], dict)
                 or entry["before"].get("id") != entry["activity id"]
                 or entry["after"].get("id") != entry["activity id"]
                 or entry["before"].get("accountId") != entry["destination account"]
                 or entry["after"].get("accountId") != entry["destination account"]
-                or entry["proposal key"] != fingerprint([entry["source event"], entry["destination account"], entry["activity id"]])
+                or entry["proposal key"] not in (
+                    fingerprint([entry["source event"], entry["destination account"], entry["activity id"]]),
+                    proposal_key(entry["source event"], entry["destination account"], entry["activity id"]))
                 or not isinstance(entry["review revision"], str)
                 or re.fullmatch(r"[0-9a-f]{32}", entry["review revision"]) is None
                 or key != fingerprint([entry["proposal key"], entry["review revision"]])):
@@ -880,7 +1015,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             unresolved.add(entry["destination account"])
             unresolved_events.add(entry["source event"])
     blocked |= unresolved
-    consumed = {(entry["proposal key"], entry["review revision"])
+    consumed = {(state["evidence"]["aliases"].get(entry["proposal key"], entry["proposal key"]), entry["review revision"])
                 for entry in state["journal"]["entries"].values() if entry["status"] == "confirmed"}
     remaining_previous = {key: item for key, item in original.items()
                           if (key, item["review revision"]) not in consumed}
@@ -941,7 +1076,8 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         entry = {"review revision": current["review revision"], "proposal key": item["key"], "source event": item["source event"], "destination account": account,
                  "activity id": row["id"], "host": config["ghost_host"], "binding": current["binding"],
                  "before": values_of(row), "after": after, "request": plain(wire_values(payload)),
-                 "status": "pending", "verified result": None}
+                 "status": "pending", "verified result": None, "authority": "manual", "eligibility": {}}
+        state["journal"]["version"] = 2
         state["journal"]["entries"][request_key] = entry
         publish_journal(state)
         assert_unchanged(state)

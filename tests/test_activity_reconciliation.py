@@ -302,3 +302,116 @@ def test_conformity_signed_tax_keeps_validated_source_fee(tax, refund, fee):
                       quantity=D("100"), unitPrice=D("0.25"), fee=D(fee))
     proposals, held = refresh_proposals({}, events, [row], {"U1": "acc"})
     assert not proposals and not held
+
+
+def test_compact_review_private_evidence_decision_and_missing_state(tmp_path):
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import preview
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    try:
+        review.publish_review(state, {"version": 1, "proposals": preview()})
+    finally:
+        review.close_review(state)
+    public = review.read_yaml(path.read_bytes())
+    assert public["version"] == 3
+    assert set(public) == {"version", "generation", "summary", "groups", "consistent", *review.SECTIONS}
+    item = next(iter(public["activity_corrections"].values()))
+    assert "current values" not in item and "binding" not in item
+    assert item["proposed"]["comment"] == "IBKR#v2#U1:TRADE:T1"
+    item["decision"] = "yes"
+    path.write_text(__import__("yaml").safe_dump(public))
+    loaded = review.load_review(path)
+    assert next(iter(loaded["proposals"].values()))["approve"] == "yes"
+    evidence = path.with_name(path.name + ".state.yaml")
+    assert evidence.stat().st_mode & 0o777 == 0o600
+    evidence.rename(path.with_name("retained-state.yaml"))
+    with pytest.raises(RuntimeError, match="state"):
+        review.open_review(str(path), [])
+
+
+def test_compact_review_previous_generation_and_unknown_generation(tmp_path, monkeypatch):
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import preview
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    try:
+        review.publish_review(state, {"version": 1, "proposals": preview()})
+        public = review.read_yaml(path.read_bytes())
+        next(iter(public["activity_corrections"].values()))["decision"] = "yes"
+        path.write_text(__import__("yaml").safe_dump(public))
+    finally:
+        review.close_review(state)
+    state = review.open_review(str(path), [])
+    real_atomic = review.atomic_yaml
+    def crash(target, document):
+        if target == path:
+            raise OSError("synthetic publication interruption")
+        return real_atomic(target, document)
+    try:
+        monkeypatch.setattr(review, "atomic_yaml", crash)
+        changed = __import__("copy").deepcopy(state["document"])
+        next(iter(changed["proposals"].values()))["status"] = "new status"
+        with pytest.raises(OSError):
+            review.publish_review(state, changed)
+    finally:
+        review.close_review(state)
+    monkeypatch.setattr(review, "atomic_yaml", real_atomic)
+    state = review.open_review(str(path), [])
+    try:
+        assert next(iter(state["document"]["proposals"].values()))["approve"] == "yes"
+        review.publish_review(state, state["document"])
+    finally:
+        review.close_review(state)
+    public = review.read_yaml(path.read_bytes())
+    public["generation"] = "unknown"
+    path.write_text(__import__("yaml").safe_dump(public))
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError, match="generation"):
+        review.open_review(str(path), [])
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_compact_review_legacy_journal_keys_preserved_and_never_resent(tmp_path, monkeypatch, version):
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import run_review
+    server, state, config, blocked, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
+    assert blocked
+    proposal = __import__("copy").deepcopy(next(iter(state["document"]["proposals"].values())))
+    entry = __import__("copy").deepcopy(next(iter(state["journal"]["entries"].values())))
+    path, journal_path, state_path = state["path"], state["journal_path"], state["state_path"]
+    review.close_review(state)
+    legacy_key = review.fingerprint([proposal["source event"], proposal["destination account"], proposal["activity id"]])
+    proposal.update(key=legacy_key, approve="yes")
+    entry["proposal key"] = legacy_key
+    entry.pop("authority"); entry.pop("eligibility")
+    journal = {"version": 1, "entries": {review.fingerprint([legacy_key, entry["review revision"]]): entry}}
+    legacy = {"version": 1, "proposals": {legacy_key: proposal}} if version == 1 else {
+        "version": 2, "reference_updates": {}, "activity_corrections": {legacy_key: proposal}}
+    review.atomic_yaml(path, legacy)
+    review.atomic_yaml(journal_path, journal)
+    state_path.rename(tmp_path / "saved-state.yaml")
+    journal_before = journal_path.read_bytes()
+    state = review.open_review(str(path), [])
+    try:
+        item = next(iter(state["document"]["proposals"].values()))
+        assert item["approve"] is None and item["review revision"] == proposal["review revision"]
+        assert state["evidence"]["aliases"][legacy_key] == item["key"]
+        blocked, held = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert blocked and held and len(server.writes) == 1
+        assert journal_path.read_bytes() == journal_before
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("companion", [".state.yaml", ".journal.yaml", ".lock"])
+def test_compact_review_preserves_input_at_every_companion_boundary(tmp_path, companion):
+    from ghostfolio_ibkr_sync import activity_review as review
+    path = tmp_path / "review.yaml"
+    source = tmp_path / ("review.yaml" + companion)
+    source.write_text("protected input")
+    source.chmod(0o600)
+    with pytest.raises(RuntimeError, match="overlaps"):
+        review.open_review(str(path), [str(source)])
+    assert source.read_text() == "protected input" and not path.exists()

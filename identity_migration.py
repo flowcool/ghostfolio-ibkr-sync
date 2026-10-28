@@ -651,15 +651,17 @@ def migration_evidence(inputs: Path, review_file: Path | None = None) -> tuple[d
         path = safe_path(review_file)
         review.safe_path(path, list(captured))
         data = path.read_bytes()
-        document = review.decode_review(review.read_yaml(data))
-        require(review.read_yaml(data).get("version") == 2, "Historical preparation requires schema 2")
+        document = review.load_review(path, list(captured))
+        state_path = Path(str(path) + ".state.yaml")
+        captured[state_path] = state_path.read_bytes()
+        require(review.read_yaml(data).get("version") == 3, "Historical preparation requires compact schema 3")
         review.refresh_proposals(document["proposals"], {}, snapshot["activities"], config["accounts"])
         journal_path = Path(str(path) + ".journal.yaml")
         if journal_path.exists():
             review.safe_path(journal_path, list(captured))
             journal_data = journal_path.read_bytes()
             journal = review.read_yaml(journal_data)
-            review.validate_document(journal, "entries")
+            review.validate_document({**journal, "version": 1}, "entries")
             require(all(entry.get("status") == "confirmed" for entry in journal["entries"].values()),
                     "Pending review request blocks historical preparation")
             captured[journal_path] = journal_data
@@ -680,7 +682,7 @@ def migration_evidence(inputs: Path, review_file: Path | None = None) -> tuple[d
                 "Conflicting shared review approvals")
         chosen_ids = {expected[key]["activity id"] for key in selected}
         manifest["replacements"] = [item for item in manifest["replacements"] if item["id"] in chosen_ids]
-        manifest["review_selection"] = {"schema": 2, "sha256": digest(data), "keys": sorted(selected)}
+        manifest["review_selection"] = {"schema": 3, "sha256": digest(data), "keys": sorted(selected)}
         captured[path] = data
     bind_selection(manifest, saved_reports, snapshot["activities"], config)
     manifest["limitations"].append(
@@ -721,7 +723,7 @@ def historical_proposals(manifest: dict[str, Any]) -> dict[str, Any]:
         before = review.values_of(row)
         proposed = {**before, "comment": replacement["new_comment"]}
         source, destination = event["source_account"], row["accountId"]
-        key = review.fingerprint([replacement["new_comment"], destination, row["id"]])
+        key = review.proposal_key(replacement["new_comment"], destination, row["id"], "historical maintenance")
         result[key] = {"key": key, "source account": source,
                        "source event": replacement["new_comment"], "destination account": destination,
                        "activity id": row["id"], "match reason": "exact historical reference",
@@ -758,6 +760,51 @@ def stage_review(inputs: Path, review_file: Path) -> int:
             require(safe_path(path).read_bytes() == data, "Historical input changed during staging")
         review.publish_review(state, {"version": 1, "proposals": {**previous, **staged}})
         return len(staged)
+    finally:
+        review.close_review(state)
+
+
+def rebuild_review(inputs: Path, review_file: Path) -> int:
+    """Rebuild private evidence from captured inputs. No credentials or HTTP.
+
+    Surviving bytes stay in content-addressed private companions. Unresolved
+    requests stay unresolved. Lost rejection history is never reconstructed.
+    """
+    from ghostfolio_ibkr_sync import activity_review as review
+
+    manifest, captured = migration_evidence(inputs)
+    config = keyed_yaml(captured[safe_path(inputs)])
+    snapshot_path = safe_path(inputs.parent / config["snapshot"]["path"])
+    rows = exact_json(captured[snapshot_path])["activities"]
+    events = {}
+    for ref in config["reports"].values():
+        account = ref["source_account"]
+        xml = captured[safe_path(inputs.parent / ref["path"])].decode("utf-8-sig")
+        fresh = review.source_events(xml, account, config["accounts"][account], config["symbol_mapping"])
+        for key, event in fresh.items():
+            require(key not in events or events[key] == event, "Conflicting saved source events")
+            events[key] = event
+    state = review.open_review(str(review_file), [str(path) for path in captured], rebuild=True)
+    try:
+        # Validate every output boundary before writing any retained copy.
+        retained = {}
+        for path in (state["path"], state["state_path"], state["journal_path"]):
+            data = review.file_bytes(path)
+            if data is not None:
+                backup = Path(str(path) + ".retained-" + digest(data))
+                review.safe_path(backup, [*captured, state["path"], state["state_path"], state["journal_path"]])
+                require(not backup.exists() or backup.read_bytes() == data, "Changed retained recovery copy")
+                retained[backup] = data
+        for path, data in captured.items():
+            require(path.read_bytes() == data, "Saved inputs changed before rebuild")
+        review.assert_unchanged(state)
+        for path, data in retained.items():
+            review.atomic_bytes(path, data)
+        proposals, _ = review.refresh_proposals({}, events, rows, manifest["accounts"], timezone=config["timezone"])
+        review.publish_review(state, {"version": 1, "proposals": proposals,
+            "summary": {"simulation": True, "profile": "off", "recovery":
+                        "State rebuilt; all decisions cleared; rejection history lost; journals remain unresolved"}})
+        return len(proposals)
     finally:
         review.close_review(state)
 
@@ -887,7 +934,7 @@ def _apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
     payloads = {}
     from ghostfolio_ibkr_sync import activity_review as review
 
-    consent = review.decode_review(review.read_yaml(captured[safe_path(review_file)]))["proposals"]
+    consent = review.decode_review(review.read_yaml(captured[safe_path(review_file)]), review.read_yaml(captured[Path(str(safe_path(review_file)) + ".state.yaml")]))["proposals"]
     consent_by_id = {consent[key]["activity id"]: (key, consent[key]["review revision"])
                      for key in proposed["review_selection"]["keys"]}
     for replacement in replacements:
@@ -1127,6 +1174,9 @@ def main() -> int:
     command = commands.add_parser("review", help="Stage exact historical references in the shared review file offline")
     command.add_argument("--inputs", type=Path, required=True)
     command.add_argument("--review", type=Path, required=True)
+    command = commands.add_parser("rebuild-review", help="Rebuild private review state offline; clear all decisions")
+    command.add_argument("--inputs", type=Path, required=True)
+    command.add_argument("--review", type=Path, required=True)
     command = commands.add_parser("prepare", help="Prove the exact yes historical subset offline")
     command.add_argument("--inputs", type=Path, required=True)
     command.add_argument("--review", type=Path, required=True)
@@ -1162,6 +1212,9 @@ def main() -> int:
             print(preview(args.inputs, args.output))
         elif args.command == "review":
             print(f"Historical reference proposals staged: {stage_review(args.inputs, args.review)}; no financial writes")
+        elif args.command == "rebuild-review":
+            print(f"Review state rebuilt: {rebuild_review(args.inputs, args.review)} candidates; simulation only; "
+                  "decisions cleared; rejection history lost; journals preserved; profile cooldown required")
         elif args.command == "prepare":
             print(prepare_review(args.inputs, args.review, args.output))
         elif args.command == "inspect":
