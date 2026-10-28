@@ -1,39 +1,48 @@
 # Configuration and operations
 
-Use the [first-install guide](getting-started.md) for setup. This reference covers
-authentication, ENV, mapping, runtime outcomes and advanced Docker operations.
+Use [First installation](getting-started.md) for setup.
+
+- [Ghostfolio setup](#ghostfolio-setup) · [ENV reference](#configuration-reference)
+- [Compose settings](#compose-settings) · [Mapping](#mapping-and-reconciliation)
+- [Run and preview](#running) · [Compose / Portainer](#docker-compose--portainer)
+- [Notifications](#notifications-apprise) · [Cycle result](#cycle-result)
+- [Limits](#limitations) · [Troubleshooting](troubleshooting.md)
+- Advanced: [conversion rules](#how-activities-are-converted), [retries](#flex-retry-policy),
+  [legacy authentication](#legacy-authentication), [platform metadata](#optional-platform-metadata)
 
 
 
 ## Ghostfolio Setup
 
-### 1. Choose how the sync authenticates
+<a id="1-choose-how-the-sync-authenticates"></a>
+
+### Choose authentication
 
 Use `GHOST_ACCESS_TOKEN` for a new installation. Set exactly one credential mode;
 both or neither stops startup. [Legacy authentication](#legacy-authentication) is
 available for existing bearer-token installations.
 
-- **`GHOST_ACCESS_TOKEN` (recommended)** — the Ghostfolio *security token* you sign in with
-  (shown when the user was created; Ghostfolio can generate a new one). At the start of every
-  run, after the configuration and mapping file are validated and before anything is read from
-  Ghostfolio or IBKR, the sync exchanges it once for a fresh session token via
-  `POST /api/v1/auth/anonymous`. There is nothing to renew by hand. A dry run logs in too
-  (logging in writes no financial data). The security token is long-lived: treat it like a
-  password, and rotate it in Ghostfolio if it leaks.
-With `GHOST_ACCESS_TOKEN`, `GHOST_HOST` must be a plain `http://` or `https://` URL (an
-optional path is allowed): user credentials, a query string, a fragment, whitespace or control
-characters are refused before any request. The login request does not follow redirects, so point
-`GHOST_HOST` at the final Ghostfolio URL. A run never logs in again midway: if the session token
-is refused later in the run, that run fails with exit 1 and the next run logs in afresh.
+Use the Ghostfolio security token shown when the user was created.
+Ghostfolio can generate a new one. Set it as `GHOST_ACCESS_TOKEN`.
 
-**Plain `http://` is for a trusted network only.** The login request carries the long-lived
-security token in its body, so over `http://` anyone who can observe the path can capture it
-(the session token of every later request, in either mode, is exposed the same way). Use
-`http://` only when the sync reaches Ghostfolio over a private link, such as the internal Docker
-network of a shared compose stack (`http://ghostfolio:3333`). When the traffic crosses any other
-network, point `GHOST_HOST` at an `https://` URL.
+The connector validates configuration and mapping first.
+It then exchanges the security token for a new session token with `POST /api/v1/auth/anonymous`.
+It uses this session token for the current run. Simulation logs in too.
+No manual session renewal is needed.
 
-### 3. Create accounts
+Treat the security token as a password. Rotate it if it leaks.
+Set `GHOST_HOST` to the final `http://` or `https://` URL. An optional path is allowed.
+Credentials, query strings, fragments, whitespace and control characters are refused before any request.
+Login does not follow redirects. It is not retried midway through a run.
+If the session is refused later, the run exits 1. The next run logs in again.
+
+**Use HTTP only on a trusted private link**, such as a shared Docker network.
+HTTP exposes the security token during login and the session token on later requests.
+Use HTTPS for traffic across any other network.
+
+<a id="3-create-accounts"></a>
+
+### Create accounts
 
 Create one Ghostfolio account per IBKR sub-account:
 
@@ -43,7 +52,9 @@ Create one Ghostfolio account per IBKR sub-account:
 4. Set the currency to match the sub-account base currency
 5. Repeat for each sub-account
 
-### 4. Add currencies
+<a id="4-add-currencies"></a>
+
+### Add currencies
 
 If your IBKR trades involve currencies that are not yet in Ghostfolio:
 
@@ -51,9 +62,14 @@ If your IBKR trades involve currencies that are not yet in Ghostfolio:
 2. Search for and add any missing currency pairs (for example `USDEUR`, `USDGBP`, `USDCHF`)
 3. Ghostfolio needs these to convert values to your base currency
 
-### 5. After your first import
+<a id="5-after-your-first-import"></a>
 
-After the first sync, go to **Admin** - **Market Data** and click **Gather All Data**. This fetches historical prices from Yahoo Finance for all newly imported symbols. Without this step, portfolio values and performance charts will be incorrect. Run it again after adding symbols from a new import.
+### After your first import
+
+After the first sync, open **Admin** - **Market Data**.
+Click **Gather All Data** to fetch historical Yahoo prices for imported symbols.
+Without these prices, values and performance charts will be incorrect.
+Repeat after importing new symbols.
 
 
 ## Configuration reference
@@ -96,7 +112,9 @@ unsuffixed ENV names. `CRON_INDIVIDUAL` and `CRON_JOINT` select separate schedul
 
 ## Optional platform metadata
 
-### 2. Create an IBKR Platform
+<a id="2-create-an-ibkr-platform"></a>
+
+### Create an IBKR Platform
 
 Optional. GHOST_PLATFORM_ID is not required for import or the first installation.
 Use these steps only if you want to fill missing platform metadata.
@@ -134,9 +152,16 @@ when rolling back to one, set `GHOST_TOKEN` again first.
 
 ## Mapping and reconciliation
 
-The mapping file maps ISINs to Yahoo Finance ticker symbols. It does not learn new mappings or rewrite itself. IBKR identifies securities by ISIN while Ghostfolio uses Yahoo Finance tickers for price data, so European listings often need a reviewed entry.
+The mapping file links ISINs to Yahoo Finance tickers.
+IBKR uses ISINs. Ghostfolio uses Yahoo tickers for prices.
+European listings often need a reviewed entry.
+The connector does not learn mappings or rewrite this file.
 
-Reconciliation is a separate runtime step. The connector uses source identities, existing activities, same-ISIN manual-entry matching, proximity rules, and a holdings gate before it selects imports. An unresolved ticker produces a warning or a failed activity subset; it does not silently create a mapping. Optional `ACTIVITY_REVIEW_FILE` can generate exact or probable one-to-one correction proposals, but a correction requires an explicit approval and qualified readback.
+Before selecting imports, the connector checks identities, existing activities and holdings.
+It also checks manual entries by ISIN and proximity.
+Unresolved tickers produce a warning or a failed activity subset. They never create mappings.
+Optional `ACTIVITY_REVIEW_FILE` generates exact or probable one-to-one proposals.
+Corrections need explicit approval and qualified readback.
 
 ### Format
 
@@ -345,65 +370,67 @@ not enable `DRY_RUN`; other accounts retain their configured mode. Other cash
 types are outside this check. Follow the [staged activation and rollback
 procedure](ibkr-setup.md#activate-timezone-aware-dividend-diagnostics).
 
-Every dry run also compares historical dividends in the target account before
-deduplication. The INFO summary reports coverage and categories; details for
-differences or uncertainty include source comments and activity IDs. A coherent
-single activity has the canonical source comment, consistent security and local
-date in `TZ`, and exactly equal quantity, gross and fee. The IBKR `YYYYMMDD`
-is the source business day; the destination instant is rendered in `TZ` for
-comparison. Flex suffixes provide provenance; import UTC conversion is unchanged.
-Gross comes from broker cash; accruals establish quantity. Component quantities
-are never summed. Several
-activities with the same group comment do not prove a component partition,
-even when their amounts sum correctly; that comparison stays uncertain.
-An independently identified component set must cover every source component
-exactly once. Each component keeps its own quantity and monetary comparison.
+Every dry run also compares historical dividends in the target account before deduplication.
+INFO reports coverage and categories. Difference and uncertainty details include source comments and activity IDs.
+A coherent activity needs the canonical source comment, consistent security and local date in `TZ`.
+Its quantity, gross and fee must match exactly.
+IBKR `YYYYMMDD` gives the source business day. The destination instant is compared in `TZ`.
+Flex suffixes provide provenance; import UTC conversion is unchanged.
+Gross comes from broker cash; accruals establish quantity.
+Component quantities are never summed.
+Several activities with one group comment do not prove a component partition.
+Matching totals do not resolve this uncertainty.
+An independently identified component set must cover every source component exactly once.
+Each component keeps its own quantity and monetary comparison.
 The reader does not invent component identities for historical activities.
-Two or more identity-proven complete representations indicate probable repetition,
-even if their quantities or amounts differ. Incomplete partitions and contested
-ownership remain uncertain. Matching amounts never establish completeness, and
-the diagnostic never searches arbitrary subsets of activities.
+Two or more identity-proven complete representations indicate probable repetition, even if their quantities or amounts differ.
+Incomplete partitions and contested ownership remain uncertain.
+Matching amounts never establish completeness, and the diagnostic never searches arbitrary subsets of activities.
 
 The diagnostic retains original JSON decimals from the existing activities GET.
-It never reconstructs exact evidence from floats. Activity currency determines
-the denomination; only an explicit null permits profile currency fallback, with
-its provenance retained. Supported denominations are USD, EUR, GBP, CHF, JPY,
-CAD, AUD, NZD, HKD, SGD, SEK, NOK, DKK, PLN, CZK, HUF, ILS, ZAR and the existing
-GBp, ZAc and ILA minor units. Missing or unsupported context stays uncertain;
-the log then shows the observed source and destination currency and provenance
-on a `currency context:` line, whatever the supported list says.
+It never reconstructs exact evidence from floats.
+Activity currency determines denomination. Only explicit null permits profile-currency fallback.
+The diagnostic retains the fallback provenance.
+Supported denominations are USD, EUR, GBP, CHF, JPY, CAD, AUD, NZD, HKD, SGD, SEK, NOK, DKK, PLN, CZK, HUF, ILS, ZAR and the existing GBp, ZAc and ILA minor units.
+Missing or unsupported context stays uncertain, regardless of the supported list.
+The `currency context:` line shows source and destination currencies and provenance.
 Gross and fee differences use destination minus source, without a tolerance.
-Every nonzero exact delta remains visible, including differences smaller than
-float precision. Source fee is the positive part of the negative net cash
-withholding; signed withholding and refund rows and their total remain separate
-evidence. Coherence requires exact quantity, gross and fee agreement; a complete
-representation with a discrepancy is not coherent.
-The diagnostic adds no reads, writes or files. Findings do not change
-import selection, cash updates or exit codes. Required user checks join the
-consolidated notification. Live runs do not
-run this comparison. Use the one-off command below without `CRON`.
+Every nonzero exact delta remains visible, including differences smaller than float precision.
+Source fee is the positive part of negative net cash withholding.
+Signed withholding, refunds and their total stay separate evidence.
+Coherence needs exact quantity, gross and fee agreement.
+A complete representation with any discrepancy is not coherent.
+The diagnostic adds no reads, writes or files.
+Findings do not change import selection, cash updates or exit codes.
+Required user checks join the consolidated notification.
+Live runs do not run this comparison.
+Use the one-off command below without `CRON`.
 
-`absent` means no canonical destination comment was found. It does not establish
-that a payment is missing: legacy comments, symbol-only comments, proximity and
-timezone explanations cannot certify identity. Inactive or unsupported records,
-conflicting security/date context and missing/conflicting accruals stay uncertain.
-Missing destination profile ISIN is unavailable evidence and permits amount
-comparison; a nonempty conflicting ISIN blocks identity. Details name the
-active, activity-ID, data-source, symbol, local-date and ISIN checks with
-expected and observed values. INFO counts failed checks. WARNING shows actionable
-anomaly blocks with securities, source and destination UTC/local dates, activity IDs,
-quantity, gross, fee and currency. An `absent` group suppressed by deduplication
-shows the skip path that import selection takes: `skipped by historical comment`
-when the account has an old `dividend#<symbol>#<date>` comment (active or not),
-else `skipped by proximity` (rows with a `dividend#` comment never count as proximity candidates, and the block also shows source and candidate gross). Each shows candidate values and active status; the
-group remains absent and neither label certifies identity. Outside-window records also show their security,
-date and values.
-The summary counts source payment groups and unmatched destination dividends
-separately. Every unmatched target-account dividend remains visible. A UTC date
-outside explicit, consistent Flex statement `fromDate`/`toDate` bounds is reported
-as `outside_window`; without valid bounds, history stays uncertain. The connector
-does not infer a window from the first or last payment. Short reports cannot
-verify older history. No category authorizes a repair.
+`absent` means no canonical destination comment was found.
+It does not prove a missing payment.
+Legacy comments, symbol-only comments, proximity and timezone explanations cannot certify identity.
+Inactive or unsupported records, conflicting security/date context and missing/conflicting accruals stay uncertain.
+A missing destination profile ISIN permits amount comparison. It remains unavailable evidence.
+A nonempty conflicting ISIN blocks identity.
+Details name the active, activity-ID, data-source, symbol, local-date and ISIN checks with expected and observed values.
+INFO counts failed checks.
+WARNING shows actionable anomaly blocks with securities, source and destination UTC/local dates, activity IDs, quantity, gross, fee and currency.
+For an `absent` group suppressed by deduplication, the log names the skip path:
+
+- `skipped by historical comment`: the account has an old `dividend#<symbol>#<date>` comment, active or not.
+- `skipped by proximity`: no historical match. Rows with `dividend#` comments are excluded from proximity candidates.
+  The block shows source and candidate gross.
+
+Both paths show candidate values and active status.
+The group remains absent. Neither label certifies identity.
+Outside-window records also show their security, date and values.
+The summary counts source payment groups and unmatched destination dividends separately.
+Every unmatched target-account dividend remains visible.
+A UTC date outside explicit, consistent Flex `fromDate`/`toDate` bounds is `outside_window`.
+Without valid bounds, history stays uncertain.
+The connector does not infer a window from the first or last payment.
+Short reports cannot verify older history.
+No category authorizes a repair.
 
 Use `.env.run`, state mounts and the no-overlap rules from
 [the standalone run](#single-account-one-off-run). Keep `CRON` out of the file.
@@ -578,7 +605,7 @@ without a compatibility launcher, so update any script or note that calls it.
 - **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
 - **Corporate actions** - detection holds unsafe BUY/SELL. Treatment remains manual. See [persistent evidence, date proof and recovery](corporate-actions.md).
-- **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. The Ghostfolio account must have the same currency as the IBKR base currency (see [Create accounts](#3-create-accounts)); the sync refuses to write the balance otherwise.
+- **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. The Ghostfolio account must have the same currency as the IBKR base currency (see [Create accounts](#create-accounts)); the sync refuses to write the balance otherwise.
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.
 - **Account-scoped queries** - use a separate Flex Query per sub-account. Several account/query pairs can run sequentially in one container; separate containers are recommended for operational isolation.
