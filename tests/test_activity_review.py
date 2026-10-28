@@ -125,11 +125,12 @@ def test_review_candidates_exclude_ineligible_rows(change):
     assert not proposals
 
 
-def test_review_source_scope_legacy_global_requires_historical_proof():
+def test_review_source_scope_legacy_mapping_authorizes_comment_only():
     proposals, _ = review.refresh_proposals({}, source_events(), [destination("IBKR#T1")], {"U1": "acc"})
     proposal = next(iter(proposals.values()))
-    assert proposal["status"] == "historical cross-account coverage unavailable"
-    assert proposal["actionable"] is False
+    assert proposal["changed fields"] == ["comment"]
+    assert proposal["actionable"] is True
+    assert proposal["proposed values"]["quantity"] == "1"
 
 
 def test_review_candidates_dividend_uses_one_action_and_three_day_window():
@@ -1089,11 +1090,10 @@ def test_review_schema_two_section_move_and_duplicate_are_refused():
 def test_review_blocked_yes_cannot_become_approval():
     events = source_events()
     row = destination("IBKR#T1")
-    old, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
-    key = next(iter(old))
+    old, _ = review.refresh_proposals({}, events, [row, dict(row, id="duplicate")], {"U1": "acc"})
+    key = next(k for k, item in old.items() if item["activity id"] == "row1")
     old[key]["approve"] = "yes"
     assert old[key]["evidence level"] == "blocked"
-    next(iter(events.values()))["legacy safe"] = True
     fresh, _ = review.refresh_proposals(old, events, [row], {"U1": "acc"})
     assert fresh[key]["actionable"] is True and fresh[key]["approve"] is None
 

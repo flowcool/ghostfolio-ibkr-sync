@@ -188,3 +188,58 @@ def test_unique_matching_refuses_conflicting_evidence(change):
     proposals, _ = refresh_proposals({}, matching_events(), [matching_row(**change)],
                                      {"U1": "acc"}, reconciliation="permissive", timezone="UTC")
     assert not any(item["automatic eligible"] for item in proposals.values())
+
+
+def test_legacy_migration_preserves_all_other_values_and_separates_correction():
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import destination
+    events = matching_events()
+    row = destination("IBKR#T1", quantity=D("2"), fee=D("999"), date="2020-01-01T00:00:00Z")
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="conservative")
+    item = next(iter(proposals.values()))
+    assert item["changed fields"] == ["comment"]
+    assert item["automatic eligible"] and item["actionable"]
+    assert {k: v for k, v in item["current values"].items() if k != "comment"} == {k: v for k, v in item["proposed values"].items() if k != "comment"}
+    row["comment"] = item["proposed values"]["comment"]
+    later, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="conservative")
+    correction = next(iter(later.values()))
+    assert correction["changed fields"] == ["date", "fee", "quantity"]
+    assert not correction["automatic eligible"]
+
+
+def test_legacy_migration_manual_off_and_current_collisions():
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    row = matching_row(comment="IBKR#T1", fee=D("99"))
+    proposals, _ = refresh_proposals({}, matching_events(), [row], {"U1": "acc"})
+    assert next(iter(proposals.values()))["actionable"]
+    assert not next(iter(proposals.values()))["automatic eligible"]
+    for extra in (dict(row, id="duplicate"), dict(row, id="occupied", comment="IBKR#v2#U1:TRADE:T1")):
+        proposals, _ = refresh_proposals({}, matching_events(), [row, extra], {"U1": "acc"}, reconciliation="balanced")
+        assert not any(item["actionable"] for item in proposals.values())
+
+
+def test_legacy_migration_same_ids_independent_destinations():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync.activity_review import source_events, refresh_proposals
+    events = matching_events()
+    events.update(source_events(report(trade_xml("T1"), source_account="U2"), "U2", "other", {}))
+    rows = [matching_row(comment="IBKR#T1"), matching_row(id="second", comment="IBKR#T1", accountId="other")]
+    proposals, _ = refresh_proposals({}, events, rows, {"U1": "acc", "U2": "other"}, reconciliation="balanced")
+    assert len(proposals) == 2 and all(item["automatic eligible"] for item in proposals.values())
+    events[next(key for key in events if "U2" in key)]["destination account"] = "acc"
+    proposals, _ = refresh_proposals({}, events, rows[:1], {"U1": "acc", "U2": "acc"}, reconciliation="balanced")
+    assert not any(item["actionable"] for item in proposals.values())
+
+
+def test_legacy_migration_readback_rebuilds_pending_financial_correction(tmp_path, monkeypatch):
+    from test_activity_review import run_review, destination
+    from ghostfolio_ibkr_sync import activity_review as review
+    server, state, config, blocked, held = run_review(tmp_path, monkeypatch, rows=[destination("IBKR#T1")])
+    try:
+        assert not blocked and len(server.writes) == 1
+        assert server.writes[0]["quantity"] == 1
+        assert held == {"IBKR#v2#U1:TRADE:T1"}
+        item = next(iter(state["document"]["proposals"].values()))
+        assert item["changed fields"] == ["quantity"] and item["approve"] is None
+    finally:
+        review.close_review(state)

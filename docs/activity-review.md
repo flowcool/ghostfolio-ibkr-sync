@@ -276,3 +276,18 @@ unrounded difference, reproduced price and finite binary error bound.
 Display totals use decimal half-even rounding once, after multiplication.
 The connector does not round quantities or payload prices for matching.
 Readback still requires the exact transmitted values.
+
+### Mapping responsibility for historical references
+
+The configured source-to-destination account mapping establishes ownership.
+A unique current trade can upgrade its whole-comment legacy `IBKR#` reference.
+The upgrade changes only the comment. It preserves every financial field,
+account, owner, tag and supported note. A remaining difference becomes a
+separate correction after exact readback confirms the reference upgrade.
+Observed competing claims, duplicate targets and occupied v2 identities stop
+migration. Equal trade IDs mapped to separate destinations are independent.
+Historical cross-account coverage is not required.
+After confirmed migration, the connector rebuilds normal selection.
+Another account's previously suppressed trade can then pass its ordinary
+account-scoped checks. Review the mapping before enabling a profile.
+Historical maintenance retains its separate saved-evidence and operation GO.

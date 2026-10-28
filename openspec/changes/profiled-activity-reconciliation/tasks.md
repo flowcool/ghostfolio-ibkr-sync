@@ -16,7 +16,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 4. Mapping-owned reference migration
 
-- [ ] 4.1 Permit unique comment-only legacy migration under mapping authority; preserve every other field and reselect after confirmation. Document mapping responsibility. Requirements: Mapping-owned historical identity. Files: activity_review.py, app.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "legacy_migration or review_source_scope"`.
+- [x] 4.1 Permit unique comment-only legacy migration under mapping authority; preserve every other field and reselect after confirmation. Document mapping responsibility. Requirements: Mapping-owned historical identity. Files: activity_review.py, app.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "legacy_migration or review_source_scope"`.
 
 ## 5. Conformity and dividend conflicts
 

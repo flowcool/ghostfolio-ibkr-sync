@@ -502,8 +502,10 @@ def update_payload(row: dict[str, Any], proposed: dict[str, Any]) -> dict[str, A
 def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: bool,
                      timezone: str = "UTC") -> str | None:
     reference = marker_of(row)
-    if reference == event["event"] or reference in event["legacy"]:
+    if reference == event["event"]:
         return "exact reference"
+    if reference in event["legacy"]:
+        return "exact reference" if row.get("accountId") == event["destination account"] else None
     if exact_exists or reference:
         return None
     target = event["values"]
@@ -542,6 +544,11 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
                         or (reference and reference.startswith("IBKR#v2#") and reference != event_id)):
                     continue
                 current = values_of(row)
+                if reference in event["legacy"] and source["type"] != "DIVIDEND":
+                    # Mapping authorizes identity only. No financial tolerance
+                    # can be used to fold a later correction into migration.
+                    edges[event_id, row["id"]] = {"numeric evidence": {}, "profile date context": {"timezone": timezone}}
+                    continue
                 date_ok, date_context = reconciliation_rules.date_eligible(name, source["date"], current["date"], source["type"], timezone)
                 numbers = reconciliation_rules.numeric_evidence(event, current)
                 quantity_ok = (numeric(source["quantity"]) == numeric(current["quantity"])
@@ -589,9 +596,11 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     satisfied: set[str] = set()
     automatic = automatic_pairs(events, rows, reconciliation, timezone)
     for event_id, event in sorted(events.items()):
-        exact_exists = any(marker_of(row) == event_id or marker_of(row) in event["legacy"] for row in rows)
+        exact_exists = any(marker_of(row) == event_id or (marker_of(row) in event["legacy"]
+                           and row.get("accountId") == event["destination account"]) for row in rows)
         occupied = sorted((row["id"], row.get("accountId"), marker_of(row)) for row in rows
-                          if marker_of(row) == event_id or marker_of(row) in event["legacy"])
+                          if marker_of(row) == event_id or (marker_of(row) in event["legacy"]
+                          and row.get("accountId") == event["destination account"]))
         for row in sorted(rows, key=lambda item: item["id"]):
             try:
                 reason = candidate_reason(row, event, exact_exists, timezone)
@@ -607,6 +616,9 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 current = values_of(row)
                 proposed = {**current, **proposed}
                 proposed["comment"] = replacement_comment(row, event)
+                legacy_trade = marker_of(row) in event["legacy"] and event["values"]["type"] != "DIVIDEND"
+                if legacy_trade:
+                    proposed = {**current, "comment": proposed["comment"]}
                 payload = update_payload(row, proposed)
                 expected_row(row, payload)
                 scope = event.get("dividend scope")
@@ -631,9 +643,11 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     raise RuntimeError("Conflicting destination account ownership")
                 if len(occupied) > 1:
                     raise RuntimeError("Reference occupancy conflict")
-                if marker_of(row) in event["legacy"] and not event["legacy safe"]:
-                    raise RuntimeError("historical cross-account coverage unavailable" if event["values"]["type"] != "DIVIDEND"
-                                       else "legacy aggregate cannot identify one action")
+                if legacy_trade and sum(other["destination account"] == event["destination account"]
+                                        and marker_of(row) in other["legacy"] for other in events.values()) != 1:
+                    raise RuntimeError("Conflicting current source claims to legacy activity")
+                if marker_of(row) in event["legacy"] and not legacy_trade and not event["legacy safe"]:
+                    raise RuntimeError("legacy aggregate cannot identify one action")
                 changes = changed_fields(current, proposed)
                 if not changes and marker_of(row) == event_id:
                     satisfied.add(event_id)
