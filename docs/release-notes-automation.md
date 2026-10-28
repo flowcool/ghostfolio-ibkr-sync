@@ -1,5 +1,9 @@
 # Release notes automation and breaking-change policy
 
+Historical investigation from 2026-10-08. Runtime, workflow and image-channel
+descriptions below record that date; they are not current release instructions.
+Use [Releasing](releasing.md) for the current procedure.
+
 Status: investigation result (2026-10-08); decision: Option A (native notes).
 The companion changes (labels workflow, `.github/release.yml`, PR template,
 [releasing.md](releasing.md)) are listed under "Implementation" below.

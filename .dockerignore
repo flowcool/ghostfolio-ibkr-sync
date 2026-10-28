@@ -4,6 +4,7 @@ venv
 __pycache__
 *.pyc
 .env
+.env.*
 sync*.log
 .venv
 tests
@@ -13,3 +14,6 @@ pytest.ini
 
 # Private corporate-action reports, date evidence and delivery state
 state/
+
+# Private activity-review proposals and correction journals
+review/
