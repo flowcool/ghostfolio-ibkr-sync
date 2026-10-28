@@ -37,10 +37,15 @@ def test_compose_services_use_read_only_hardening_and_tmpfs(filename, count):
     model = compose_example(filename)
     services = model['services']
     assert len(services) == count
+    assert compose_example()['services']['ibkr-sync-individual'] == services['ibkr-sync-individual']
+    assert len({s['volumes'][1] for s in services.values()}) == count
     assert model["networks"]["ghostfolio"] == {"external": True, "name": "${GHOST_DOCKER_NETWORK:-ghostfolio}"}
     assert len({service["environment"]["CRON"] for service in services.values()}) == count
     for name, service in services.items():
         assert service['environment']['DRY_RUN'] == '${DRY_RUN:-true}'
+        assert service['environment']['APPRISE_URLS'] == '${APPRISE_URLS:-}'
+        assert service['environment']['APPRISE_TIMEOUT'] == '${APPRISE_TIMEOUT:-10}'
+        assert service['environment']['LOG_LEVEL'] == '${LOG_LEVEL:-INFO}'
         assert service['user'] == '10001:10001'
         assert service['read_only'] is True
         assert service['cap_drop'] == ['ALL']

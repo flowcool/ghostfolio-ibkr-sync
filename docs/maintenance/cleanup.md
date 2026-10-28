@@ -5,9 +5,24 @@ backup, stopped competing writers and qualified history. These tools are not
 qualified for v2 history. Stop on uncertainty or drift. Preserve the journal and
 inspect it read-only; never start a fresh journal to bypass an uncertain result.
 
+**Recovery if you already used a shorter period:** review existing activities
+against the statement before widening the query. The repository contains
+`cleanup_duplicates.py` and `cleanup_dividends.py`. They require matching
+account, currency and asset-profile identity, unique one-to-one matches,
+and fresh records before mutation. These checks cannot prove that two
+similar payments represent the same event, and the tools do not provide
+transactional protection against concurrent edits. Review every proposed
+pair against the statement and take a verified backup before `--apply`;
+dry-run output alone is not proof that deletion is safe. These tools are
+not included in the Docker image.
+Dividend cleanup lists candidates up to 35 days apart in dry-run, but
+`--apply` keeps both records unchanged when their dates differ by more than
+7 days and exits 1. Verify distant ex-date/payment-date pairs manually;
+there is no bypass flag. A shorter date gap still does not prove event identity.
+
 Run the commands below from the repository root, not from `docs/`.
 For recovery after a shortened Flex query, first read the
-[query-window and cleanup safeguards](../ibkr-setup.md#2-create-a-flex-query).
+[query-window setup](../ibkr-setup.md#2-create-a-flex-query).
 
 The cleanup tools are operator maintenance commands, outside the container image.
 They do not log in by themselves: they read only `GHOST_TOKEN` and `GHOST_HOST`, even if the
@@ -17,7 +32,7 @@ Heuristic pair matching still requires a reviewed dry-run, verified backup and q
 portfolio writers. The recovery feature does not authorize financial repair by itself.
 
 Do not run the existing pair cleanup tools against v2 activity history until
-they are separately qualified. The dividend recovery preview below is a distinct
+they are separately qualified. The [dividend recovery preview](missing-dividend-recovery.md#offline-preview-of-missing-v2-dividend-actions) is a distinct
 offline command. It does not use the pair cleanup executor.
 
 For a separately authorized cleanup, select an explicit journal path:

@@ -106,7 +106,7 @@ Use these steps only if you want to fill missing platform metadata.
 3. Enter a name like `Interactive Brokers` and a URL like `https://www.interactivebrokers.com`
 4. Save it
 
-To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command above):
+To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command in [Legacy authentication](#legacy-authentication)):
 
 ```bash
 curl http://localhost:3333/api/v1/platform \
@@ -239,6 +239,12 @@ Compose is the [first-install path](getting-started.md). For an autonomous Docke
 run, create a separate private `.env.run`. The Compose `.env` uses suffixed names
 and cannot be passed directly to `docker run`. Docker ENV files do not expand
 variables or remove quotes: use unquoted values, including account names.
+Create the private file before adding credentials, then fill it with the values below:
+
+```bash
+(umask 077; touch .env.run)
+chmod 600 .env.run
+```
 
 ```dotenv
 TZ=Europe/Paris
@@ -455,9 +461,13 @@ in any simulation or live mode also sends a reminder when its legacy `GHOST_TOKE
 URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
 space- or comma-separated URLs counts each one toward the limit of 10):
 
-```yaml
-      APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]'
-      APPRISE_TIMEOUT: "10"
+Set these values in the private Compose `.env`, then recreate the service.
+Both Compose examples pass them to the container. Keep notification credentials
+out of tracked YAML. For autonomous Docker, use the private `.env.run` instead.
+
+```dotenv
+APPRISE_URLS=["ntfys://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]
+APPRISE_TIMEOUT=10
 ```
 
 **What is sent:** a fixed title, the UTC time, how many accounts failed out of how many, and
@@ -513,7 +523,7 @@ The repository root contains the canonical hardened [`compose.yaml`](../compose.
 For a first preview, run one account without its schedule:
 
 ```bash
-docker compose run --rm -e CRON= ibkr-sync-individual
+docker compose run --rm -e DRY_RUN=true -e CRON= ibkr-sync-individual
 ```
 
 Keep `DRY_RUN=true` until the preview is understood. Set `DRY_RUN=false` only after a backup and a deliberate review. For one account, set `CRON_INDIVIDUAL` in `.env`, then run `docker compose up -d`. For multiple accounts or an existing two-service installation, follow [the separate example and migration](getting-started.md#multiple-accounts). Use `10001:10001`, mode `0600`, and a read-only mapping mount as shown in the canonical file. Stagger schedules when several sub-accounts share one Ghostfolio instance.
@@ -557,7 +567,7 @@ without a compatibility launcher, so update any script or note that calls it.
 - **No options support** - Ghostfolio does not support options as an asset class; options trades are skipped entirely
 - **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
-- **Corporate actions** - detection holds unsafe BUY/SELL. Treatment remains manual. See [persistent evidence, date proof and recovery](../README.md#corporate-action-safety).
+- **Corporate actions** - detection holds unsafe BUY/SELL. Treatment remains manual. See [persistent evidence, date proof and recovery](corporate-actions.md).
 - **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. The Ghostfolio account must have the same currency as the IBKR base currency (see [Create accounts](#3-create-accounts)); the sync refuses to write the balance otherwise.
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.

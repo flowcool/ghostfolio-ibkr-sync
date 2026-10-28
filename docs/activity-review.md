@@ -28,7 +28,14 @@ Mount a dedicated persistent directory. The parent must exist. Files must be
 owned by the runtime user, readable and writable, mode `0600`. Symlinks, hard
 links and overlap with mapping/source/evidence inputs are refused. Create the
 host `review` directory with mode `0700` owned by `10001:10001`. Merge these
-additions into the existing service; this is not a standalone Compose file:
+additions into the existing service; this is not a standalone Compose file.
+Prepare the directory before starting the service:
+
+```bash
+mkdir -p review
+chmod 700 review
+sudo chown 10001:10001 review
+```
 
 
 ```yaml

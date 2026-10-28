@@ -87,7 +87,14 @@ Before the first scheduled start, run:
 docker compose run --rm -e DRY_RUN=true -e CRON= ibkr-sync-individual
 ```
 
-For an existing installation, pause the scheduled service before a manual run.
+For an existing installation, pause the scheduled service before a manual run:
+
+```bash
+docker compose stop ibkr-sync-individual
+```
+
+For two accounts, use `docker compose -f compose.multi-account.yaml stop` before
+manual previews.
 Do not run two connector processes against the same account at once.
 Simulation still logs in and reads reports. It initializes corporate state after
 valid source acquisition and can retain or rotate local evidence. It sends no
@@ -127,6 +134,8 @@ For one deliberately enabled run, with the schedule still stopped:
 docker compose run --rm -e DRY_RUN=false -e CRON= ibkr-sync-individual
 ```
 
+After the first import, [add missing currency pairs](configuration.md#4-add-currencies)
+and run [Gather All Data](configuration.md#5-after-your-first-import).
 Review the observed result. Imports are additive; a buy can remain if a later sell
 fails. Do not resend an uncertain operation automatically. Follow its recovery
 guide and keep journals. Restoring an image never undoes financial writes.
@@ -160,7 +169,9 @@ share one state directory between services. Both services use the same `DRY_RUN`
 value from `.env`; schedules are staggered to reduce overlap. Root-level examples
 resolve the same mapping and state paths.
 
-Use `-f compose.multi-account.yaml` on **every** Compose command for this setup:
+Set `COMPOSE_FILE=compose.multi-account.yaml` in the private `.env` so ordinary
+Compose commands keep both services. The explicit form below also works. Use
+`-f compose.multi-account.yaml` on **every** command when selecting files explicitly:
 
 ```bash
 docker compose -f compose.multi-account.yaml config --quiet
@@ -174,11 +185,16 @@ Before updating a checkout or Git-backed Portainer stack, select
 `compose.multi-account.yaml` instead of the now single-account `compose.yaml`.
 Retain the existing Compose project/stack name, working directory, `.env`, service
 names and state paths. Check both services in the resolved model before recreating
-anything. In Portainer, change the stack's Compose file selection and retain its
-existing bind-mount layout; do not recreate the stack under another name.
+anything. For Portainer, pause Git auto-update before updating the checkout. Verify that
+your installed version supports changing the existing stack's Compose path.
+If it does not, plan the stack migration separately before updating. Preserve
+the stack name, bind paths and state. Do not assume `.env` file selection controls Portainer.
 An omitted joint service can remain as an orphan and disappear on a later recreate.
 Do not remove orphans blindly or switch files while a financial run is uncertain.
 This file-selection step is a deployment migration, not a financial conversion.
+After the controlled update, run `docker compose -f compose.multi-account.yaml ps --all`.
+Verify both services and their intended image with your deployment tooling. A
+routine pull or automatic stack update cannot perform this file migration for you.
 
 ## Further operations
 
