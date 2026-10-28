@@ -6,9 +6,10 @@ import pytest
 import yaml
 
 
-def compose_example():
-    compose = (Path(__file__).resolve().parents[1] / 'compose.yaml').read_text(encoding='utf-8')
-    expected = {'ibkr-sync-individual', 'ibkr-sync-joint'}
+def compose_example(filename="compose.yaml"):
+    compose = (Path(__file__).resolve().parents[1] / filename).read_text(encoding='utf-8')
+    expected = ({'ibkr-sync-individual', 'ibkr-sync-joint'} if filename == 'compose.multi-account.yaml'
+                else {'ibkr-sync-individual'})
     parsed = yaml.safe_load(compose)
     services = parsed.get('services') if isinstance(parsed, dict) else None
     if isinstance(services, dict) and expected <= set(services):
@@ -31,10 +32,15 @@ def test_compose_helper_rejects_missing_scheduled_example(monkeypatch, compose):
         compose_example()
 
 
-def test_compose_services_use_read_only_hardening_and_tmpfs():
-    services = compose_example()['services']
-    assert len(services) == 2
+@pytest.mark.parametrize("filename,count", [("compose.yaml", 1), ("compose.multi-account.yaml", 2)])
+def test_compose_services_use_read_only_hardening_and_tmpfs(filename, count):
+    model = compose_example(filename)
+    services = model['services']
+    assert len(services) == count
+    assert model["networks"]["ghostfolio"] == {"external": True, "name": "${GHOST_DOCKER_NETWORK:-ghostfolio}"}
+    assert len({service["environment"]["CRON"] for service in services.values()}) == count
     for name, service in services.items():
+        assert service['environment']['DRY_RUN'] == '${DRY_RUN:-true}'
         assert service['user'] == '10001:10001'
         assert service['read_only'] is True
         assert service['cap_drop'] == ['ALL']
@@ -46,8 +52,9 @@ def test_compose_services_use_read_only_hardening_and_tmpfs():
         assert service['image'] == 'ghcr.io/flowcool/ghostfolio-ibkr-sync:latest'
 
 
-def test_compose_credentials_require_operator_values_not_inline_secrets():
-    for service in compose_example()['services'].values():
+@pytest.mark.parametrize("filename", ["compose.yaml", "compose.multi-account.yaml"])
+def test_compose_credentials_require_operator_values_not_inline_secrets(filename):
+    for service in compose_example(filename)['services'].values():
         env = service['environment']
         assert env['IBKR_TOKEN'] == '${IBKR_TOKEN:?Set IBKR_TOKEN}'
         assert env['GHOST_ACCESS_TOKEN'] == '${GHOST_ACCESS_TOKEN:?Set GHOST_ACCESS_TOKEN}'

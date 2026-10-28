@@ -495,7 +495,7 @@ For a first preview, run one account without its schedule:
 docker compose run --rm -e CRON= ibkr-sync-individual
 ```
 
-Keep `DRY_RUN=true` until the preview is understood. Set `DRY_RUN=false` only after a backup and a deliberate review. For recurring runs, set `CRON_INDIVIDUAL` and `CRON_JOINT` in `.env`, then run `docker compose up -d`. Use `10001:10001`, mode `0600`, and a read-only mapping mount as shown in the canonical file. Stagger schedules when several sub-accounts share one Ghostfolio instance.
+Keep `DRY_RUN=true` until the preview is understood. Set `DRY_RUN=false` only after a backup and a deliberate review. For one account, set `CRON_INDIVIDUAL` in `.env`, then run `docker compose up -d`. For multiple accounts or an existing two-service installation, follow [the separate example and migration](getting-started.md#multiple-accounts). Use `10001:10001`, mode `0600`, and a read-only mapping mount as shown in the canonical file. Stagger schedules when several sub-accounts share one Ghostfolio instance.
 
 The image runs as the stable non-root UID/GID `10001:10001`. The mapping file must be readable by that user:
 
@@ -516,7 +516,8 @@ true, nothing is written):
 docker exec <container> python -m ghostfolio_ibkr_sync
 ```
 
-This is the only supported way to run the sync by hand. The old
+Inside an existing container, use the module command above and avoid overlap
+with a cron cycle. For an autonomous run, use the separate example above. The old
 `python /app/ibkr_to_ghostfolio.py` command no longer works: v3.0.0 removed that file
 without a compatibility launcher, so update any script or note that calls it.
 
