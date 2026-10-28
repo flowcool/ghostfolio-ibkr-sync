@@ -415,3 +415,83 @@ def test_compact_review_preserves_input_at_every_companion_boundary(tmp_path, co
     with pytest.raises(RuntimeError, match="overlaps"):
         review.open_review(str(path), [str(source)])
     assert source.read_text() == "protected input" and not path.exists()
+
+
+def test_pair_rejection_survives_fee_tags_notes_profile_changes_and_releases_hold():
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events()
+    row = matching_row()
+    previous, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    key = next(iter(previous)); previous[key]["approve"] = "reject"
+    rejected, held = review.refresh_proposals(previous, events, [row], {"U1": "acc"}, reconciliation="balanced")
+    assert not held and rejected[key]["rejected"]
+    changed = dict(row, fee=D("99"), comment="new notes", tags=[{"id": "new-tag"}])
+    refreshed, held = review.refresh_proposals(rejected, events, [changed], {"U1": "acc"}, reconciliation="permissive", timezone="Asia/Tokyo")
+    assert not held and refreshed[key]["rejected"] and refreshed[key]["approve"] == "reject"
+    changed["unitPrice"] = D("60.001")
+    stale, held = review.refresh_proposals(refreshed, events, [changed], {"U1": "acc"}, reconciliation="permissive")
+    assert held and stale[key]["approve"] is None and not stale[key]["automatic eligible"]
+
+
+def test_pair_rejection_new_candidates_and_recognized_claim_still_hold():
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row()
+    previous, _ = review.refresh_proposals({}, matching_events(), [row], {"U1": "acc"})
+    key = next(iter(previous)); previous[key]["approve"] = "reject"
+    refreshed, held = review.refresh_proposals(previous, matching_events(), [row, dict(row, id="new")], {"U1": "acc"})
+    assert held and refreshed[key]["rejected"]
+    exact = dict(row, comment="IBKR#v2#U1:TRADE:T1", fee=D("99"))
+    previous, _ = review.refresh_proposals({}, matching_events(), [exact], {"U1": "acc"})
+    key = next(iter(previous)); previous[key]["approve"] = "reject"
+    refreshed, held = review.refresh_proposals(previous, matching_events(), [exact], {"U1": "acc"})
+    assert held and refreshed[key]["rejected"]
+
+
+def test_pair_rejection_missing_target_and_source_suspend_without_authority():
+    from ghostfolio_ibkr_sync import activity_review as review
+    previous, _ = review.refresh_proposals({}, matching_events(), [matching_row()], {"U1": "acc"})
+    key = next(iter(previous)); previous[key]["approve"] = "reject"
+    rejected, _ = review.refresh_proposals(previous, matching_events(), [matching_row()], {"U1": "acc"})
+    absent, held = review.refresh_proposals(rejected, matching_events(), [], {"U1": "acc"})
+    assert not held and absent[key]["rejected"]
+    absent, held = review.refresh_proposals(rejected, {}, [matching_row()], {"U1": "acc"})
+    assert held and absent[key]["rejected"]
+
+
+def test_pair_rejection_trade_selection_keeps_target_for_other_event():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync.ghostfolio import index_existing_activities
+    from ghostfolio_ibkr_sync.app import select_account_activities
+    row = matching_row()
+    ids, comments, positions = index_existing_activities({"activities": [row], "count": 1})
+    activities, _, _, ok = select_account_activities(report(trade_xml("T1") + trade_xml("T2")),
+        "U1", "acc", {}, ids, comments, positions,
+        review_rejections={"IBKR#v2#U1:TRADE:T1": {"row1"}})
+    assert ok and [item["comment"] for item in activities] == ["IBKR#v2#U1:TRADE:T1"]
+
+
+def test_pair_rejection_dividend_selection_does_not_globally_remove_target():
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.ghostfolio import index_existing_activities
+    from ghostfolio_ibkr_sync.ibkr import parse_cash_dividends
+    from ghostfolio_ibkr_sync.sync import dividend_dedup_decision
+    from test_activity_review import destination
+    row = destination(type="DIVIDEND", date="2026-07-15T00:00:00Z", quantity=D("100"), unitPrice=D("0.25"))
+    ids, comments, positions = index_existing_activities({"activities": [row], "count": 1})
+    one = parse_cash_dividends(report(divs=div_xml()))[0]
+    two = parse_cash_dividends(report(divs=div_xml().replace('actionID="A1"', 'actionID="A2"')))[0]
+    rejected = {"IBKR#v2#U1:DIVIDEND:A1": {"row1"}}
+    assert dividend_dedup_decision(one, "acc", {}, positions, comments, rejected)[0] == "new"
+    assert dividend_dedup_decision(two, "acc", {}, positions, comments, rejected)[0] == "proximity"
+
+
+def test_pair_rejection_summed_fill_does_not_reuse_rejected_target():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync.ghostfolio import index_existing_activities
+    from ghostfolio_ibkr_sync.app import select_account_activities
+    row = matching_row()
+    ids, comments, positions = index_existing_activities({"activities": [row], "count": 1})
+    activities, _, _, _ = select_account_activities(report(trade_xml("T1", qty=4) + trade_xml("T2", qty=6)),
+        "U1", "acc", {}, ids, comments, positions, review_rejections={"IBKR#v2#U1:TRADE:T1": {"row1"}})
+    assert [item["comment"] for item in activities] == ["IBKR#v2#U1:TRADE:T1"]
+    assert ("U1", "T2") not in positions.get("manual_trade_ids", set())

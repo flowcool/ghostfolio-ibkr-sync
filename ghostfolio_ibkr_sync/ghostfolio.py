@@ -362,7 +362,7 @@ def index_existing_activities(data: dict[str, Any], *, dry_run: bool = False,
             if (symbol and not comment.startswith("dividend#")
                     and not is_versioned_dividend):
                 positions["dividend_dates"][(order.get("accountId") or "", symbol)].append(
-                    ((order.get("date") or "")[:10], *_existing_dividend_amounts(order, profile)))
+                    ((order.get("date") or "")[:10], *_existing_dividend_amounts(order, profile), order.get("id")))
 
         if order.get("type") in ("BUY", "SELL"):
             qty = _parse_float(order.get("quantity"))
@@ -379,7 +379,7 @@ def index_existing_activities(data: dict[str, Any], *, dry_run: bool = False,
                 if not comment.startswith("IBKR#"):
                     key = "manual_sells" if order["type"] == "SELL" else "manual_buys"
                     positions[key][(account_id, symbol)].append(
-                        [(order.get("date") or "")[:10], abs(qty)])
+                        [(order.get("date") or "")[:10], abs(qty), order.get("id")])
 
     log.info("Scanned %d existing Ghostfolio activities", len(activities))
     return trade_ids, dividend_comments, positions

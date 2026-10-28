@@ -54,8 +54,8 @@ def test_existing_activities_are_indexed(monkeypatch, profile_key):
     assert trade_ids == {"T1", "T2"}
     assert div_comments == {("acc", "dividend#US1912161007#2026-07-15")}   # keyed by accountId
     assert pos["qty"][("acc", "KO")] == pytest.approx(9.0)                  # 10 - 4 - 3 + 6
-    assert pos["manual_buys"][("acc", "KO")] == [["2026-07-01", 6.0]]       # IBKR#T1 buy is not manual
-    assert pos["manual_sells"][("acc", "KO")] == [["2026-08-01", 3.0]]
+    assert pos["manual_buys"][("acc", "KO")] == [["2026-07-01", 6.0, None]]       # IBKR#T1 buy is not manual
+    assert pos["manual_sells"][("acc", "KO")] == [["2026-08-01", 3.0, None]]
     assert pos["isin_symbols"][("acc", "US1912161007")] == {"KO"}
     assert pos["dividend_dates"][("acc", "KO")] == []                    # connector rows are not proximity candidates
 

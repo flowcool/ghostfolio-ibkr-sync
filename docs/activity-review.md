@@ -304,3 +304,22 @@ publication. An unknown generation stops without replacing either file.
 Keep a schema-3 reader until every unresolved request is settled by exact
 readback. A software downgrade does not restore activity data.
 Reverse financial writes require separate authority and fresh preservation proof.
+
+### Persistent false-match rejection
+
+Set `decision: reject` for a false source-target association.
+The connector retains that pair in private state and shows its rejected status.
+It does not modify the target or reject the source event.
+The same target remains available for every other event.
+Fees, tags, notes, profile and timezone changes alone retain rejection.
+Changes to identity, ownership, security, date, quantity, gross evidence, mapping
+or relevant identity occupancy clear rejection and publish a blank candidate.
+That candidate has no automatic authority during the invalidation cycle.
+
+When every candidate is validly rejected, the source can resume ordinary import
+checks. Recognized references still claiming that source retain their hold.
+Existing identities, unresolved journals, corporate holds and holdings checks
+still apply. Rejection grants no cleanup or historical-maintenance authority.
+Missing sources suspend decisions. A complete listing can suspend an already
+rejected absent target without restoring that pair's candidate hold.
+An inactive or unreadable target retains its hold.

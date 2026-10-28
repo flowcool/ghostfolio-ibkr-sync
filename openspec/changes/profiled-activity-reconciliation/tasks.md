@@ -28,7 +28,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 7. Persistent pair rejection
 
-- [ ] 7.1 Bind rejection to relevant evidence and carry target IDs into ordinary trade/dividend selection. Test all-rejected import release, new candidates, stale rejection and other events sharing a target. Document decision editing. Requirements: activity-correction-review: Pending proposals and file refresh. Files: activity_review.py, sync.py, ghostfolio.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "pair_rejection or review_refresh"`.
+- [x] 7.1 Bind rejection to relevant evidence and carry target IDs into ordinary trade/dividend selection. Test all-rejected import release, new candidates, stale rejection and other events sharing a target. Document decision editing. Requirements: activity-correction-review: Pending proposals and file refresh. Files: activity_review.py, sync.py, ghostfolio.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "pair_rejection or review_refresh"`.
 
 ## 8. Qualified profile dispatch
 

@@ -230,6 +230,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             existing_dividend_comments, positions, query_id=query_id,
             diagnostic_preview=bool(config.get("dry_run")),
             review_holds=config.get("_review_holds"),
+            review_rejections=config.get("_review_rejected"),
             corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id),
             outcome=outcome, account_result=account_result)
     except InvalidActivityIdentityError:
@@ -298,6 +299,7 @@ def select_account_activities(
     date_is_current: Callable[[Mapping[str, Any]], bool] | None = None,
     holdings_trace: dict[str, Any] | None = None,
     review_holds: set[str] | None = None,
+    review_rejections: Mapping[str, set[str]] | None = None,
     corporate_decision: ca.Decision | None = None,
     outcome: RunOutcome | None = None,
     account_result: AccountResult | None = None,
@@ -401,7 +403,8 @@ def select_account_activities(
                                 "_activity": activity, "_unmapped": trade_unmapped})
 
     trades = filter_trades_by_holdings(prepared_trades, positions, ghost_account_id, mapping,
-                                      existing_trade_ids, source_account=ibkr_account_id, outcome=outcome)
+                                      existing_trade_ids, source_account=ibkr_account_id, outcome=outcome,
+                                      rejected_pairs=review_rejections)
     activities: list[Activity] = []
     for kept in trades:
         activities.append(kept["_activity"])
@@ -428,7 +431,7 @@ def select_account_activities(
                in review_holds for row in div["payments"]):
             continue
         dedup, symbol, matched = dividend_dedup_decision(
-            div, ghost_account_id, mapping, positions, existing_dividend_comments)
+            div, ghost_account_id, mapping, positions, existing_dividend_comments, review_rejections)
         if dedup == "not_payable":
             # Preserve existing diagnostics for reversals and tax-only rows.
             convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped, outcome=outcome)

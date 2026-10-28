@@ -646,12 +646,15 @@ def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: b
 
 
 def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]],
-                    name: str, timezone: str) -> dict[tuple[str, str], dict[str, Any]]:
+                    name: str, timezone: str, rejected: set[tuple[str, str]] | None = None
+                    ) -> dict[tuple[str, str], dict[str, Any]]:
     """Build all eligible edges before selecting mutually unique pairs."""
     edges: dict[tuple[str, str], dict[str, Any]] = {}
     for event_id, event in events.items():
         exact = any(marker_of(row) == event_id or marker_of(row) in event["legacy"] for row in rows)
         for row in rows:
+            if (event_id, row["id"]) in (rejected or set()):
+                continue
             try:
                 reason = candidate_reason(row, event, exact, timezone)
                 reference = marker_of(row)
@@ -693,6 +696,31 @@ PROPOSAL_FIELDS = {"key", "source account", "source event", "destination account
 DISPLAY_FIELDS = {"section", "evidence level", "execution path"}
 AUTOMATIC_FIELDS = {"automatic eligible", "profile", "numeric evidence", "profile date context"}
 EVIDENCE_FIELDS = {"source evidence", "diagnostic differences"}
+REJECTION_FIELDS = {"rejection binding", "rejected", "rejection cooldown", "recognized claim"}
+
+
+def association_binding(event: dict[str, Any], current: dict[str, Any],
+                        occupied: list[Any], reference: str | None) -> str:
+    fields = ("id", "accountId", "accountUserId", "userId", "symbolProfileId", "assetProfile",
+              "date", "quantity", "unitPrice", "currency", "symbol", "type")
+    target = {field: current.get(field) for field in fields}
+    source = {field: value for field, value in event["values"].items() if field not in ("fee", "tags")}
+    raw = event["source evidence"]
+    if event["values"]["type"] in ("BUY", "SELL"):
+        raw = {field: raw.get(field) for field in ("quantity", "tradePrice", "dateTime", "currency",
+                "buySell", "tradeID", "accountId", "symbol", "isin", "assetCategory")}
+    else:
+        raw = {"payments": raw.get("payments"), "quantities": [row.get("quantity") for row in raw.get("accruals", [])]}
+    return fingerprint([event["source account"], event["destination account"], source, raw,
+                        target, reference, event["mapping"], occupied])
+
+
+def proposal_holds(item: dict[str, Any]) -> bool:
+    if not item.get("rejected"):
+        return True
+    if item.get("recognized claim") or item["status"] == "source unavailable":
+        return True
+    return item["status"] not in ("rejected association", "rejected target absent")
 
 
 def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]],
@@ -705,7 +733,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     if len(by_id) != len(rows):
         raise RuntimeError("Duplicate destination activity IDs")
     for key, old in previous.items():
-        if (set(old) - AUTOMATIC_FIELDS - EVIDENCE_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
+        if (set(old) - AUTOMATIC_FIELDS - EVIDENCE_FIELDS - REJECTION_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
                 or (old["destination account"] != accounts.get(old["source account"])
                     and (old["source event"], old["destination account"], old["activity id"])
                     not in (journal_bindings or set()))
@@ -803,7 +831,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                            "execution path": "normal run"})
             old = previous.get(key)
             if old:
-                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS, *EVIDENCE_FIELDS}
+                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS, *EVIDENCE_FIELDS, *REJECTION_FIELDS}
                 comparison = {k: v for k, v in old.items() if k not in ignored}
                 if comparison == {k: v for k, v in item.items() if k not in ignored}:
                     item["approve"] = old["approve"] if actionable else None
@@ -818,6 +846,19 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
                          "numeric evidence": numbers,
                          "profile date context": auto["profile date context"] if auto else {}})
+            association = association_binding(event, current, occupied, marker_of(row)) if current else None
+            item.update({"rejection binding": association, "rejected": False, "rejection cooldown": 0,
+                         "recognized claim": marker_of(row) == event_id or marker_of(row) in event["legacy"]})
+            if old and (old.get("approve") == "reject" or (old.get("rejected") and old.get("approve") is None)):
+                if association and association == old.get("rejection binding") and activity_is_active(row):
+                    item.update({"approve": "reject", "rejected": True, "automatic eligible": False,
+                                 "status": "rejected association"})
+                else:
+                    item.update({"approve": None, "rejection cooldown": 1, "automatic eligible": False,
+                                 "status": "association changed; rejection cleared"})
+            elif old and old.get("rejection cooldown"):
+                # This blank candidate was published during the prior cycle.
+                item["rejection cooldown"] = 0
             result[key] = item
     # Keep missing targets and unavailable sources; reassignment needs positive evidence.
     for key, old in previous.items():
@@ -841,8 +882,18 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 assigned_elsewhere = False
         if not assigned_elsewhere:
             result[key] = {**old, "status": "target missing or unavailable", "actionable": False, "approve": None}
+            if retained_row is None and old.get("rejected"):
+                result[key].update({"status": "rejected target absent", "approve": "reject"})
+        elif old.get("rejected"):
+            result[key] = {**old, "status": "association changed; rejection cleared", "rejected": False,
+                           "approve": None, "actionable": False, "automatic eligible": False}
     result = {key: item for key, item in result.items() if item["source event"] not in satisfied}
-    return result, {item["source event"] for item in result.values()}
+    rejected = {(item["source event"], item["activity id"]) for item in result.values() if item.get("rejected")}
+    automatic = automatic_pairs(events, rows, reconciliation, timezone, rejected)
+    for item in result.values():
+        item["automatic eligible"] = bool(item["actionable"] and not item.get("rejection cooldown")
+            and item["source event"] in events and (item["source event"], item["activity id"]) in automatic)
+    return result, {item["source event"] for item in result.values() if proposal_holds(item)}
 
 
 
@@ -855,6 +906,8 @@ def approved_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
             continue
         if type(choice) is str and choice == "yes":
             approved.append(item)
+        elif choice == "reject" and item.get("rejected"):
+            continue
         else:
             log.warning("Review choice skipped for account %s activity %s; only literal yes approves",
                         item["destination account"], item["activity id"])
@@ -1102,7 +1155,11 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         refreshed, _ = refresh_proposals(refreshed, events, snapshot_rows(config), accounts, journal_bindings)
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     publish_review(state, {"version": 1, "proposals": refreshed})
-    held = {item["source event"] for item in refreshed.values()} | unresolved_events
+    held = {item["source event"] for item in refreshed.values() if proposal_holds(item)} | unresolved_events
+    config["_review_rejected"] = {}
+    for item in refreshed.values():
+        if item.get("rejected") and item["source event"] in events:
+            config["_review_rejected"].setdefault(item["source event"], set()).add(item["activity id"])
     pending = {entry["source event"] for entry in state["journal"]["entries"].values()
                if entry["status"] != "confirmed"}
     report_review_outcome(state, config, refreshed, held, pending)
