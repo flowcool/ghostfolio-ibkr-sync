@@ -162,6 +162,8 @@ release history and artifacts. [Changelog](CHANGELOG.md) remains an entry point.
 
 Use [Contributing](CONTRIBUTING.md) for offline development, architecture decisions,
 release qualification and publication procedures. Docker is the supported runtime.
+Local development requires Python 3.14+ with the pinned packages
+(CI and the container use Python 3.14).
 
 ## Credits and license
 
