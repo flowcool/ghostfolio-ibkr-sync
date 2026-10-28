@@ -40,7 +40,7 @@ Prepare these values before editing `.env`:
 ### Choose the existing Docker network
 
 Find the network containing your Ghostfolio container. For an existing local
-Docker deployment you can inspect it with:
+Docker deployment, replace `<ghostfolio-container>` with its container name:
 
 ```bash
 docker inspect <ghostfolio-container> --format '{{json .NetworkSettings.Networks}}'

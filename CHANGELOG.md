@@ -1,5 +1,7 @@
 # Changelog
 
+<a id="unreleased--v300-rc2"></a>
+
 [GitHub Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases) owns
 the release history, migration notes and published artifacts.
 

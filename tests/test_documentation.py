@@ -12,7 +12,13 @@ ADRS = ('0001-single-file-runtime.md', '0002-comment-and-proximity-deduplication
         '0003-additive-imports.md', '0004-independent-cash-update.md',
         '0005-flex-window-and-corporate-actions.md', '0006-latest-follows-main.md',
         '0007-pinned-degiro-core.md', '0008-fail-account-on-missing-flex-prerequisite.md')
-DOCUMENTS = (('README.md',) + tuple(f'docs/{name}' for name in GUIDES)
+OPERATION_GUIDES = ('getting-started.md', 'configuration.md', 'corporate-actions.md',
+                    'activity-review.md', 'maintenance.md', 'upgrading-to-3.0.md',
+                    'releasing.md', 'release-notes-automation.md',
+                    'maintenance/cleanup.md', 'maintenance/missing-dividend-recovery.md',
+                    'maintenance/identity-migration.md')
+DOCUMENTS = (('README.md', 'CONTRIBUTING.md', 'CHANGELOG.md')
+             + tuple(f'docs/{name}' for name in GUIDES + OPERATION_GUIDES)
              + ('docs/adr/README.md',) + tuple(f'docs/adr/{name}' for name in ADRS))
 
 
@@ -53,7 +59,7 @@ def test_readme_retains_onboarding_and_links_each_guide():
 
 def test_adr_index_links_all_eight_dated_decisions():
     index = (ROOT / 'docs/adr/README.md').read_text(encoding='utf-8')
-    assert '](docs/adr/README.md)' in (ROOT / 'README.md').read_text(encoding='utf-8')
+    assert '](docs/adr/README.md)' in (ROOT / 'CONTRIBUTING.md').read_text(encoding='utf-8')
     assert {path.name for path in (ROOT / 'docs/adr').glob('[0-9]*.md')} == set(ADRS)
     for name in ADRS:
         assert f']({name})' in index

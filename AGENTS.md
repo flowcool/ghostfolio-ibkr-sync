@@ -39,6 +39,8 @@ propagation in its PR.
 - Implementation and release for `clarify-operator-actions` are complete. Stable `v3.3.0` reuses the RC digest qualified in both labs. Beads owns the acceptance evidence.
 - Stable publication does not authorize production deployment or financial operations.
 
+- OpenSpec change `simplify-user-onboarding` is implemented and archived at `openspec/changes/archive/2026-10-28-simplify-user-onboarding/`. The primary Compose example uses one account; `compose.multi-account.yaml` retains the two-account setup. Detailed user guides live under `docs/`.
+
 ## Working mode: fast-track
 
 This mode replaces the global per-step ceremony. The invariants above still apply.

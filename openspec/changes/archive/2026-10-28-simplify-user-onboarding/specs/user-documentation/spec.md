@@ -20,6 +20,10 @@ Baseline: README Quick start, compose.yaml, .env.example and tests/test_compose_
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_compose_example.py` runs after its existing checks are adapted to both examples
 - **THEN** one-account and multi-account models retain simulation, private separate state mounts, ENV credentials and existing hardening.
 
+#### Scenario: Resolved network and mounts
+- **WHEN** `env IBKR_TOKEN=synthetic IBKR_ACCOUNT_IDS_INDIVIDUAL=SOURCE IBKR_QUERY_IDS_INDIVIDUAL=1 GHOST_ACCESS_TOKEN=synthetic GHOST_ACCOUNT_NAME_INDIVIDUAL=Example GHOST_DOCKER_NETWORK=example-network docker compose --env-file /dev/null config --format json` runs
+- **THEN** the model selects example-network, mapping and state bind sources resolve under the installation directory, simulation remains enabled and no service starts. The corresponding multi-account check uses distinct source/target values and staggered CRON values.
+
 ### Requirement: Complete autonomous examples
 
 Every Docker command presented as a complete sync or diagnostic invocation SHALL configure and mount persistent corporate-action state. Its instructions SHALL give directory ownership, permissions and simulation initialization. Both autonomous Docker commands SHALL use a private .env.run with container variable names and unquoted values, mode 0600, without CRON. They SHALL explicitly select DRY_RUN and mount the existing per-account ./state/individual directory at /state. Instructions SHALL forbid overlap with a scheduled run and distinguish local evidence maintenance from financial writes. Docker command examples SHALL NOT put token values in shell history. The Compose .env SHALL NOT be presented as a Docker run ENV file. Both commands SHALL use the same documented safety prerequisites as Compose. Financial writes SHALL remain disabled until explicit review and opt-in.
@@ -53,7 +57,3 @@ Baseline: README has 2778 words; docs/cleanup.md combines several operations; do
 #### Scenario: Existing navigation checks
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_documentation.py` runs after the existing DOCUMENTS collection and navigation expectations include every changed/new guide
 - **THEN** existing checked links and anchors resolve; no test depends on exact prose. A bounded one-off link and anchor check covers new and moved guides without adding a test framework.
-
-#### Scenario: Resolved network and mounts
-- **WHEN** `env IBKR_TOKEN=synthetic IBKR_ACCOUNT_IDS_INDIVIDUAL=SOURCE IBKR_QUERY_IDS_INDIVIDUAL=1 GHOST_ACCESS_TOKEN=synthetic GHOST_ACCOUNT_NAME_INDIVIDUAL=Example GHOST_DOCKER_NETWORK=example-network docker compose --env-file /dev/null config --format json` runs
-- **THEN** the model selects example-network, mapping and state bind sources resolve under the installation directory, simulation remains enabled and no service starts. The corresponding multi-account check uses distinct source/target values and staggered CRON values.
