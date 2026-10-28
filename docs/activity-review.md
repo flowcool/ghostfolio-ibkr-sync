@@ -347,3 +347,23 @@ Every automatic request records its profile authority separately from consent.
 The journal records exact source/target dates, timezone and financial evidence.
 Simulation sends no financial request and records no applied result.
 Disabling a profile never resolves a pending request or permits a resend.
+
+### Read grouped diagnosis and outcomes
+
+The summary counts unique source events, destination activities and candidate
+pairs separately. Connected groups list their member keys and distinct totals.
+Source fills and target activities each contribute once. Currencies stay
+separate, except for the supported fixed GBP/GBp normalization.
+Aggregate agreement does not prove identity or allocation.
+A group that needs splitting, fusion or an unresolved assignment stays manual.
+Independently unique one-to-one dividend pairs can proceed within their profile.
+
+Results distinguish already consistent, automatically corrected, manually
+corrected, automatic work deferred, manual review required, rejected association,
+blocked and would correct. Only exact readback records a completed correction.
+Simulation reports would correct. It never reports an applied correction.
+Queue position and remaining eligible runs describe the current inventory.
+They are estimates. Future source, destination or profile changes can alter them.
+Automatic success and ordinary budget deferral need no intervention notice.
+Required actions join the existing single notification. External text contains
+fixed result names and counts. Financial values, paths and keys stay private.

@@ -606,6 +606,9 @@ def _finalize_notification(outcome: RunOutcome, code: int) -> None:
             body += "\n- corporate_actions: maintenance_incomplete (1)"
         if actions:
             body += "\n" + actions
+        from ghostfolio_ibkr_sync.notify import reconciliation_summary
+        if outcome.get("reconciliation"):
+            body += "\n" + reconciliation_summary(outcome)
         status = send_notification(settings, title, body)
     except Exception:
         log.warning("%s notification could not be sent: internal error", label)
@@ -638,7 +641,9 @@ def run_sync(outcome: RunOutcome) -> int:
     try:
         if config.get("activity_review_file"):
             try:
-                state = open_review(config["activity_review_file"], [config["mapping_file"]])
+                state = open_review(config["activity_review_file"], [path for path in (
+                    config["mapping_file"], config.get("corporate_action_state_file"),
+                    config.get("corporate_action_evidence_file")) if path])
             except (RuntimeError, OSError) as exc:
                 log.error("Review prerequisite failed: %s", exc)
                 record_failure(outcome, "review", "review_unavailable")
@@ -703,6 +708,7 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
         inputs = [config.get("mapping_file", ""), config.get("corporate_action_evidence_file", "")]
         if config.get("activity_review_file"):
             inputs += [config["activity_review_file"], config["activity_review_file"] + ".journal.yaml",
+                       config["activity_review_file"] + ".state.yaml",
                        config["activity_review_file"] + ".lock"]
         try:
             store = ca.open_store(config.get("corporate_action_state_file",

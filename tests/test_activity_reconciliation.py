@@ -633,3 +633,76 @@ def test_profile_execution_revalidates_profile_before_dispatch(tmp_path, monkeyp
         assert not server.writes and blocked == {"acc"}
     finally:
         review.close_review(state)
+
+
+def test_group_diagnosis_counts_distinct_fills_and_targets_once():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import destination
+    events = matching_events(report("".join(trade_xml(f"T{i}", qty="2.5", ibCommission="-0.25") for i in range(4))))
+    rows = [destination(quantity=D("5"), fee=D("0.505"), id=str(i)) for i in range(2)]
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"}, reconciliation="permissive")
+    groups = reconciliation.group_diagnosis(events, proposals)
+    group = next(iter(groups.values()))
+    assert group["source count"] == 4 and group["destination count"] == 2
+    assert len(group["members"]) == 8
+    assert group["source totals"]["USD"] == {"quantity": "10", "gross": "600", "fee": "1"}
+    assert group["destination totals"]["USD"] == {"quantity": "10", "gross": "600", "fee": "1.01"}
+    assert group["differences"]["USD"]["fee"] == "0.01"
+    assert group["status"] == "manual allocation required"
+    assert not any(item["automatic eligible"] for item in proposals.values())
+
+
+def test_profile_execution_outcomes_are_truthful_and_external_text_is_redacted(tmp_path, monkeypatch):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome, action_summary
+    from ghostfolio_ibkr_sync.notify import reconciliation_summary
+    server = ReviewServer(monkeypatch, [matching_row(fee=D("99"))])
+    path = tmp_path / "private-review.yaml"; state = review.open_review(str(path), [])
+    outcome = new_run_outcome()
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": True,
+        "activity_reconciliation": "balanced", "activity_review_file": str(path), "_corporate_outcome": outcome}
+    try:
+        review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert outcome["reconciliation"]["would correct"] == 1
+        assert outcome["reconciliation"]["automatically corrected"] == 0 and not server.writes
+        public = review.read_yaml(path.read_bytes())
+        assert public["summary"]["simulation"] is True and public["summary"]["profile"] == "balanced"
+        external = reconciliation_summary(outcome) + action_summary(outcome)
+        assert str(path) not in external and "row1" not in external and "IBKR#" not in external and "99" not in external
+    finally:
+        review.close_review(state)
+
+
+def test_profile_execution_uncertain_result_is_not_reported_as_corrected(tmp_path, monkeypatch):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    ReviewServer(monkeypatch, [matching_row(fee=D("99"))], "unchanged")
+    state = review.open_review(str(tmp_path / "review.yaml"), [])
+    outcome = new_run_outcome()
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+        "activity_reconciliation": "balanced", "activity_review_file": str(state["path"]), "_corporate_outcome": outcome}
+    try:
+        blocked, _ = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert blocked and outcome["reconciliation"]["automatically corrected"] == 0
+        assert outcome["reconciliation"]["blocked"] == 1
+    finally:
+        review.close_review(state)
+
+
+def test_group_diagnosis_distinct_dividends_keep_independent_pairs():
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    from test_activity_review import destination
+    cash = div_xml(amount="25") + div_xml(amount="50").replace('actionID="A1"', 'actionID="A2"')
+    events = matching_events(report(divs=cash))
+    rows = [destination("dividend#KO#2026-07-15", type="DIVIDEND", date="2026-07-15T00:00:00Z",
+                        quantity=D("100"), unitPrice=D(price), fee=D("0"), id=key)
+            for price, key in [("0.25", "one"), ("0.50", "two")]]
+    proposals, _ = refresh_proposals({}, events, rows, {"U1": "acc"}, reconciliation="balanced")
+    group = next(iter(reconciliation.group_diagnosis(events, proposals).values()))
+    assert group["status"] == "independent unique pairs"
+    assert group["source totals"]["USD"]["gross"] == "75"
+    assert group["destination totals"]["USD"]["gross"] == "75"

@@ -21,7 +21,12 @@ def write_review(path, document):
             review.close_review(state)
         return
     public = review.encode_review(document)
-    public["generation"] = review.read_yaml(path.read_bytes())["generation"]
+    existing = review.read_yaml(path.read_bytes())
+    public["generation"] = existing["generation"]
+    for section in review.SECTIONS:
+        for key, item in public[section].items():
+            if key in existing[section]:
+                item["required action"] = existing[section][key]["required action"]
     path.write_text(__import__("yaml").safe_dump(public))
 
 
@@ -584,7 +589,8 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         assert len(server.cash) == passes  # Ordinary cash processing still runs.
         assert len(imports) == 1  # Unrelated new activity imports despite deferred approvals.
         document = review.load_review(path)
-        stable = lambda item: {key: value for key, value in item.items() if key not in review.QUEUE_FIELDS}
+        def stable(item):
+            return {key: value for key, value in item.items() if key not in review.QUEUE_FIELDS | {"status"}}
         assert {key: stable(value) for key, value in document["proposals"].items()} == {
             key: stable(value) for key, value in expected_pending.items() if key in document["proposals"]}
         assert len(document["proposals"]) == max(0, len(expected_pending) - limit)

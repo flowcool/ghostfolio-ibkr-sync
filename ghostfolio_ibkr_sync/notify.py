@@ -13,7 +13,11 @@ from ghostfolio_ibkr_sync.config import (
     NOTIFY_PAYLOAD_MAX,
     NotificationConfigDict,
 )
-from ghostfolio_ibkr_sync.outcome import OUTCOME_REASONS, RunOutcome
+from ghostfolio_ibkr_sync.outcome import (
+    OUTCOME_REASONS,
+    RECONCILIATION_COUNTS,
+    RunOutcome,
+)
 
 NOTIFY_WORKER_FLAG = "--notify-worker"
 # The worker inherits only what Apprise needs to reach a destination: never the
@@ -123,6 +127,12 @@ def build_token_expiry_summary(days: int) -> str:
     """Fixed advisory code and remaining-day count; no JWT claims are disclosed."""
     return (f"- ghost_auth: token_expiring (days remaining: {days})\n"
             "Regenerate GHOST_TOKEN or switch to GHOST_ACCESS_TOKEN.")
+
+
+def reconciliation_summary(outcome: RunOutcome) -> str:
+    counts = outcome.get("reconciliation", {})
+    return "\n".join(f"- {name}: {counts[name]}" for name in RECONCILIATION_COUNTS
+                     if type(counts.get(name)) is int and counts[name] > 0)
 
 
 def build_failure_summary(outcome: RunOutcome, now: datetime | None = None) -> str:

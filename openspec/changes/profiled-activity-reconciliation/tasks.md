@@ -36,7 +36,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 9. Grouped diagnosis and outcomes
 
-- [ ] 9.1 Display source/target group counts and exact differences, distinct authority and truthful outcomes. Cover four source fills versus two targets; no aggregate correction. Keep external notifications redacted. Requirements: Grouped diagnosis without aggregate correction; connector-runtime: Final operational result. Files: activity_review.py, app.py, notify.py, outcome.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "group_diagnosis or profile_execution"`.
+- [x] 9.1 Display source/target group counts and exact differences, distinct authority and truthful outcomes. Cover four source fills versus two targets; no aggregate correction. Keep external notifications redacted. Requirements: Grouped diagnosis without aggregate correction; connector-runtime: Final operational result. Files: activity_review.py, app.py, notify.py, outcome.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "group_diagnosis or profile_execution"`.
 
 ## 10. Historical maintenance compatibility
 

@@ -134,3 +134,66 @@ def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -
                 "reproduced price": decimal_text(wire_price), "residue bound": decimal_text(bound),
                 "calculation residue": residue,
                 "cause": "reproduced conversion multiply/divide/JSON" if residue else "no proven residue"}
+
+
+def group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
+    """Connected candidate groups with each endpoint counted exactly once."""
+    pending = set(proposals)
+    groups = {}
+    while pending:
+        members = {min(pending)}
+        while True:
+            sources = {proposals[key]["source event"] for key in members}
+            targets = {proposals[key]["activity id"] for key in members}
+            expanded = {key for key in pending if proposals[key]["source event"] in sources
+                        or proposals[key]["activity id"] in targets}
+            if expanded == members:
+                break
+            members = expanded
+        pending -= members
+        if len(members) == 1:
+            continue
+        source_records = {event: events[event]["values"] for event in sorted(sources) if event in events}
+        target_records = {proposals[key]["activity id"]: proposals[key]["current values"] for key in sorted(members)}
+
+        def totals(records: Mapping[str, Any], source: bool) -> dict[str, Any]:
+            sums: dict[str, dict[str, Decimal]] = {}
+            for key, values in records.items():
+                try:
+                    currency, factor = denomination(values["currency"])
+                    with localcontext() as context:
+                        context.prec = 100
+                        quantity = Decimal(values["quantity"])
+                        gross = quantity * Decimal(values["unitPrice"]) * factor
+                        if source and currency in PRECISION:
+                            gross = Decimal(numeric_evidence(events[key], values)["source gross"])
+                        fee = Decimal(values["fee"]) * factor
+                        aggregate = sums.setdefault(currency, {"quantity": Decimal(0), "gross": Decimal(0), "fee": Decimal(0)})
+                        for field, amount in (("quantity", quantity), ("gross", gross), ("fee", fee)):
+                            aggregate[field] += amount
+                except (KeyError, ValueError, ArithmeticError, RuntimeError):
+                    continue
+            return {currency: {field: decimal_text(amount) for field, amount in sums.items()}
+                    for currency, sums in sorted(sums.items())}
+
+        source_totals, target_totals = totals(source_records, True), totals(target_records, False)
+        differences = {currency: {field: decimal_text(Decimal(target_totals[currency][field]) - Decimal(source_totals[currency][field]))
+                                  for field in ("quantity", "gross", "fee")}
+                       for currency in source_totals.keys() & target_totals.keys()}
+        eligible = [proposals[key] for key in members if proposals[key].get("automatic eligible")]
+        independent = len(eligible) == len(sources) == len(targets)
+        groups[min(members)] = {"members": sorted(members), "source events": sorted(sources),
+            "destination activities": sorted(targets), "source count": len(sources), "destination count": len(targets),
+            "source totals": source_totals, "destination totals": target_totals, "differences": differences,
+            "gross display differences": {currency: format(Decimal(values["gross"]).quantize(
+                Decimal(1).scaleb(-PRECISION[currency]), rounding=ROUND_HALF_EVEN), "f")
+                if currency in PRECISION else values["gross"] for currency, values in differences.items()},
+            "source records": {key: {field: values.get(field) for field in
+                                    ("date", "type", "symbol", "currency", "quantity", "unitPrice", "fee")}
+                               for key, values in source_records.items()},
+            "destination records": {key: {field: values.get(field) for field in
+                                         ("date", "type", "symbol", "currency", "quantity", "unitPrice", "fee")}
+                                    for key, values in target_records.items()},
+            "status": "independent unique pairs" if independent else "manual allocation required",
+            "meaning": "Aggregate agreement does not prove identity or allocation; no grouped correction"}
+    return groups

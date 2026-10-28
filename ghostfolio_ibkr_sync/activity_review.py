@@ -206,7 +206,8 @@ def encode_review(document: dict[str, Any]) -> dict[str, Any]:
             "source event": item["source event"], "destination activity": item["activity id"],
             "security": item["proposed values"].get("symbol"), "type": item["proposed values"].get("type"),
             "execution path": item.get("execution path", "normal run"),
-            "match evidence": item["match reason"], "profile authority": item.get("profile", "off"),
+            "match evidence": ("profile match" if item.get("automatic eligible") and item["match reason"] == "local calendar proximity"
+                               else item["match reason"]), "profile authority": item.get("profile", "off"),
             "automatic eligible": item.get("automatic eligible", False),
             "status": item["status"], "operation fields": item["changed fields"],
             "current": {field: value for field, value in item["current values"].items() if field in common},
@@ -214,6 +215,19 @@ def encode_review(document: dict[str, Any]) -> dict[str, Any]:
             "numeric evidence": item.get("numeric evidence", {}),
             "observed differences": item.get("diagnostic differences", {}),
             "date context": item.get("profile date context") or item["date context"],
+            "queue position": item.get("queue position"),
+            "remaining eligible runs": item.get("remaining eligible runs"),
+            "held scope": item["source event"] if proposal_holds(item) else None,
+            "required action": ("Inspect or repair the reference that still claims this source; rejection grants no cleanup authority"
+                if item.get("rejected") and item.get("recognized claim") else
+                "Restore the missing or conflicting proof shown in status; yes cannot make a blocked proposal executable"
+                if not item["actionable"] else
+                "Use the documented historical preparation and separate operation authority"
+                if item.get("execution path") == "historical maintenance" else
+                "Wait for a later normal cycle; eligibility is re-evaluated"
+                if item.get("automatic eligible") or item["approve"] == "yes" else
+                "Association rejected; ordinary import checks still apply"
+                if item.get("rejected") else "Read exact values; edit only decision to yes or reject between runs"),
             "decision": item["approve"]}
     unsigned = deepcopy(result)
     for section in SECTIONS:
@@ -697,7 +711,7 @@ DISPLAY_FIELDS = {"section", "evidence level", "execution path"}
 AUTOMATIC_FIELDS = {"automatic eligible", "profile", "numeric evidence", "profile date context"}
 EVIDENCE_FIELDS = {"source evidence", "diagnostic differences"}
 REJECTION_FIELDS = {"rejection binding", "rejected", "rejection cooldown", "recognized claim"}
-QUEUE_FIELDS = {"first eligible"}
+QUEUE_FIELDS = {"first eligible", "queue position", "remaining eligible runs"}
 
 
 def association_binding(event: dict[str, Any], current: dict[str, Any],
@@ -727,7 +741,8 @@ def proposal_holds(item: dict[str, Any]) -> bool:
 def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]],
                       rows: list[dict[str, Any]], accounts: dict[str, str],
                       journal_bindings: set[tuple[str, str, str]] | None = None,
-                      *, reconciliation: str = "off", timezone: str = "UTC"
+                      *, reconciliation: str = "off", timezone: str = "UTC",
+                      held_events: set[str] | None = None
                       ) -> tuple[dict[str, Any], set[str]]:
     """Rebuild evidence; file fields never become replacement input."""
     by_id = {row["id"]: row for row in rows}
@@ -812,6 +827,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     raise RuntimeError("legacy aggregate cannot identify one action")
                 changes = changed_fields(current, proposed)
                 if not changes and marker_of(row) == event_id:
+                    if event_id in (held_events or set()):
+                        raise RuntimeError("Relevant corporate-action evidence holds this activity")
                     satisfied.add(event_id)
                     continue
             except (RuntimeError, ValueError, OverflowError, UnicodeError) as exc:
@@ -1056,20 +1073,36 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     validate_journal(state, config)
     original = state["document"]["proposals"]
     from ghostfolio_ibkr_sync.config import timezone_preview_reason
+    from ghostfolio_ibkr_sync.outcome import RECONCILIATION_COUNTS
 
     simulated = bool(config.get("dry_run") or timezone_preview_reason())
     rebuilt_cooling = state["evidence"]["rebuild cooldown"] > 1
     if not simulated and state["evidence"]["rebuild cooldown"]:
         state["evidence"]["rebuild cooldown"] -= 1
     cooling: set[str] = set()
+    counts = dict.fromkeys(RECONCILIATION_COUNTS, 0)
+    consistent: dict[str, Any] = {}
+
+    def publish(proposals: dict[str, Any]) -> None:
+        publish_review(state, {"version": 1, "proposals": proposals, "consistent": consistent,
+            "groups": reconciliation_rules.group_diagnosis(events, proposals),
+            "summary": {"profile": config.get("activity_reconciliation", "off"),
+                        "simulation": simulated, "outcomes": dict(counts),
+                        "queue estimate": "Current eligible inventory; later runs revalidate; no completion promise"}})
     # Journal-owned historical proposals may outlive a configured account.
     # This does not permit dispatch without a fresh source and matching target.
     journal_bindings = {(entry["source event"], entry["destination account"], entry["activity id"])
                         for entry in state["journal"]["entries"].values()}
 
     def refresh(previous: dict[str, Any], current_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], set[str]]:
+        from ghostfolio_ibkr_sync.corporate_actions import candidate_held
+
+        corporate_held = {event_id for event_id, event in events.items()
+            if (decision := config.get("_corporate_decisions", {}).get(event["source account"])) is not None
+            and candidate_held(decision, event["payload"])}
         fresh, current_held = refresh_proposals(previous, events, current_rows, accounts, journal_bindings,
-            reconciliation=config.get("activity_reconciliation", "off"), timezone=os.environ.get("TZ", "").strip())
+            reconciliation=config.get("activity_reconciliation", "off"), timezone=os.environ.get("TZ", "").strip(),
+            held_events=corporate_held)
         cooling.update(key for key, item in fresh.items() if item.get("rejection cooldown"))
         for key, item in fresh.items():
             if key in cooling:
@@ -1099,6 +1132,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             entry["status"] = "confirmed"
             entry["verified result"] = entry["after"]
             publish_journal(state)
+            counts["manually corrected" if entry.get("authority", "manual") == "manual" else "automatically corrected"] += 1
         else:
             unresolved.add(entry["destination account"])
             unresolved_events.add(entry["source event"])
@@ -1109,22 +1143,31 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                           if (key, item["review revision"]) not in consumed}
     refreshed, held = refresh(remaining_previous, snapshot_rows(config))
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
+    for event_id, event in events.items():
+        if event_id in unresolved_events or any(item["source event"] == event_id for item in refreshed.values()):
+            continue
+        matches = [row for row in rows if marker_of(row) == event_id]
+        if len(matches) == 1:
+            consistent[event_id] = {"destination activity": matches[0]["id"], "security": event["values"]["symbol"],
+                                    "type": event["values"]["type"], "status": "already consistent"}
+    counts["already consistent"] = len(consistent)
     approved, refreshed_blocked = selected_proposals(refreshed)
     blocked |= refreshed_blocked
     # Simulation cannot consume a proposal whose pending request now appears applied.
     for key, old in original.items():
         if old["source event"] in unresolved_events:
             refreshed[key] = {**old, "status": "unresolved request; account writes blocked"}
-    publish_review(state, {"version": 1, "proposals": refreshed})
+    for position, item in enumerate(sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])), 1):
+        item["queue position"] = position
+        item["remaining eligible runs"] = position
+    publish(refreshed)
     executed = 0
+    planned = 0
+    previews: set[str] = set()
     for item in sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])):
         account = item["destination account"]
         if (account in blocked or item["source event"] not in events or not item["actionable"]
                 or item["key"] not in refreshed or item.get("execution path") != "normal run"):
-            continue
-        if simulated:
-            log.info("DRY RUN reviewed correction account %s activity %s: %s", account,
-                     item["activity id"], item["proposed values"])
             continue
         qualification = QUALIFIED_EXECUTION
         if qualification is None:
@@ -1133,7 +1176,15 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         image, limit, delay = qualification
         if not image or type(limit) is not int or limit < 1 or not 0 <= delay < float("inf"):
             raise RuntimeError("Invalid qualified correction execution budget")
-        if executed >= limit:
+        if executed + planned >= limit:
+            continue
+        if simulated:
+            planned += 1
+            counts["would correct"] += 1
+            previews.add(item["key"])
+            item["status"] = "would correct"
+            log.info("DRY RUN would correct activity %s; authority=%s; fields=%s", item["activity id"],
+                     "manual" if item["approve"] == "yes" else item["profile"], item["changed fields"])
             continue
         if executed and delay:
             time.sleep(delay)
@@ -1189,14 +1240,34 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         entry["status"] = "confirmed"
         entry["verified result"] = after
         publish_journal(state)
+        counts["manually corrected" if entry["authority"] == "manual" else "automatically corrected"] += 1
         refreshed = {key: candidate for key, candidate in refreshed.items()
                      if candidate["source event"] != item["source event"]}
-        publish_review(state, {"version": 1, "proposals": refreshed})
+        publish(refreshed)
     # Rediscover new context and release reassigned alternatives after confirmed PUTs.
     if not simulated and executed:
         refreshed, _ = refresh(refreshed, snapshot_rows(config))
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
-    publish_review(state, {"version": 1, "proposals": refreshed})
+    deferred, conflicts = selected_proposals(refreshed)
+    blocked |= conflicts
+    counts["automatic work deferred"] = len({item["source event"] for item in deferred
+        if item["destination account"] not in blocked and item["key"] not in previews})
+    counts["rejected association"] = sum(bool(item.get("rejected")) for item in refreshed.values())
+    counts["blocked"] = len(unresolved_events | {item["source event"] for item in refreshed.values()
+        if not item["actionable"] or item["destination account"] in blocked})
+    counts["manual review required"] = len({item["source event"] for item in refreshed.values()
+        if item["actionable"] and not item.get("automatic eligible") and item["approve"] != "yes"
+        and not item.get("rejected")})
+    queue = [item for item in deferred if item["destination account"] not in blocked and item["key"] not in previews]
+    for position, item in enumerate(sorted(queue, key=lambda item: (item.get("first eligible") or "", item["key"])), 1):
+        item["queue position"] = position
+        item["remaining eligible runs"] = position
+        if item["destination account"] not in blocked and item["key"] not in previews:
+            item["status"] = "automatic work deferred"
+    publish(refreshed)
+    outcome = config.get("_corporate_outcome")
+    if outcome is not None:
+        outcome["reconciliation"] = dict(counts)
     held = {item["source event"] for item in refreshed.values() if proposal_holds(item)} | unresolved_events
     config["_review_rejected"] = {}
     for item in refreshed.values():
@@ -1222,10 +1293,14 @@ def report_review_outcome(state: ReviewState, config: dict[str, Any], proposals:
             reason = "review_uncertain"
         elif item.get("execution path") == "historical maintenance":
             reason = "review_maintenance"
+        elif item.get("rejected") and not proposal_holds(item):
+            continue
+        elif item.get("rejected"):
+            reason = "review_evidence"
         elif (not item.get("actionable") or item.get("status") in
               ("source unavailable", "target missing or unavailable") or QUALIFIED_EXECUTION is None):
             reason = "review_evidence"
-        elif item.get("approve") == "yes":
+        elif item.get("approve") == "yes" or item.get("automatic eligible"):
             deferred.add(event)
             log.info("Activity review deferred automatic work: %s; container path=%s; section=%s; key=%s; "
                      "approval retained; hold remains; simulation=%s", event, state["path"],

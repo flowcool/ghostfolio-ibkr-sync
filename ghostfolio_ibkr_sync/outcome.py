@@ -38,6 +38,12 @@ class RunOutcome(TypedDict):
     delivery: NotRequired[str]
     review_held: NotRequired[set[str]]
     deferred: NotRequired[set[str]]
+    reconciliation: NotRequired[dict[str, int]]
+
+
+RECONCILIATION_COUNTS = ("already consistent", "automatically corrected", "manually corrected",
+                         "automatic work deferred", "manual review required", "rejected association",
+                         "blocked", "would correct")
 
 
 # Allowed failure reasons per stage. External summaries use only these codes,
@@ -96,7 +102,7 @@ ACTION_INSTRUCTIONS = {
     "trade_manual": "Compare the source trade with the manual Ghostfolio activity before any reference repair. Resolution: verified reference ownership or documented manual resolution.",
     "trade_position": "Compare current Ghostfolio holdings and source trades. Resolution: verified holdings support the intended sale; no automatic repair is authorized.",
     "mapping_conflict": "Inspect the different-symbol holding in Ghostfolio and MAPPING_FILE. Resolution: the intended security and holding use a verified explicit mapping.",
-    "review_approval": "Read the exact proposal in ACTIVITY_REVIEW_FILE. Edit only approve between runs; lowercase literal yes approves an eligible normal-run correction. Resolution: current evidence confirms the intended correction or documented manual resolution.",
+    "review_approval": "Read the exact proposal in ACTIVITY_REVIEW_FILE. Edit only decision between runs; lowercase literal yes approves an eligible normal-run correction; reject excludes that association. Resolution: current evidence confirms the intended correction or documented manual resolution.",
     "review_evidence": "Inspect ACTIVITY_REVIEW_FILE and obtain the stated missing proof. yes cannot make blocked work executable. Resolution: current source and destination evidence qualify the proposal.",
     "review_maintenance": "Follow the historical maintenance preparation guide and obtain separate operation authorization. Normal sync cannot execute it. Resolution: verified maintenance or documented manual resolution.",
     "review_uncertain": "Inspect preserved journal and destination readback. Do not resend, delete or edit the journal. Resolution: exact readback confirms the request outcome.",
@@ -135,6 +141,9 @@ def log_operational_result(outcome: RunOutcome, code: int) -> None:
     log.log(level, "Cycle result: %s; unique review-held events=%s; deferred automatic work=%s; notification=%s; "
             "decision counts can overlap", result, len(held) if held is not None else "unavailable",
             len(deferred) if deferred is not None else "unavailable", outcome.get("delivery", "unavailable"))
+    if "reconciliation" in outcome:
+        log.info("Reconciliation result: %s", "; ".join(f"{name}={outcome['reconciliation'].get(name, 0)}"
+                                                       for name in RECONCILIATION_COUNTS))
     if not outcome["account_results"]:
         log.info("Account evidence: imports=unavailable; duplicates=unavailable; cash=unavailable")
     for key, account in outcome["account_results"].items():
