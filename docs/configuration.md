@@ -1,6 +1,7 @@
 # Configuration and operations
 
-This guide contains the complete environment reference, mapping rules, runtime behavior, and Docker Compose example. Start with the [README quick start](../README.md#quick-start), then return here for the detailed settings.
+Use the [first-install guide](getting-started.md) for setup. This reference covers
+authentication, ENV, mapping, runtime outcomes and advanced Docker operations.
 
 
 
@@ -8,7 +9,9 @@ This guide contains the complete environment reference, mapping rules, runtime b
 
 ### 1. Choose how the sync authenticates
 
-Set **exactly one** of these two variables (both set, or neither, stops the run with exit 1):
+Use `GHOST_ACCESS_TOKEN` for a new installation. Set exactly one credential mode;
+both or neither stops startup. [Legacy authentication](#legacy-authentication) is
+available for existing bearer-token installations.
 
 - **`GHOST_ACCESS_TOKEN` (recommended)** — the Ghostfolio *security token* you sign in with
   (shown when the user was created; Ghostfolio can generate a new one). At the start of every
@@ -17,17 +20,6 @@ Set **exactly one** of these two variables (both set, or neither, stops the run 
   `POST /api/v1/auth/anonymous`. There is nothing to renew by hand. A dry run logs in too
   (logging in writes no financial data). The security token is long-lived: treat it like a
   password, and rotate it in Ghostfolio if it leaks.
-- **`GHOST_TOKEN` (legacy)** — a session bearer you obtain yourself; it is used as is and
-  **expires**, so you have to regenerate it periodically:
-
-  ```bash
-  curl -X POST http://localhost:3333/api/v1/auth/anonymous \
-    -H 'Content-Type: application/json' \
-    -d '{"accessToken": "YOUR_GHOSTFOLIO_SECURITY_TOKEN"}'
-  ```
-
-  The response contains an `authToken` field. Use it as `GHOST_TOKEN`.
-
 With `GHOST_ACCESS_TOKEN`, `GHOST_HOST` must be a plain `http://` or `https://` URL (an
 optional path is allowed): user credentials, a query string, a fragment, whitespace or control
 characters are refused before any request. The login request does not follow redirects, so point
@@ -41,33 +33,13 @@ security token in its body, so over `http://` anyone who can observe the path ca
 network of a shared compose stack (`http://ghostfolio:3333`). When the traffic crosses any other
 network, point `GHOST_HOST` at an `https://` URL.
 
-**Switching modes / rollback:** remove one variable and set the other, then recreate the
-container. Images released before `GHOST_ACCESS_TOKEN` existed only understand `GHOST_TOKEN`:
-when rolling back to one, set `GHOST_TOKEN` again first.
-
-### 2. Create an IBKR Platform
-
-1. Go to Ghostfolio **Admin** - **Platform**
-2. Click **Add Platform**
-3. Enter a name like `Interactive Brokers` and a URL like `https://www.interactivebrokers.com`
-4. Save it
-
-To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command above):
-
-```bash
-curl http://localhost:3333/api/v1/platform \
-  -H 'Authorization: Bearer YOUR_AUTH_TOKEN'
-```
-
-Look for the `id` field of the IBKR platform entry. Use this as `GHOST_PLATFORM_ID`.
-
 ### 3. Create accounts
 
 Create one Ghostfolio account per IBKR sub-account:
 
 1. Go to **Accounts** and click **Add Account**
 2. Set the name to match what you will use in `GHOST_ACCOUNT_NAMES` (for example `IBKR Individual` or `IBKR Joint`)
-3. Select the IBKR platform you created
+3. Select an IBKR platform if you use one; platform metadata is optional
 4. Set the currency to match the sub-account base currency
 5. Repeat for each sub-account
 
@@ -110,6 +82,55 @@ All configuration is done via environment variables:
 | `APPRISE_TIMEOUT` | No | Notification timeout in seconds, from 1 to 30. | `10` | `10` |
 | `DRY_RUN` | No | Simulation mode. Only `false`, `0`, `no`, or `off` request writes. | `true` | Simulation |
 
+
+## Compose settings
+
+The [.env.example](../.env.example) supplies interpolation values for Compose.
+`GHOST_DOCKER_NETWORK` selects the existing external network, default `ghostfolio`.
+It is a Compose setting, not a connector runtime variable. Use a Ghostfolio
+service name/alias on that network for `GHOST_HOST`.
+
+The `_INDIVIDUAL` and `_JOINT` account/query/name values map to the container's
+unsuffixed ENV names. `CRON_INDIVIDUAL` and `CRON_JOINT` select separate schedules.
+`DRY_RUN` applies to all services. See [multiple accounts and migration](getting-started.md#multiple-accounts).
+
+## Optional platform metadata
+
+### 2. Create an IBKR Platform
+
+Optional. GHOST_PLATFORM_ID is not required for import or the first installation.
+Use these steps only if you want to fill missing platform metadata.
+
+1. Go to Ghostfolio **Admin** - **Platform**
+2. Click **Add Platform**
+3. Enter a name like `Interactive Brokers` and a URL like `https://www.interactivebrokers.com`
+4. Save it
+
+To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command in [Legacy authentication](#legacy-authentication)):
+
+```bash
+curl http://localhost:3333/api/v1/platform \
+  -H 'Authorization: Bearer YOUR_AUTH_TOKEN'
+```
+
+Look for the `id` field of the IBKR platform entry. Use this as `GHOST_PLATFORM_ID`.
+
+## Legacy authentication
+
+- **`GHOST_TOKEN` (legacy)** — a session bearer you obtain yourself; it is used as is and
+  **expires**, so you have to regenerate it periodically:
+
+  ```bash
+  curl -X POST http://localhost:3333/api/v1/auth/anonymous \
+    -H 'Content-Type: application/json' \
+    -d '{"accessToken": "YOUR_GHOSTFOLIO_SECURITY_TOKEN"}'
+  ```
+
+  The response contains an `authToken` field. Use it as `GHOST_TOKEN`.
+
+**Switching modes / rollback:** remove one variable and set the other, then recreate the
+container. Images released before `GHOST_ACCESS_TOKEN` existed only understand `GHOST_TOKEN`:
+when rolling back to one, set `GHOST_TOKEN` again first.
 
 ## Mapping and reconciliation
 
@@ -214,28 +235,73 @@ If you trade on `.JO` or `.TA` and amounts look 100 times off, check this table 
 
 ### Single account (one-off run)
 
+Compose is the [first-install path](getting-started.md). For an autonomous Docker
+run, create a separate private `.env.run`. The Compose `.env` uses suffixed names
+and cannot be passed directly to `docker run`. Docker ENV files do not expand
+variables or remove quotes: use unquoted values, including account names.
+Create the private file before adding credentials, then fill it with the values below:
+
+```bash
+(umask 077; touch .env.run)
+chmod 600 .env.run
+```
+
+```dotenv
+TZ=Europe/Paris
+IBKR_TOKEN=replace-with-your-ibkr-flex-token
+IBKR_ACCOUNT_IDS=U1234567
+IBKR_QUERY_IDS=123456
+GHOST_ACCESS_TOKEN=replace-with-your-ghostfolio-security-token
+GHOST_HOST=http://ghostfolio:3333
+GHOST_ACCOUNT_NAMES=IBKR Individual
+MAPPING_FILE=/app/mapping.yaml
+CORPORATE_ACTION_STATE_FILE=/state/corporate-actions.yaml
+```
+
+Keep CRON out of this file. Edit the mapping before setting its final ownership.
+Prepare `.env.run` with mode `0600`. The runtime user `10001:10001` must own and
+read the mapping file (mode `0600`) and own the state directory (mode `0700`):
+
+```bash
+chmod 600 .env.run mapping.yaml
+mkdir -p state/individual
+chmod 700 state/individual
+sudo chown 10001:10001 mapping.yaml state/individual
+```
+
+Replace `your-ghostfolio-network` with the existing network shared with Ghostfolio.
+Set GHOST_HOST to a service name or alias that exists on that network. Use the
+same per-account state directory as Compose. Stop its scheduled service before
+this run, or run before starting the schedule. Do not overlap writers or create
+a second state inventory to bypass a lock. Existing multi-account installations
+must also pause the other writer if it uses this account.
+
 ```bash
 docker run --rm --network your-ghostfolio-network \
-  -e DRY_RUN=true \
-  -e TZ=Europe/Paris \
-  -e IBKR_TOKEN=your_token \
-  -e IBKR_ACCOUNT_IDS=U1234567 \
-  -e IBKR_QUERY_IDS=123456 \
-  -e GHOST_ACCESS_TOKEN=your_ghost_security_token \
-  -e GHOST_HOST=http://ghostfolio:3333 \
-  -e GHOST_ACCOUNT_NAMES="IBKR Main" \
+  --user 10001:10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 \
+  --env-file .env.run -e DRY_RUN=true \
   -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
+  -v "$(pwd)/state/individual:/state" \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
+The first simulation initializes missing state after valid report acquisition.
+It can maintain local evidence files; it sends no financial write. Review the
+bounded inventory, mapping and holds. Back up Ghostfolio before deliberately
+changing the command to `-e DRY_RUN=false`. Resume the schedule only after the
+one-off container exits and the result is understood.
+
 ### Local development
 
-Docker is the only supported way to run the sync. The image installs the
-`ghostfolio_ibkr_sync` package and starts it with `python -m ghostfolio_ibkr_sync`.
-Since v3.0.0 there is no `ibkr_to_ghostfolio.py` file or launcher: running the
-repository from a source checkout is not supported. To test local changes, build the
-image yourself. Run it with the command above, but replace
-`ghcr.io/flowcool/ghostfolio-ibkr-sync:latest` with `ibkr-sync:local`:
+Run the sync in Docker.
+The image installs `ghostfolio_ibkr_sync` and runs `python -m ghostfolio_ibkr_sync`.
+Since v3.0.0, `ibkr_to_ghostfolio.py` and source-checkout execution are unsupported.
+
+To test changes, build a local image.
+Use the Docker command above with `ibkr-sync:local` instead of
+`ghcr.io/flowcool/ghostfolio-ibkr-sync:latest`:
 
 ```bash
 docker build -t ibkr-sync:local .
@@ -252,7 +318,15 @@ other values exit 1 before any HTTP call. After rejection, only configured
 Apprise Failure delivery may occur. No IBKR/Ghostfolio HTTP call or financial
 write occurs. Other safety guards still apply.
 
-Set `DRY_RUN=1` explicitly for the preview. The full pipeline runs (fetch, convert, deduplicate, gate) and the activities and cash balance that *would* be written are logged, but no activities are imported and no cash balance is updated. With `GHOST_ACCESS_TOKEN`, the authentication POST still exchanges the security token for a session token. IBKR report generation is requested and existing Ghostfolio data is read. This preview does not validate symbols through the Ghostfolio import endpoint, so a successful preview does not guarantee a successful import. Logs include financial activity details; keep them private.
+Set `DRY_RUN=1` for preview.
+The full pipeline fetches, converts, deduplicates and checks proposed imports.
+Logs show proposed activities and cash. No activities or cash are written.
+
+Authentication still exchanges `GHOST_ACCESS_TOKEN` for a session token.
+IBKR generates a report. The connector reads existing Ghostfolio data.
+Preview does not validate symbols through the import endpoint.
+A successful preview does not guarantee a successful import.
+Keep logs private: they contain financial details.
 
 Set a valid IANA `TZ`, such as `Europe/Paris`, even for one-off Docker runs.
 Missing or invalid `TZ` forces every account into `DRY_RUN` before processing,
@@ -331,23 +405,27 @@ as `outside_window`; without valid bounds, history stays uncertain. The connecto
 does not infer a window from the first or last payment. Short reports cannot
 verify older history. No category authorizes a repair.
 
-Use a one-off container with no `CRON` environment variable. The command reads
-only the report generated by its configured Flex query; Docker does not extend
-the broker's report window. WARNING includes actionable anomaly and uncertainty details, IDs
-and source references; DEBUG also includes coherent comparisons. Keep Docker
-logs private and capture them before removing a container if you need evidence.
-The diagnostic creates no persistent report and log retention depends on Docker's
-logging configuration. Financial state remains unchanged, but authentication and
-IBKR report generation still contact the configured services. Technical read
-failures still fail the run; actionable diagnostic findings join one notification.
+Use `.env.run`, state mounts and the no-overlap rules from
+[the standalone run](#single-account-one-off-run). Keep `CRON` out of the file.
+The query controls the report window. Docker cannot extend it.
+
+WARNING shows anomalies, uncertainty, IDs and source references.
+DEBUG also shows coherent comparisons. Keep logs private.
+Capture needed logs before removing the container.
+There is no separate diagnostic report. Docker controls log retention.
+
+Simulation can initialize state, retain evidence and rotate local reports.
+It sends no financial writes. Authentication and report generation still contact services.
+Read failures fail the run. Actionable findings join one notification.
 
 ```bash
-docker run --rm --network your-ghostfolio-network -e DRY_RUN=1 -e LOG_LEVEL=DEBUG \
-  -e TZ=Europe/Paris \
-  -e IBKR_TOKEN=your_token -e IBKR_ACCOUNT_IDS=U1234567 -e IBKR_QUERY_IDS=123456 \
-  -e GHOST_ACCESS_TOKEN=your_ghost_security_token -e GHOST_HOST=http://ghostfolio:3333 \
-  -e GHOST_ACCOUNT_NAMES="IBKR Main" \
+docker run --rm --network your-ghostfolio-network \
+  --user 10001:10001 --read-only --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 \
+  --env-file .env.run -e DRY_RUN=true -e LOG_LEVEL=DEBUG \
   -v "$(pwd)/mapping.yaml:/app/mapping.yaml:ro" \
+  -v "$(pwd)/state/individual:/state" \
   ghcr.io/flowcool/ghostfolio-ibkr-sync:latest
 ```
 
@@ -384,7 +462,8 @@ not a guarantee that IBKR recovers.
 
 ## Notifications (Apprise)
 
-Optional. When `APPRISE_URLS` is set, a run that **completes with exit 1** sends one
+Optional. When `APPRISE_URLS` is set, each completed run with a failure, required
+user action or eligible corporate-action notice sends at most one consolidated
 notification through [Apprise](https://github.com/caronc/apprise/wiki), which supports
 ntfy, Gotify, Telegram, Discord, Slack, email and many more. A completed successful run
 in any simulation or live mode also sends a reminder when its legacy `GHOST_TOKEN` is about to expire (see
@@ -392,9 +471,13 @@ in any simulation or live mode also sends a reminder when its legacy `GHOST_TOKE
 URLs, each up to 2048 characters; put one URL per entry, as an entry holding several
 space- or comma-separated URLs counts each one toward the limit of 10):
 
-```yaml
-      APPRISE_URLS: '["ntfys://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]'
-      APPRISE_TIMEOUT: "10"
+Set these values in the private Compose `.env`, then recreate the service.
+Both Compose examples pass them to the container. Keep notification credentials
+out of tracked YAML. For autonomous Docker, use the private `.env.run` instead.
+
+```dotenv
+APPRISE_URLS=["ntfys://ntfy.sh/my-private-topic", "tgram://BOT_TOKEN/CHAT_ID"]
+APPRISE_TIMEOUT=10
 ```
 
 **What is sent:** a fixed title, the UTC time, how many accounts failed out of how many, and
@@ -450,10 +533,10 @@ The repository root contains the canonical hardened [`compose.yaml`](../compose.
 For a first preview, run one account without its schedule:
 
 ```bash
-docker compose run --rm -e CRON= ibkr-sync-individual
+docker compose run --rm -e DRY_RUN=true -e CRON= ibkr-sync-individual
 ```
 
-Keep `DRY_RUN=true` until the preview is understood. Set `DRY_RUN=false` only after a backup and a deliberate review. For recurring runs, set `CRON_INDIVIDUAL` and `CRON_JOINT` in `.env`, then run `docker compose up -d`. Use `10001:10001`, mode `0600`, and a read-only mapping mount as shown in the canonical file. Stagger schedules when several sub-accounts share one Ghostfolio instance.
+Keep `DRY_RUN=true` until the preview is understood. Set `DRY_RUN=false` only after a backup and a deliberate review. For one account, set `CRON_INDIVIDUAL` in `.env`, then run `docker compose up -d`. For multiple accounts or an existing two-service installation, follow [the separate example and migration](getting-started.md#multiple-accounts). Use `10001:10001`, mode `0600`, and a read-only mapping mount as shown in the canonical file. Stagger schedules when several sub-accounts share one Ghostfolio instance.
 
 The image runs as the stable non-root UID/GID `10001:10001`. The mapping file must be readable by that user:
 
@@ -474,7 +557,8 @@ true, nothing is written):
 docker exec <container> python -m ghostfolio_ibkr_sync
 ```
 
-This is the only supported way to run the sync by hand. The old
+Inside an existing container, use the module command above and avoid overlap
+with a cron cycle. For an autonomous run, use the separate example above. The old
 `python /app/ibkr_to_ghostfolio.py` command no longer works: v3.0.0 removed that file
 without a compatibility launcher, so update any script or note that calls it.
 
@@ -493,7 +577,7 @@ without a compatibility launcher, so update any script or note that calls it.
 - **No options support** - Ghostfolio does not support options as an asset class; options trades are skipped entirely
 - **365-day window** - IBKR Flex Query maximum period is 365 days. On the first run, trades older than that are not imported: enter older buys by hand (or keep them from a previous tool). Afterwards the daily sync accumulates history in Ghostfolio, and later sells of those positions are imported as long as Ghostfolio holds the buy.
 - **Yahoo Finance data quality** - price data can have gaps, delays, or missing metadata (sector, country) for non-US ETFs and smaller listings
-- **Corporate actions** - detection holds unsafe BUY/SELL. Treatment remains manual. See [persistent evidence, date proof and recovery](../README.md#corporate-action-safety).
+- **Corporate actions** - detection holds unsafe BUY/SELL. Treatment remains manual. See [persistent evidence, date proof and recovery](corporate-actions.md).
 - **Cash balance is a single base-currency figure** - the balance written to each Ghostfolio account is IBKR's total ending cash in the account's base currency, with no conversion. The Ghostfolio account must have the same currency as the IBKR base currency (see [Create accounts](#3-create-accounts)); the sync refuses to write the balance otherwise.
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.

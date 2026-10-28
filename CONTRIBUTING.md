@@ -27,6 +27,17 @@ CI and the container use Python 3.14. Tests use synthetic inputs and mocked HTTP
 
 Open one pull request per concern and describe the problem, resulting behavior and verification. Required CI checks apply to documentation changes too. See [build and release guarantees](.github/BUILD.md) for image publishing and rollback. A compatibility notice from the upstream release watcher is a request for review, not a compatibility guarantee.
 
+## Maintainer reference
+
+- [Build and publication guarantees](.github/BUILD.md)
+- [Release process, exact-image qualification and rollback](docs/releasing.md)
+- [Historical release-note investigation](docs/release-notes-automation.md)
+- [Architecture decisions](docs/adr/README.md)
+
+Qualification and publication are separate from permission to deploy or write
+financial data. Lab acceptance needs `LOG_LEVEL=DEBUG` for the bounded
+`LAB_EVIDENCE` records. Keep raw financial evidence private.
+
 ## License
 
 Contributions follow the repository's inherited [MIT NON-AI License](LICENSE), including its additional restrictions.

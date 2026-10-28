@@ -4,8 +4,8 @@
 
 Community Docker connector that imports Interactive Brokers activities from Flex
 Web Service reports into Ghostfolio. Docker-first, every setting through ENV,
-unattended runs with `docker compose up -d` and an optional `CRON`. README.md owns
-the complete setup and configuration guide. Keep public artifacts free of personal
+unattended runs with `docker compose up -d` and an optional `CRON`. README.md is the installation entry point; docs/getting-started.md owns the
+first-install path and docs/configuration.md owns the settings reference. Keep public artifacts free of personal
 hosts, paths, account identifiers and private work-tracker IDs.
 
 This repository is the canonical source of the broker-agnostic Ghostfolio helpers
@@ -38,6 +38,8 @@ propagation in its PR.
 - OpenSpec change `clarify-operator-actions` is implemented and archived at `openspec/changes/archive/2026-10-27-clarify-operator-actions/`. All ten tasks have offline acceptance proof.
 - Implementation and release for `clarify-operator-actions` are complete. Stable `v3.3.0` reuses the RC digest qualified in both labs. Beads owns the acceptance evidence.
 - Stable publication does not authorize production deployment or financial operations.
+
+- OpenSpec change `simplify-user-onboarding` is implemented and archived at `openspec/changes/archive/2026-10-28-simplify-user-onboarding/`. The primary Compose example uses one account; `compose.multi-account.yaml` retains the two-account setup. Detailed user guides live under `docs/`.
 
 ## Working mode: fast-track
 

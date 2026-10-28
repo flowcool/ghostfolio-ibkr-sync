@@ -1,12 +1,38 @@
 # Troubleshooting
 
+Find the symptom below. Fix its cause, then run simulation.
+Check [Cycle result](configuration.md#cycle-result) and [Notification result](configuration.md#notification-result).
+The named reason should disappear. Resolve remaining actions before enabling writes.
+Exit 0 alone does not prove a complete import.
+
+## Missing corporate-action state or active trade hold
+
+**Cause:** CORPORATE_ACTION_STATE_FILE is unset, missing, invalid, unwritable or
+locked, or current evidence leaves a corporate-action hold.
+
+**Action:** inspect the named path and private log. For first installation, use a
+private persistent directory owned by `10001:10001` and run simulation to initialize
+it after valid report acquisition. For state loss, preserve surviving evidence and
+follow [recovery](corporate-actions.md#native-splits-notifications-and-recovery).
+Do not delete state, bypass a lock or resend uncertain writes.
+
+**Expected result:** missing prerequisites or active holds produce exit 1, including
+simulation. Resolve the actual proof before enabling BUY/SELL. Independent cash
+retains its own guards and does not release a trade hold.
+
 ## "has no Cash Transactions section: dividends not synced"
 
 The Flex Query does not include the Cash Transactions section. Add it as described in [Create a Flex Query](ibkr-setup.md#2-create-a-flex-query); trades still sync meanwhile, but the run exits 1.
 
 ## "cash rows without a valid 'YYYYMMDD;HHmmss TimeZone' dateTime"
 
-The full line starts with `Flex Query <id>:` and ends with `account failed before any write`. A DETAIL dividend, payment-in-lieu or withholding row has no valid time-zone suffix, so the account fails before any import, cash or platform write. The run exits 1; other accounts still run and `DRY_RUN` is not enabled. In the Flex query, set the time format to **HHmmss TimeZone** (see [Create a Flex Query](ibkr-setup.md#2-create-a-flex-query)).
+A DETAIL dividend, payment-in-lieu or withholding row lacks a valid time-zone suffix.
+The log starts with `Flex Query <id>:` and ends with `account failed before any write`.
+The account sends no import, cash or platform write. The run exits 1.
+Other accounts continue in their configured mode. This error does not enable `DRY_RUN`.
+
+Set the Flex time format to **HHmmss TimeZone**.
+See [Create a Flex Query](ibkr-setup.md#2-create-a-flex-query).
 
 ## "required dividend fields missing from the report"
 
@@ -34,7 +60,16 @@ An IBKR buy was **not** imported because Ghostfolio already has a buy of the sam
 
 ## "Mapping file ... not found"
 
-The mapping file is missing at the configured path (or at the default `mapping.yaml` in the working directory, `/app` in the image). The run stops before contacting IBKR or Ghostfolio, because raw IBKR symbols can book trades on the wrong security (ticker collisions). Check the volume mount (`./mapping.yaml:/app/mapping.yaml`); if the host file did not exist when the container was created, Docker created a directory at `/app/mapping.yaml` instead: create the file on the host and recreate the container. Or set `MAPPING_FILE=""` to run without mappings on purpose. Invalid YAML, or a `symbol_mapping` that is not `ISIN: TICKER` pairs, also stops the run.
+The file is missing at the configured path.
+The default is `mapping.yaml` in the working directory (`/app` in the image).
+The run stops before contacting IBKR or Ghostfolio.
+Raw IBKR symbols can select the wrong security through ticker collisions.
+
+Check `./mapping.yaml:/app/mapping.yaml`.
+If the host file was missing, Docker created a directory instead.
+Create the host file, then recreate the container.
+Set `MAPPING_FILE=""` only if you intend to run without mappings.
+Invalid YAML or invalid `ISIN: TICKER` pairs also stop the run.
 
 ## "not valid for the specified data source YAHOO"
 
@@ -56,8 +91,8 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), a Ghostfolio target is repeated, at least one account failed, or an unhandled error occurred |
+| 0 | No account failed; required actions or deferred work may remain. Read Cycle result. |
+| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), a Ghostfolio target is repeated, corporate-action state is missing/invalid/unwritable or a trade hold is active, at least one account failed, or an unhandled error occurred |
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Flex query without the time-zone suffix or the required dividend fields, a refused cash balance (currency mismatch or no base currency), an unknown trade side, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
@@ -71,7 +106,21 @@ Run **Gather All Data** in Ghostfolio **Admin** - **Market Data**. This fetches 
 
 ## Negative positions appearing in Ghostfolio
 
-This happens when a sell trade is imported without its corresponding buy. The tool checks each security's net batch quantity against Ghostfolio holdings, and logs an `ERROR` when existing holdings plus new trades would be negative. This guard does not check chronological balances, and cannot repair a pre-existing negative position. Invalid or non-finite trade conversions, including raw commissions, are excluded before the holdings calculation and make the run exit 1. Repeated trade IDs are counted once; conflicting rows sharing an ID are excluded. Buys are submitted before sells, and the sell guard is recomputed from the accepted buys. Only rows matched to the server-created activity list update local holdings; an unknown import outcome blocks subsequent imports to that account in the run. Dry-run simulates proposed buys and cannot predict server duplicate handling. Review conversion errors and compare positions after importing. Typical causes: the buy was recorded on another Ghostfolio account (for example before a broker transfer), or a split was not applied to the old transactions. Fix the position in Ghostfolio; the next run then imports normally.
+A sell has no corresponding buy in that account.
+Check for a buy in another account or a split missing from old transactions.
+Fix the Ghostfolio position before the next run.
+
+The connector checks net batch quantities against holdings.
+It logs `ERROR` if holdings plus new trades would be negative.
+This check does not validate chronological balances or repair existing negative positions.
+Invalid or non-finite conversions, including raw commissions, are excluded and cause exit 1.
+Repeated trade IDs count once. Conflicting rows with one ID are excluded.
+
+Buys run before sells. Accepted buys update the sell check.
+Only rows matched to server-created activities update local holdings.
+An unknown import result blocks later imports to that account for the run.
+Simulation cannot predict server duplicate handling.
+Review conversion errors and compare positions after import.
 
 ## IBKR symbol variants (for example CSNKYz vs CSNKY)
 
@@ -81,19 +130,21 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
-With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](configuration.md#configuration-reference) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
+With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [legacy authentication](configuration.md#legacy-authentication) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
 
-In legacy mode, startup reads the JWT's `exp` claim locally. Within **14 days** of
-expiry (including an already expired token), it logs a `WARNING` with the days
-remaining and sends an Apprise reminder after the run completes, when configured.
-Set `GHOST_TOKEN_EXPIRY_WARNING_DAYS` to an integer from `0` to `365` to change the
-window; `0` disables the reminder, and invalid values warn and fall back to `14`.
-The reminder alone never fails the sync. A dry run logs the warning but sends no
-notification; interrupted runs send none either. Tokens without a usable numeric
-`exp` (including malformed JWTs) skip the check with a fixed debug message. The
-payload is not signature-verified and is used only for the reminder: Ghostfolio
-still decides whether the token is valid. The token and its other claims are never
-included in the reminder. `GHOST_ACCESS_TOKEN` mode skips this check entirely.
+Legacy mode reads the JWT `exp` value locally.
+Within **14 days** of expiry, startup logs a `WARNING` with the days remaining.
+Expired tokens also qualify. Configured Apprise sends a reminder after each completed run, including simulation.
+The reminder alone does not fail the sync. Interrupted runs send no completion notification.
+
+Set `GHOST_TOKEN_EXPIRY_WARNING_DAYS` to an integer from `0` to `365`.
+`0` disables reminders. Invalid values warn and fall back to `14`.
+Tokens without a usable numeric `exp` skip the check with a fixed debug message.
+This includes malformed JWTs.
+
+The reminder check does not verify the signature. Ghostfolio decides whether the token is valid.
+The reminder never contains the token or its other claims.
+`GHOST_ACCESS_TOKEN` skips this check.
 
 ## "Ghostfolio login failed: ..."
 

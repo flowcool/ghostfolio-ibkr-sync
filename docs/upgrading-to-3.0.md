@@ -33,8 +33,9 @@ follow; no IBKR/Ghostfolio HTTP calls or financial writes occur.
 Simulation still logs in, reads data and runs the preview. It writes no activity,
 cash or platform data. Failed simulations send one configured Failure
 notification, including default/blank/truthy modes and invalid `DRY_RUN`.
-Successful simulations send nothing, including expiry-only reminders and
-previews. Failure with an expiry reminder or forced preview uses one summary.
+Successful simulations notify for required actions, including token renewal and
+timezone correction, and eligible corporate-action notices. A clean preview alone
+sends nothing. Failure with an expiry reminder or forced preview uses one summary.
 Without configured Apprise, nothing is sent. Delivery does not change exit status.
 
 Keep `DRY_RUN=true` while reviewing the preview. Then set `DRY_RUN=false` and
