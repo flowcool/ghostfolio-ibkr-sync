@@ -91,6 +91,7 @@ All configuration is done via environment variables:
 | `CORPORATE_ACTION_STATE_FILE` | For BUY/SELL | Private persistent state, initialized in simulation. | `/state/corporate-actions.yaml` | Missing: trade hold and exit 1 |
 | `CORPORATE_ACTION_EVIDENCE_FILE` | No | Private official effective-date document bindings. | `/state/effective-dates.yaml` | Dates remain unproven |
 | `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
+| `ACTIVITY_RECONCILIATION` | No | Correction profile: `off`, `conservative`, `balanced`, or `permissive`. Requires a persistent review file when enabled. | `balanced` | `off` |
 | `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
 | `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
 | `LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. | `INFO` | `INFO` |
@@ -161,7 +162,8 @@ Before selecting imports, the connector checks identities, existing activities a
 It also checks manual entries by ISIN and proximity.
 Unresolved tickers produce a warning or a failed activity subset. They never create mappings.
 Optional `ACTIVITY_REVIEW_FILE` generates exact or probable one-to-one proposals.
-Corrections need explicit approval and qualified readback.
+Corrections need manual `yes` or bounded profile authority.
+Qualification, a durable journal and exact readback remain required.
 
 ### Format
 
@@ -609,7 +611,7 @@ without a compatibility launcher, so update any script or note that calls it.
 - **Daily data only** - Activity Statements update once daily after market close; intraday syncing is not possible
 - **Token management** - the IBKR Flex token expires and requires manual renewal: set a recurring calendar reminder (up to 1 year). On the Ghostfolio side, `GHOST_ACCESS_TOKEN` logs in on every run; only the legacy `GHOST_TOKEN` needs manual renewal.
 - **Account-scoped queries** - use a separate Flex Query per sub-account. Several account/query pairs can run sequentially in one container; separate containers are recommended for operational isolation.
-- **Additive imports** - with activity review disabled, later IBKR corrections to stored trades or same-date dividends are not reconciled. Optional review exposes supported one-to-one corrections for explicit approval. Dividend proximity matching (manual or legacy rows only, never rows with a `dividend#` comment) can suppress a distinct payment within ±3 days; the skip is logged (`INFO` when the gross agrees, one `WARNING` otherwise) and the payment must then be added by hand. A row with a `dividend#` comment is trusted by exact identity; editing such a row is outside the contract. Check unusual payment schedules and tax corrections manually.
+- **Additive imports** - with activity review disabled, later IBKR corrections to stored trades or same-date dividends are not reconciled. Optional review exposes supported one-to-one corrections for manual decisions or bounded profile authority. Dividend proximity matching (manual or legacy rows only, never rows with a `dividend#` comment) can suppress a distinct payment within ±3 days; the skip is logged (`INFO` when the gross agrees, one `WARNING` otherwise) and the payment must then be added by hand. A row with a `dividend#` comment is trusted by exact identity; editing such a row is outside the contract. Check unusual payment schedules and tax corrections manually.
 - **Commission currency** - commissions are booked in the activity currency; a different IBKR commission currency is not converted.
 - **Cleanup is not transactional** - cleanup requires complete financial evidence, equal fees, a unique one-to-one pair and unchanged fresh copies of both rows. Draft or excluded candidates are refused. PUT can succeed while DELETE fails; stop and inspect both rows and the safety log before any recovery. A new apply writes a private YAML journal with exact preimages and known/unknown outcomes. Explicit journal recovery can finish an unchanged pair; it does not recreate deleted activities or repair changed records.
 - **Active position context** - drafts and excluded activities/accounts retain their import identifiers for deduplication, but cannot contribute holdings, manual matches or dividend proximity evidence. Holdings and manual reconciliation use active YAHOO profiles; other sources cannot back YAHOO sells. Excluded target accounts are refused. Future timestamps are deferred with exit 1 until a later run; this conservative instant check avoids server-local draft assignment even when import responses omit tags. Accepted imports use the actual server profile symbol; a canonicalized symbol can require an explicit mapping before sells under the original ticker are allowed.
@@ -704,3 +706,25 @@ needed. The version is the target software version. An RC reports the same targe
 version before stable publication; its registry tag still contains `-rc.N`.
 Stable promotion preserves the qualified digest. Older images retain their original
 RC build text. Local builds without release metadata report `dev` and `unknown`.
+
+### Reconciliation profile limits
+
+Automatic profiles require the persistent review file and a valid `TZ`.
+An invalid or missing `TZ` forces simulation for the whole run.
+`off` retains manual review and recovery. It grants no automatic correction.
+
+| Profile | Absolute gross difference | Relative gross difference |
+| --- | --- | --- |
+| `conservative` | Zero, except reproduced calculation residue | Zero, except that residue |
+| `balanced` | One currency minor unit | 0.1% |
+| `permissive` | One hundred currency minor units | 1% |
+
+Both limits must pass, including their edges. Compare unrounded gross amounts.
+The relative limit uses the positive source gross as its denominator.
+Automatic financial corrections support JPY, GBP, GBp, USD, EUR and CAD only.
+JPY has zero decimal places. The other major units have two decimal places.
+GBP/GBp uses the fixed factor 100. No exchange rate establishes a match.
+BUY and SELL quantities must agree exactly. Dividend representation changes
+require the validated source quantity. Fees do not select or rank candidates.
+After unique association, corrections use validated source fees.
+Manual review retains differences outside these limits.

@@ -11,6 +11,25 @@ import pytest
 from ghostfolio_ibkr_sync import activity_review as review
 
 
+def write_review(path, document):
+    """Create a bound fixture or simulate edits to the existing operator view."""
+    if not path.exists():
+        state = review.open_review(str(path), [])
+        try:
+            review.publish_review(state, document)
+        finally:
+            review.close_review(state)
+        return
+    public = review.encode_review(document)
+    existing = review.read_yaml(path.read_bytes())
+    public["generation"] = existing["generation"]
+    for section in review.SECTIONS:
+        for key, item in public[section].items():
+            if key in existing[section]:
+                item["required action"] = existing[section][key]["required action"]
+    path.write_text(__import__("yaml").safe_dump(public))
+
+
 def test_review_config_private_file_literal_yes_and_edit_detection(tmp_path):
     path = tmp_path / "review.yaml"
     state = review.open_review(str(path), [])
@@ -125,11 +144,12 @@ def test_review_candidates_exclude_ineligible_rows(change):
     assert not proposals
 
 
-def test_review_source_scope_legacy_global_requires_historical_proof():
+def test_review_source_scope_legacy_mapping_authorizes_comment_only():
     proposals, _ = review.refresh_proposals({}, source_events(), [destination("IBKR#T1")], {"U1": "acc"})
     proposal = next(iter(proposals.values()))
-    assert proposal["status"] == "historical cross-account coverage unavailable"
-    assert proposal["actionable"] is False
+    assert proposal["changed fields"] == ["comment"]
+    assert proposal["actionable"] is True
+    assert proposal["proposed values"]["quantity"] == "1"
 
 
 def test_review_candidates_dividend_uses_one_action_and_three_day_window():
@@ -246,7 +266,7 @@ def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_
     proposals = preview(rows)
     for item in proposals.values():
         item["approve"] = approval
-    path.write_text(__import__("yaml").safe_dump(review.encode_review({"version": 1, "proposals": proposals})))
+    write_review(path, {"version": 1, "proposals": proposals})
     path.chmod(0o600)
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "secret", "dry_run": dry_run,
@@ -355,7 +375,7 @@ def test_review_persistence_second_process_lock_and_atomic_failure(tmp_path, mon
             raise OSError("synthetic disk failure")
         monkeypatch.setattr(os, "replace", fail)
         with pytest.raises(OSError):
-            review.publish_review(state, {"version": 1, "proposals": {"x": {}}})
+            review.publish_review(state, {"version": 1, "proposals": preview()})
         assert state["path"].read_bytes() == original
     finally:
         review.close_review(state)
@@ -423,7 +443,7 @@ def test_review_execution_budget_sequential_limit_delay_and_deferred_yes(tmp_pat
     for item in proposals.values():
         item["approve"] = "yes"
     path = tmp_path / "review.yaml"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review({"version": 1, "proposals": proposals})))
+    write_review(path, {"version": 1, "proposals": proposals})
     path.chmod(0o600)
     state = review.open_review(str(path), [])
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0.5))
@@ -493,11 +513,11 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     assert not path.exists() and not server.writes
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    document = review.load_review(path)
     assert len(document["proposals"]) == 1
     item = next(iter(document["proposals"].values()))
     item["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    write_review(path, document)
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
     assert app.run_sync(new_run_outcome()) == 0
     assert len(server.writes) == 1 and len(server.cash) == 3
@@ -549,11 +569,11 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     monkeypatch.setenv("DRY_RUN", "true")
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    document = review.load_review(path)
     assert len(document["proposals"]) == 3
     for proposal in document["proposals"].values():
         proposal["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    write_review(path, document)
     monkeypatch.setenv("DRY_RUN", "false")
     expected_pending = {key: deepcopy(value) for key, value in document["proposals"].items()}
     assert not imports and not server.cash and not server.writes  # Seed run is a true DRY_RUN.
@@ -568,9 +588,11 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         assert len(server.writes) - previous == min(limit, len(expected_pending))
         assert len(server.cash) == passes  # Ordinary cash processing still runs.
         assert len(imports) == 1  # Unrelated new activity imports despite deferred approvals.
-        document = review.decode_review(review.read_yaml(path.read_bytes()))
-        assert document["proposals"] == {key: value for key, value in expected_pending.items()
-                                         if key in document["proposals"]}
+        document = review.load_review(path)
+        def stable(item):
+            return {key: value for key, value in item.items() if key not in review.QUEUE_FIELDS | {"status"}}
+        assert {key: stable(value) for key, value in document["proposals"].items()} == {
+            key: stable(value) for key, value in expected_pending.items() if key in document["proposals"]}
         assert len(document["proposals"]) == max(0, len(expected_pending) - limit)
         expected_pending = document["proposals"]
 
@@ -601,9 +623,9 @@ def test_review_acceptance_failure_fences_cash_other_account_continues(tmp_path,
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    write_review(path, document)
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
     server.cash.clear()
     outcome = new_run_outcome()
@@ -771,9 +793,9 @@ def test_review_runtime_sigkill_restart_never_repeats_request(tmp_path, monkeypa
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    write_review(path, document)
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
     remote = tmp_path / "synthetic-server.json"
     requests_file = tmp_path / "synthetic-requests"
@@ -864,15 +886,15 @@ def test_review_runtime_duplicate_reference_approval_never_dispatches(tmp_path, 
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    document = review.load_review(path)
     assert document["proposals"]
     for proposal in document["proposals"].values():
         proposal["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    write_review(path, document)
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
     assert app.run_sync(new_run_outcome()) == 0
     assert not server.writes and server.rows == rows
-    refreshed = review.decode_review(review.read_yaml(path.read_bytes()))
+    refreshed = review.load_review(path)
     assert all(not item["actionable"] for item in refreshed["proposals"].values())
     assert not path.with_suffix(".yaml.journal.yaml").exists()
 
@@ -924,7 +946,7 @@ def test_review_runtime_contract_missing_dividend_section_keeps_trade_and_cash(t
     assert [cash["id"] for cash in server.cash] == ["acc"]
     assert [item["comment"] for item in imports] == ["IBKR#v2#U1:TRADE:T2"]
     assert not server.writes
-    assert path.exists() and review.decode_review(review.read_yaml(path.read_bytes()))["proposals"] == {}
+    assert path.exists() and review.load_review(path)["proposals"] == {}
 
 
 @pytest.mark.parametrize("drift", ["updatedAt", "account", "value", "valueInBaseCurrency",
@@ -1027,9 +1049,9 @@ def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypa
     path = tmp_path / "review.yaml"
     monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
     assert app.run_sync(new_run_outcome()) == 0
-    document = review.decode_review(review.read_yaml(path.read_bytes()))
+    document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
-    path.write_text(__import__("yaml").safe_dump(review.encode_review(document)))
+    write_review(path, document)
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
     assert app.run_sync(new_run_outcome()) == (1 if pending else 0)
     monkeypatch.setenv("IBKR_ACCOUNT_IDS", "U2")
@@ -1071,15 +1093,15 @@ def test_review_schema_two_sections_and_legacy_approval_clear(tmp_path):
         assert state["document"]["proposals"][key]["approve"] is None
         review.publish_review(state, state["document"])
         disk = review.read_yaml(path.read_bytes())
-        assert set(disk) == {"version", *review.SECTIONS} and disk["version"] == 2
+        assert set(disk) == {"version", "generation", "summary", "groups", "consistent", *review.SECTIONS} and disk["version"] == 3
         assert key in disk["activity_corrections"] and not disk["reference_updates"]
-        assert disk["activity_corrections"][key]["evidence level"] == "probable"
+        assert disk["activity_corrections"][key]["match evidence"] == "local calendar proximity"
     finally:
         review.close_review(state)
 
 
 def test_review_schema_two_section_move_and_duplicate_are_refused():
-    document = review.encode_review({"version": 1, "proposals": preview()})
+    document = {"version": 2, "reference_updates": {}, "activity_corrections": preview()}
     key, item = next(iter(document["activity_corrections"].items()))
     document["reference_updates"][key] = item
     with pytest.raises(RuntimeError, match="misplaced"):
@@ -1089,11 +1111,10 @@ def test_review_schema_two_section_move_and_duplicate_are_refused():
 def test_review_blocked_yes_cannot_become_approval():
     events = source_events()
     row = destination("IBKR#T1")
-    old, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
-    key = next(iter(old))
+    old, _ = review.refresh_proposals({}, events, [row, dict(row, id="duplicate")], {"U1": "acc"})
+    key = next(k for k, item in old.items() if item["activity id"] == "row1")
     old[key]["approve"] = "yes"
     assert old[key]["evidence level"] == "blocked"
-    next(iter(events.values()))["legacy safe"] = True
     fresh, _ = review.refresh_proposals(old, events, [row], {"U1": "acc"})
     assert fresh[key]["actionable"] is True and fresh[key]["approve"] is None
 
@@ -1155,7 +1176,7 @@ def test_review_schema_round_trip_nested_signed_decimal_values(tmp_path):
     state = review.open_review(str(path), [])
     try:
         review.publish_review(state, {"version": 1, "proposals": proposals})
-        decoded = review.decode_review(review.read_yaml(path.read_bytes()))
+        decoded = review.load_review(path)
         assert decoded == state["document"]
     finally:
         review.close_review(state)
@@ -1174,7 +1195,7 @@ def test_review_real_snapshot_parser_round_trip_nested_numbers(tmp_path, monkeyp
     state = review.open_review(str(tmp_path / "activities.yaml"), [])
     try:
         review.publish_review(state, {"version": 1, "proposals": proposals})
-        assert review.decode_review(review.read_yaml(state["path"].read_bytes())) == state["document"]
+        assert review.load_review(state["path"]) == state["document"]
     finally:
         review.close_review(state)
 

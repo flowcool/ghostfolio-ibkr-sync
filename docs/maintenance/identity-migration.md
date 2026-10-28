@@ -34,9 +34,9 @@ Use the development environment for the selected checkout.
    Staging again starts a new historical review: it clears previous maintenance
    approvals and removes stale maintenance candidates.
 3. Inspect the generated current/proposed values and full comment. Edit only
-   `approve: yes` for the desired entries. Plain or quoted lowercase yes is accepted.
-   Leave the rest blank or use any other value to skip it. There is no rejection
-   store and no correspondence table. Skipping does not release an import hold.
+   `decision: yes` for the desired entries. Plain or quoted lowercase yes is accepted.
+   Leave the rest blank or use `decision: reject` to skip it. A historical rejection
+   does not release an import hold. Profiles cannot approve historical maintenance.
 4. Prepare the exact approved historical subset:
 
    ```sh
@@ -49,7 +49,7 @@ Use the development environment for the selected checkout.
    values or changed evidence. It replays full import selection and holdings before
    and after exactly that subset. It does not reuse the proof for the full candidate
    set. No selected yes or a failed proof produces no apply manifest. The output is
-   a private manifest and its SHA-256. The manifest binds the review-file bytes.
+   a private manifest and its SHA-256. The manifest binds the review-file bytes, private state bytes and selected keys.
 5. Obtain a separate approved operation plan. Follow the
    [guarded maintenance requirements](#explicit-application-of-reviewed-historical-comments)
    below and use the selected manifest, its hash and exact write count. Include
@@ -81,14 +81,14 @@ Use the development environment for the selected checkout.
 `reference_updates` means comment only. `activity_corrections` means a displayed
 replacement that can change financial values. `exact` and `probable` describe
 association evidence, not acceptance of an amount. `blocked` never executes,
-even with yes. The daily connector still refuses legacy-global trade upgrades
-without historical proof. The maintenance path does not weaken that runtime rule.
+even with yes. The daily connector can migrate a unique legacy trade reference under the current
+account mapping. Historical maintenance retains its separate operation authority.
 
-Keep the schema-2 review file and both journals private. Preserve pending intent;
+Keep the schema-3 review file, its `.state.yaml` companion and both journals private. Preserve pending intent;
 never delete a journal to resume. Existing [inspection and rollback](#guarded-comment-rollback-and-resume-inspection)
 operate on the maintenance journal and require their own unchanged-row checks.
-An older connector refuses schema 2. The first upgrade from schema 1 clears old
-approvals once. Keep a private pre-upgrade copy and retain the compatible reader.
+An older connector refuses schema 3. The first upgrade from schema 1 or 2 clears
+old approvals once. Keep a private pre-upgrade copy and retain the compatible reader.
 
 ### Preservation comparison
 

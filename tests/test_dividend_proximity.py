@@ -58,7 +58,7 @@ def test_dividend_proximity_canonical_manual_row_still_skips(monkeypatch):
     ({"assetProfile": {"symbol": "OLD", "isin": ISIN_KO, "dataSource": "YAHOO"}}, False, 0),
     ({"date": "2026-07-14T00:00:00Z"}, True, 1),  # never ±3-day proximity
     ({"assetProfile": {"symbol": "PEP", "isin": "US7134481081", "dataSource": "YAHOO"}}, True, 1),
-    ({"assetProfile": {"symbol": "PEP", "dataSource": "YAHOO"}}, False, 0),
+    ({"assetProfile": {"symbol": "PEP", "dataSource": "YAHOO"}}, True, 1),
     ({"comment": "IBKR#v2#U2:DIVIDEND:OLD"}, True, 1),
     ({"comment": "IBKR#v2#U1:DIVIDEND:A1", "unitPrice": 999}, True, 0),
     ({"date": "2026-07-14T00:00:00Z",

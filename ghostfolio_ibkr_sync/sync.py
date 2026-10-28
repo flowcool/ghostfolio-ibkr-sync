@@ -602,7 +602,7 @@ def convert_dividend_to_activity(dividend: DividendGroup, ghost_account_id: str,
     }
 
 
-def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]]
+def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]], excluded: set[str] | None = None
                         ) -> tuple[str | None, Any]:
     """Compare an IBKR trade with manual Ghostfolio entries of the same side
     (no IBKR# comment).
@@ -621,6 +621,8 @@ def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]]
     best = None
     near = False
     for entry in entries:
+        if len(entry) > 2 and entry[2] in (excluded or set()):
+            continue
         try:
             gap = abs((datetime.strptime(entry[0], "%Y-%m-%d").date() - day).days)
         except ValueError:
@@ -639,6 +641,7 @@ def _match_manual_entry(trade: Mapping[str, Any], entries: list[list[Any]]
 def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions,
                               ghost_account_id: str, mapping: Mapping[str, str],
                               existing_trade_ids: set[str], *, source_account: str,
+                              rejected_pairs: Mapping[str, set[str]] | None = None,
                               outcome: RunOutcome | None = None) -> list[dict[str, Any]]:
     """Drop trades whose import would duplicate a manual entry or drive a
     Ghostfolio position negative.
@@ -666,7 +669,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
         lambda: {"pending": 0.0, "symbol": "", "isin": ""})
 
     def match_one(trade: Mapping[str, Any], ticker: str, isin: str,
-                  side: str) -> tuple[str | None, Any]:
+                  side: str, excluded: set[str] | None = None) -> tuple[str | None, Any]:
         # A manual entry may sit under any symbol sharing this ISIN (duplicate check only)
         manual = positions["manual_sells" if side == "SELL" else "manual_buys"]
         symbols = {ticker} | positions["isin_symbols"].get((ghost_account_id, isin), set())
@@ -674,7 +677,7 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
         for sym in sorted(symbols):
             if (ghost_account_id, sym) not in manual:
                 continue
-            found, entry = _match_manual_entry(trade, manual[(ghost_account_id, sym)])
+            found, entry = _match_manual_entry(trade, manual[(ghost_account_id, sym)], excluded)
             if found == "match":
                 return found, entry
             result = result or found
@@ -693,7 +696,8 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             continue
         qty = _parse_float(trade.get("quantity", "0")) or 0.0
         side = "SELL" if qty < 0 else "BUY"
-        result, entry = match_one(trade, ticker, isin, side)
+        event = format_versioned_activity_identity(source_account, "TRADE", trade_id)
+        result, entry = match_one(trade, ticker, isin, side, (rejected_pairs or {}).get(event))
         if result == "match":
             (manual_recorded if side == "SELL" else manual_buys).add(trade_id)
             if side == "SELL":
@@ -722,7 +726,9 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
         total = sum(_parse_float(t.get("quantity", "0")) or 0.0 for t in fills)
         summed = {"dateTime": fills[0].get("dateTime", ""), "quantity": str(total)}
         ids = [t.get("tradeID", "") for t in fills]
-        if len(fills) > 1 and match_one(summed, ticker, isin, side)[0] == "match":
+        excluded = set().union(*[(rejected_pairs or {}).get(
+            format_versioned_activity_identity(source_account, "TRADE", tid), set()) for tid in ids])
+        if len(fills) > 1 and match_one(summed, ticker, isin, side, excluded)[0] == "match":
             (manual_recorded if side == "SELL" else manual_buys).update(ids)
             if side == "BUY":
                 for trade_id in ids:
@@ -783,15 +789,17 @@ def filter_trades_by_holdings(trades: list[dict[str, Any]], positions: Positions
             and resolve_symbol(t.get("isin", ""), t.get("symbol", ""), mapping) not in rejected]
 
 
-def _dividend_date_matches(positions: Positions, activity: Mapping[str, Any]) -> DividendEntry | None:
+def _dividend_date_matches(positions: Positions, activity: Mapping[str, Any], excluded: set[str] | None = None) -> DividendEntry | None:
     """Return the (date, gross, currency, fee) entry of a Ghostfolio dividend of
     the same account and symbol within DIVIDEND_MATCH_DAYS of the activity date
     (no connector comment), else None."""
     date = datetime.strptime(activity["date"][:10], "%Y-%m-%d")
     for existing in positions["dividend_dates"].get((activity["accountId"], activity["symbol"]), []):
+        if len(existing) > 4 and existing[4] in (excluded or set()):
+            continue
         try:
             if abs((datetime.strptime(existing[0], "%Y-%m-%d") - date).days) <= DIVIDEND_MATCH_DAYS:
-                return cast(DividendEntry, existing)
+                return cast(DividendEntry, existing[:4])
         except ValueError:
             continue
     return None
@@ -953,6 +961,7 @@ def dividend_positive_actions(dividend: DividendGroup) -> set[tuple[str, str]] |
 
 def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: Mapping[str, str],
                             positions: Positions, existing_dividend_comments: set[tuple[str, str]],
+                            rejected_pairs: Mapping[str, set[str]] | None = None,
                             ) -> tuple[DividendDecision, str | None, DividendEntry | None]:
     """Decide whether a dividend group is a candidate, before any quantity or schema check.
 
@@ -987,7 +996,10 @@ def dividend_dedup_decision(div: DividendGroup, ghost_account_id: str, mapping: 
         if dividend_action_conflict(div, symbol, actions, positions):
             return "action_conflict", symbol, None
 
-    matched = _dividend_date_matches(positions, identity) if symbol else None
+    excluded = set().union(*[(rejected_pairs or {}).get(
+        format_versioned_activity_identity(row["accountId"], "DIVIDEND", row["actionID"]), set())
+        for row in div["payments"]]) if rejected_pairs else set()
+    matched = _dividend_date_matches(positions, identity, excluded) if symbol else None
     if matched:
         return "proximity", symbol, matched
     return "new", symbol, None
@@ -1017,6 +1029,8 @@ def dividend_action_conflict(div: DividendGroup, symbol: str | None,
                 return True
             if div["isin"] and context.isin:
                 continue  # Distinct ISINs prove disjoint security; symbols can change.
+            if symbol and context.symbol and symbol != context.symbol:
+                continue  # Resolved distinct symbols do not overlap by missing ISIN alone.
             return True
     return False
 

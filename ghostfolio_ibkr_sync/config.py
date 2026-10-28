@@ -12,6 +12,7 @@ from typing import TypedDict
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+from ghostfolio_ibkr_sync.activity_reconciliation import PROFILES
 from ghostfolio_ibkr_sync.models import NotificationSettings, Settings
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class ConfigDict(TypedDict):
     mapping_file: str
     dry_run: bool
     activity_review_file: str | None
+    activity_reconciliation: str
     corporate_action_state_file: str | None
     corporate_action_evidence_file: str | None
 
@@ -135,6 +137,11 @@ def load() -> Settings:
             raise RuntimeError(f"Duplicate Ghostfolio target '{target}': each IBKR account needs its own target")
 
     review_file = os.environ.get("ACTIVITY_REVIEW_FILE", "").strip() or None
+    reconciliation = os.environ.get("ACTIVITY_RECONCILIATION", "").strip() or "off"
+    if reconciliation not in PROFILES:
+        raise RuntimeError("ACTIVITY_RECONCILIATION must be off, conservative, balanced or permissive")
+    if reconciliation != "off" and not review_file:
+        raise RuntimeError("ACTIVITY_RECONCILIATION requires ACTIVITY_REVIEW_FILE")
     if review_file and len({account.strip() for account in account_ids}) != len(account_ids):
         raise RuntimeError("Activity review requires distinct configured source accounts")
 
@@ -150,6 +157,7 @@ def load() -> Settings:
         mapping_file=os.environ.get("MAPPING_FILE", "mapping.yaml"),
         dry_run=dry_run_requested(),
         activity_review_file=review_file,
+        activity_reconciliation=reconciliation,
         corporate_action_state_file=os.environ.get("CORPORATE_ACTION_STATE_FILE", "").strip() or None,
         corporate_action_evidence_file=os.environ.get("CORPORATE_ACTION_EVIDENCE_FILE", "").strip() or None,
     )
@@ -170,6 +178,7 @@ def load_config() -> ConfigDict:
         "mapping_file": settings.mapping_file,
         "dry_run": settings.dry_run,
         "activity_review_file": settings.activity_review_file,
+        "activity_reconciliation": settings.activity_reconciliation,
         "corporate_action_state_file": settings.corporate_action_state_file,
         "corporate_action_evidence_file": settings.corporate_action_evidence_file,
     }

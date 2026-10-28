@@ -1,0 +1,201 @@
+"""Bounded reconciliation authority. Matching never changes transport precision."""
+
+import re
+from collections.abc import Mapping
+from datetime import datetime
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
+from math import isfinite, ulp
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+PROFILES = ("off", "conservative", "balanced", "permissive")
+POLICY_VERSION = "profiled-activity-reconciliation-v1"
+PRECISION = {"JPY": 0, "GBP": 2, "USD": 2, "EUR": 2, "CAD": 2}
+LIMITS = {"conservative": (0, Decimal(0)),
+          "balanced": (1, Decimal("0.001")),
+          "permissive": (100, Decimal("0.01"))}
+
+
+def arithmetic_precision(*values: Any) -> int:
+    """Budget exact finite decimal products, aligned sums and display totals."""
+    def width(value: Any) -> int:
+        if isinstance(value, Mapping):
+            return sum(width(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return sum(width(item) for item in value)
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation:
+            return 0
+        if not number.is_finite():
+            return 0
+        parts = number.as_tuple()
+        return len(parts.digits) + abs(int(parts.exponent))
+    return max(100, sum(width(value) for value in values) + 20)
+
+
+def date_eligible(name: str, source: str, target: str, kind: str,
+                  timezone: str) -> tuple[bool, dict[str, str]]:
+    try:
+        if any(re.search(r"\.[0-9]{7,}", value) for value in (source, target)):
+            return False, {"reason": "Unsupported timestamp precision"}
+        zone = ZoneInfo(timezone)
+        instants = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in (source, target)]
+        if any(value.tzinfo is None for value in instants):
+            return False, {"reason": "Missing source or destination timezone"}
+        dates = [value.astimezone(zone).date() for value in instants]
+        distance = abs((dates[1] - dates[0]).days)
+        limit = (3 if kind == "DIVIDEND" else 2) if name == "permissive" else 0
+        return name in LIMITS and distance <= limit, {
+            "timezone": timezone, "source instant": source, "destination instant": target,
+            "source local date": str(dates[0]), "destination local date": str(dates[1]),
+            "calendar distance": str(distance), "elapsed seconds": str((instants[1] - instants[0]).total_seconds())}
+    except (ValueError, ZoneInfoNotFoundError):
+        return False, {"reason": "Missing or invalid timezone or timestamp"}
+
+
+def denomination(currency: str) -> tuple[str, Decimal]:
+    """Only the documented fixed GBP/GBp conversion can grant authority."""
+    return ("GBP", Decimal("0.01")) if currency == "GBp" else (currency, Decimal(1))
+
+
+def gross_within_limits(name: str, source: Decimal, destination: Decimal,
+                        currency: str) -> bool:
+    major, _ = denomination(currency)
+    if (name not in LIMITS or major not in PRECISION or not source.is_finite()
+            or not destination.is_finite() or source <= 0 or destination <= 0):
+        return False
+    units, relative = LIMITS[name]
+    with localcontext() as context:
+        context.prec = arithmetic_precision(source, destination, relative)
+        difference = abs(destination - source)
+        # Multiplication avoids division rounding at the inclusive relative edge.
+        return (difference <= Decimal(units).scaleb(-PRECISION[major])
+                and difference <= source * relative)
+
+
+def decimal_text(number: Decimal) -> str:
+    text = format(number, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -> dict[str, Any]:
+    """Reproduce only the converter's known multiply/divide/JSON path.
+
+    Endpoints must equal either the source mathematical total or the reproduced
+    converter total. A nearby arbitrary number never establishes this cause.
+    """
+    values, evidence = event["values"], event["source evidence"]
+    major, factor = denomination(values["currency"])
+    other_major, other_factor = denomination(destination["currency"])
+    if major not in PRECISION or major != other_major:
+        raise RuntimeError("Unsupported automatic denomination")
+    with localcontext() as context:
+        context.prec = arithmetic_precision(event, destination, Decimal.from_float(ulp(0.0)))
+        quantity = Decimal(values["quantity"])
+        if values["type"] in ("BUY", "SELL"):
+            raw_quantity = abs(Decimal(evidence["quantity"]))
+            raw_price = abs(Decimal(evidence["tradePrice"]))
+            raw_currency = evidence["currency"]
+            _, raw_factor = denomination(raw_currency)
+            source_gross = raw_quantity * raw_price * raw_factor
+            scale = raw_factor / factor
+            reproduced = float(raw_price) * float(scale)
+        else:
+            raw_quantity = Decimal(evidence["accruals"][0]["quantity"])
+            raw_gross = sum((Decimal(row["amount"]) for row in evidence["payments"]), Decimal(0))
+            _, raw_factor = denomination(evidence["payments"][0]["currency"])
+            source_gross = raw_gross * raw_factor
+            with localcontext() as conversion:
+                conversion.prec = 50
+                reproduced = float(raw_gross / raw_quantity) * float(raw_factor / factor)
+        wire_price = Decimal(str(reproduced))
+        projected_gross = quantity * Decimal(values["unitPrice"]) * factor
+        destination_gross = Decimal(str(destination["quantity"])) * Decimal(str(destination["unitPrice"])) * other_factor
+        if not all(x.is_finite() for x in (source_gross, projected_gross, destination_gross)):
+            raise RuntimeError("Non-finite gross evidence")
+        bound = Decimal.from_float(ulp(reproduced)) * abs(quantity) * factor * 4 if isfinite(reproduced) else Decimal(0)
+        residue = (quantity == raw_quantity and Decimal(values["unitPrice"]) == wire_price
+                   and source_gross != projected_gross
+                   and destination_gross in (source_gross, projected_gross)
+                   and abs(projected_gross - source_gross) <= bound)
+        precision = Decimal(1).scaleb(-PRECISION[major])
+        return {"currency": major, "precision": PRECISION[major],
+                "source gross": decimal_text(source_gross),
+                "payload gross": decimal_text(projected_gross),
+                "destination gross": decimal_text(destination_gross),
+                "gross difference": decimal_text(destination_gross - source_gross),
+                "source display": format(source_gross.quantize(precision, rounding=ROUND_HALF_EVEN), "f"),
+                "destination display": format(destination_gross.quantize(precision, rounding=ROUND_HALF_EVEN), "f"),
+                "reproduced price": decimal_text(wire_price), "residue bound": decimal_text(bound),
+                "calculation residue": residue,
+                "cause": "reproduced conversion multiply/divide/JSON" if residue else "no proven residue"}
+
+
+def group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
+    """Connected candidate groups with each endpoint counted exactly once."""
+    with localcontext() as context:
+        context.prec = arithmetic_precision(events, proposals)
+        return _group_diagnosis(events, proposals)
+
+
+def _group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
+    pending = set(proposals)
+    groups = {}
+    while pending:
+        members = {min(pending)}
+        while True:
+            sources = {proposals[key]["source event"] for key in members}
+            targets = {proposals[key]["activity id"] for key in members}
+            expanded = {key for key in pending if proposals[key]["source event"] in sources
+                        or proposals[key]["activity id"] in targets}
+            if expanded == members:
+                break
+            members = expanded
+        pending -= members
+        if len(members) == 1:
+            continue
+        source_records = {event: events[event]["values"] for event in sorted(sources) if event in events}
+        target_records = {proposals[key]["activity id"]: proposals[key]["current values"] for key in sorted(members)}
+
+        def totals(records: Mapping[str, Any], source: bool) -> dict[str, Any]:
+            sums: dict[str, dict[str, Decimal]] = {}
+            for key, values in records.items():
+                try:
+                    currency, factor = denomination(values["currency"])
+                    with localcontext() as context:
+                        context.prec = arithmetic_precision(records, events)
+                        quantity = Decimal(values["quantity"])
+                        gross = quantity * Decimal(values["unitPrice"]) * factor
+                        if source and currency in PRECISION:
+                            gross = Decimal(numeric_evidence(events[key], values)["source gross"])
+                        fee = Decimal(values["fee"]) * factor
+                        aggregate = sums.setdefault(currency, {"quantity": Decimal(0), "gross": Decimal(0), "fee": Decimal(0)})
+                        for field, amount in (("quantity", quantity), ("gross", gross), ("fee", fee)):
+                            aggregate[field] += amount
+                except (KeyError, ValueError, ArithmeticError, RuntimeError):
+                    continue
+            return {currency: {field: decimal_text(amount) for field, amount in sums.items()}
+                    for currency, sums in sorted(sums.items())}
+
+        source_totals, target_totals = totals(source_records, True), totals(target_records, False)
+        differences = {currency: {field: decimal_text(Decimal(target_totals[currency][field]) - Decimal(source_totals[currency][field]))
+                                  for field in ("quantity", "gross", "fee")}
+                       for currency in source_totals.keys() & target_totals.keys()}
+        eligible = [proposals[key] for key in members if proposals[key].get("automatic eligible")]
+        independent = len(eligible) == len(sources) == len(targets)
+        groups[min(members)] = {"members": sorted(members), "source events": sorted(sources),
+            "destination activities": sorted(targets), "source count": len(sources), "destination count": len(targets),
+            "source totals": source_totals, "destination totals": target_totals, "differences": differences,
+            "gross display differences": {currency: format(Decimal(values["gross"]).quantize(
+                Decimal(1).scaleb(-PRECISION[currency]), rounding=ROUND_HALF_EVEN), "f")
+                if currency in PRECISION else values["gross"] for currency, values in differences.items()},
+            "source records": {key: {field: values.get(field) for field in
+                                    ("date", "type", "symbol", "currency", "quantity", "unitPrice", "fee")}
+                               for key, values in source_records.items()},
+            "destination records": {key: {field: values.get(field) for field in
+                                         ("date", "type", "symbol", "currency", "quantity", "unitPrice", "fee")}
+                                    for key, values in target_records.items()},
+            "status": "independent unique pairs" if independent else "manual allocation required",
+            "meaning": "Aggregate agreement does not prove identity or allocation; no grouped correction"}
+    return groups

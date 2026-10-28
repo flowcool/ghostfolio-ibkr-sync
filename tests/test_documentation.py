@@ -11,7 +11,8 @@ GUIDES = ('ibkr-setup.md', 'upgrading-to-2.2.md', 'troubleshooting.md', 'cleanup
 ADRS = ('0001-single-file-runtime.md', '0002-comment-and-proximity-deduplication.md',
         '0003-additive-imports.md', '0004-independent-cash-update.md',
         '0005-flex-window-and-corporate-actions.md', '0006-latest-follows-main.md',
-        '0007-pinned-degiro-core.md', '0008-fail-account-on-missing-flex-prerequisite.md')
+        '0007-pinned-degiro-core.md', '0008-fail-account-on-missing-flex-prerequisite.md',
+        '0009-mapping-owned-reconciliation.md')
 OPERATION_GUIDES = ('getting-started.md', 'configuration.md', 'corporate-actions.md',
                     'activity-review.md', 'maintenance.md', 'upgrading-to-3.0.md',
                     'releasing.md', 'release-notes-automation.md',
@@ -57,7 +58,7 @@ def test_readme_retains_onboarding_and_links_each_guide():
     assert 'python cleanup_duplicates.py --resume' not in text
 
 
-def test_adr_index_links_all_eight_dated_decisions():
+def test_adr_index_links_all_dated_decisions():
     index = (ROOT / 'docs/adr/README.md').read_text(encoding='utf-8')
     assert '](docs/adr/README.md)' in (ROOT / 'CONTRIBUTING.md').read_text(encoding='utf-8')
     assert {path.name for path in (ROOT / 'docs/adr').glob('[0-9]*.md')} == set(ADRS)

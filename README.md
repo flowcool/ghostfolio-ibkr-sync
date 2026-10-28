@@ -9,7 +9,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20NON--AI-5b6f8f" alt="MIT NON-AI License"></a>
 </p>
 
-<p align="center"><strong>Your Interactive Brokers portfolio, kept current in self-hosted Ghostfolio.</strong><br>Preview imports. Add new activities. Approve corrections explicitly.</p>
+<p align="center"><strong>Your Interactive Brokers portfolio, kept current in self-hosted Ghostfolio.</strong><br>Preview imports. Add new activities. Review corrections or enable a bounded profile.</p>
 
 <p align="center"><a href="#quick-start">Quick start</a> · <a href="#what-it-does">What it does</a> · <a href="#safety-first">Safety</a> · <a href="docs/configuration.md">Configuration</a> · <a href="docs/troubleshooting.md">Troubleshooting</a> · <a href="https://github.com/flowcool/ghostfolio-ibkr-sync/releases">Releases</a></p>
 
@@ -24,7 +24,7 @@ Use one Ghostfolio target per IBKR account.
 - Preview imports before you enable writes.
 - Check identities, duplicates and holdings.
 - Run on amd64 or arm64. Receive optional Apprise notifications.
-- Approve qualified one-to-one corrections in a separate review file.
+- Review qualified one-to-one corrections, or enable a bounded reconciliation profile.
 
 ### Deliberate boundaries
 
