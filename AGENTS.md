@@ -4,8 +4,8 @@
 
 Community Docker connector that imports Interactive Brokers activities from Flex
 Web Service reports into Ghostfolio. Docker-first, every setting through ENV,
-unattended runs with `docker compose up -d` and an optional `CRON`. README.md owns
-the complete setup and configuration guide. Keep public artifacts free of personal
+unattended runs with `docker compose up -d` and an optional `CRON`. README.md is the installation entry point; docs/getting-started.md owns the
+first-install path and docs/configuration.md owns the settings reference. Keep public artifacts free of personal
 hosts, paths, account identifiers and private work-tracker IDs.
 
 This repository is the canonical source of the broker-agnostic Ghostfolio helpers

@@ -406,3 +406,8 @@ rollback preserves rows and does not restore data.
 Downstream impact under ADR 0007: exact Ghostfolio response capture, comment
 identity reading and a whitelisted update helper changed. DEGIRO stays pinned;
 adoption needs a separate downstream change. No sibling writer or pin changes.
+
+## Lab logging
+
+Lab acceptance needs `LOG_LEVEL=DEBUG` for the bounded `LAB_EVIDENCE` records.
+INFO logs do not include them. This setting does not authorize any live operation.
