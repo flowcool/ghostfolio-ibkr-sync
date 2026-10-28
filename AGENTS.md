@@ -79,7 +79,9 @@ This mode replaces the global per-step ceremony. The invariants above still appl
 - **Tests:** offline pytest with synthetic inputs and mocked HTTP for logic changes.
   No tests for contributor tooling, docs or CI. No full-suite rerun for prose edits.
 - **Notes:** one closing note with evidence per item; no per-step findings.
-- **Git:** one branch and one PR per change. Pullfrog is the sole reviewer.
+- **Git:** one branch and one PR per change. Sub-items, steps and review fixes
+  are commits in that PR; never open separate or stacked PRs for them.
+  Pullfrog is the sole reviewer.
   Require CI green and a completed Pullfrog review of the head. Resolve actionable
   threads. Ignore CodeRabbit and the known sticky `pullfrog-approval` status;
   every other CI failure remains blocking. Docs-only PRs need CI only.
