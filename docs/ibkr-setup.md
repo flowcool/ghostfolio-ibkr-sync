@@ -162,7 +162,10 @@ replace Cash Transactions as the source of paid gross amounts and withholding.
 Accrual amounts and tax can differ from cash, and `Re` also marks corrections and
 cancellations. Do not import accrual rows directly as dividend payments.
 
-Required payment keys: a report where a payment attribute appears on no relevant cash row fails the account before any write, including trades and cash. The run logs one `ERROR` that names each missing attribute with the IBKR field to tick. It does not enable `DRY_RUN`. This matches the time-zone check.
+A required payment attribute must appear on at least one relevant cash row.
+Otherwise, the account fails before any write, including trades and cash.
+One `ERROR` names missing attributes and the IBKR fields to select.
+This error does not enable `DRY_RUN`, like the time-zone check.
 
 The checklist above owns the field list. Required XML payment keys are
 `accountId/conid/currency/actionID/exDate`. With relevant cash rows, the accrual
@@ -173,9 +176,28 @@ contract, currency and payment day. exDate may be empty; a nonempty value must
 match. Never allocate tax by description or amount. A withholding-only group is
 not payable and does not fail solely because tax is present.
 
-Missing quantity evidence in a short report window and invalid or conflicting accrual quantities reject the affected group with the existing local outcome. New action partition errors fail the account: incomplete or conflicting payment keys, negative-net actions, mixed currencies, or tax rows without a unique cash association. Every dividend action in that security/day group is withheld; trades, safe sales, independent cash and later accounts continue. Candidate payment account IDs must match the verified report account. Missing or unsafe account/action identities and oversized comments stop that account before any financial write. Rejected payments are not marked imported and can retry after the query or report window is corrected. Empty sections without payments are valid. Unrelated rows do not block valid payments. Existing dividends are deduplicated before evidence checks and remain untouched and unverified.
+Missing quantity evidence or invalid/conflicting accrual quantities reject the affected group.
+New action partition errors fail the account. These include incomplete or conflicting payment keys,
+negative-net actions, mixed currencies and tax rows without a unique cash association.
+All dividend actions in that security/day group are withheld.
+Trades, safe sales, independent cash and later accounts continue.
 
-Dividend and payment-in-lieu portions of one action use one proven quantity. Distinct ordinary/bonus actions can have different quantities and produce separate activities. Cash gross and signed tax are conserved before the fee is clamped per action. A refund on one action does not reduce the fee of another action. A zero-net action creates no activity; a remaining signed tax logs its action and amount for manual review. All actions in a security/day group are validated before dispatch. The server can still accept only a subset; the next run refuses partial coverage and requires separately approved recovery.
+Payment account IDs must match the verified report account.
+Missing or unsafe account/action identities and oversized comments stop the account before any financial write.
+Rejected payments are not marked imported. They can retry after query or report-window correction.
+Empty sections without payments are valid. Unrelated rows do not block valid payments.
+Existing dividends are deduplicated before evidence checks. They remain unchanged and unverified.
+
+Dividend and payment-in-lieu portions of one action use one proven quantity.
+Distinct ordinary/bonus actions can use different quantities and create separate activities.
+Cash gross and signed tax are conserved before each action's fee is clamped.
+A refund on one action does not reduce another action's fee.
+
+A zero-net action creates no activity.
+Remaining signed tax logs its action and amount for manual review.
+All actions in a security/day group are checked before dispatch.
+The server can still accept a subset.
+The next run refuses partial coverage. Recovery needs separate approval.
 
 Before upgrading, back up Ghostfolio with your deployment's backup procedure and
 record the previous image digest as described in [Releasing](releasing.md).

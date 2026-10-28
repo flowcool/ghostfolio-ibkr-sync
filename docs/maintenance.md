@@ -1,8 +1,8 @@
 # Maintenance
 
-Normal sync is additive. These historical procedures have their own authority;
-a simulation, matching amount or review approval alone never permits cleanup.
-Use versioned checkout tools. They are outside the connector image.
+Use these tools for historical maintenance. They are outside the connector image.
+Cleanup needs separate authorization.
+Simulation, matching amounts and review approval do not authorize it.
 
 | Need | Procedure | Write boundary |
 | --- | --- | --- |
@@ -12,14 +12,14 @@ Use versioned checkout tools. They are outside the connector image.
 | Review one-to-one financial corrections | [Activity review](activity-review.md) | Exact-image qualification and explicit approval |
 | Recover corporate evidence or understand a trade hold | [Corporate actions](corporate-actions.md) | Evidence recovery does not authorize financial treatment |
 
-Before a mutating operation, verify its exact target, backup, qualified inputs,
-writer exclusion, expected readback, stop conditions and recovery path. Keep
-private evidence and journals. An uncertain write can complete later; old or
-absent data alone does not prove that it is safe to resend.
+Before any write, verify the target, backup, qualified inputs and exclusive access.
+Define the expected readback, stop conditions and recovery path.
+Keep evidence and journals private.
+An uncertain write can complete later. Old or absent data does not prove that resending is safe.
 
-On failure, stop dependent writes and follow that operation's recovery procedure.
-Do not delete journals, reset state or rerun with a new journal to bypass a fence.
-Runtime rollback does not undo financial data. Pair cleanup remains unavailable
-for v2 activity history until separately qualified.
+On failure, stop dependent writes. Follow the operation's recovery procedure.
+Do not bypass a block by deleting journals, resetting state or starting a new journal.
+Image rollback does not undo financial writes.
+Pair cleanup is not qualified for v2 history.
 
 [Older cleanup links](cleanup.md) still lead to their operation sections.

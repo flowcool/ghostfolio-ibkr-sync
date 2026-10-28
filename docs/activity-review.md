@@ -1,6 +1,7 @@
 # Activity correction review
 
-Activity review is an opt-in, qualified workflow. Read the [README safety notes](../README.md#safety-first) before enabling it. The full contract is kept here so the landing page stays readable.
+Enable activity review only after qualification.
+Read the [safety notes](../README.md#safety-first) first.
 
 ## When to use
 
@@ -24,12 +25,10 @@ and stable publication retain their separate approval. See
 
 ## Configure persistent review
 
-Mount a dedicated persistent directory. The parent must exist. Files must be
-owned by the runtime user, readable and writable, mode `0600`. Symlinks, hard
-links and overlap with mapping/source/evidence inputs are refused. Create the
-host `review` directory with mode `0700` owned by `10001:10001`. Merge these
-additions into the existing service; this is not a standalone Compose file.
-Prepare the directory before starting the service:
+Use a dedicated persistent directory. Create it before starting the service.
+Set owner `10001:10001`, directory mode `0700` and file mode `0600`.
+The runtime user needs read/write access.
+Symlinks, hard links and overlap with mapping, source or evidence files are refused.
 
 ```bash
 mkdir -p review
@@ -37,6 +36,7 @@ chmod 700 review
 sudo chown 10001:10001 review
 ```
 
+Add this snippet to the existing service. It is not a complete Compose file.
 
 ```yaml
 services:
@@ -79,15 +79,14 @@ required evidence is missing or conflicting; even yes cannot make it writable.
 These levels describe the association, not the correctness of a financial amount.
 No confidence percentage grants authority.
 
-The file is generated. Do not create proposal keys or move entries between sections.
+The connector generates this file. Do not add keys or move entries between sections.
 A reference-only proposal has `changed fields: [comment]`. A financial correction
 shows exact before/after values under `current values` and `proposed values`. Numbers are exact plain-decimal text from the transmitted
 payload and original response JSON. Equivalent numeric spellings compare equal;
 financial tolerance never grants authority. Dates compare as full UTC instants.
 
-For example, these excerpts show two generated entries. The real file also
-contains the binding and complete values. Do not copy this abbreviated example
-as an input file:
+These excerpts omit bindings and complete values.
+Do not use them as an input file:
 
 ```yaml
 version: 2
@@ -220,9 +219,9 @@ See [journal inspection](#activity-review-journals) and
 
 ### User action required and container path
 
-The private log names the configured ACTIVITY_REVIEW_FILE container path, section,
-proposal key, held event and reason. A proposal count is not a held-event count.
-Resolve the host path from your Compose volume mapping. For example,
+The private log names the container path, section, proposal key, held event and reason.
+Proposal counts and held-event counts differ.
+Use the Compose volume mapping to find the host file. For example,
 `./review:/review` maps `/review/activities.yaml` to
 `./review/activities.yaml`, relative to the Compose project directory.
 Keep the existing corporate-action mount at `/state`; review uses `/review`.
