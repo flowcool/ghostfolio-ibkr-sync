@@ -1,6 +1,7 @@
 # Configuration and operations
 
-This guide contains the complete environment reference, mapping rules, runtime behavior, and Docker Compose example. Start with the [README quick start](../README.md#quick-start), then return here for the detailed settings.
+Use the [first-install guide](getting-started.md) for setup. This reference covers
+authentication, ENV, mapping, runtime outcomes and advanced Docker operations.
 
 
 
@@ -8,7 +9,9 @@ This guide contains the complete environment reference, mapping rules, runtime b
 
 ### 1. Choose how the sync authenticates
 
-Set **exactly one** of these two variables (both set, or neither, stops the run with exit 1):
+Use `GHOST_ACCESS_TOKEN` for a new installation. Set exactly one credential mode;
+both or neither stops startup. [Legacy authentication](#legacy-authentication) is
+available for existing bearer-token installations.
 
 - **`GHOST_ACCESS_TOKEN` (recommended)** — the Ghostfolio *security token* you sign in with
   (shown when the user was created; Ghostfolio can generate a new one). At the start of every
@@ -17,17 +20,6 @@ Set **exactly one** of these two variables (both set, or neither, stops the run 
   `POST /api/v1/auth/anonymous`. There is nothing to renew by hand. A dry run logs in too
   (logging in writes no financial data). The security token is long-lived: treat it like a
   password, and rotate it in Ghostfolio if it leaks.
-- **`GHOST_TOKEN` (legacy)** — a session bearer you obtain yourself; it is used as is and
-  **expires**, so you have to regenerate it periodically:
-
-  ```bash
-  curl -X POST http://localhost:3333/api/v1/auth/anonymous \
-    -H 'Content-Type: application/json' \
-    -d '{"accessToken": "YOUR_GHOSTFOLIO_SECURITY_TOKEN"}'
-  ```
-
-  The response contains an `authToken` field. Use it as `GHOST_TOKEN`.
-
 With `GHOST_ACCESS_TOKEN`, `GHOST_HOST` must be a plain `http://` or `https://` URL (an
 optional path is allowed): user credentials, a query string, a fragment, whitespace or control
 characters are refused before any request. The login request does not follow redirects, so point
@@ -41,33 +33,13 @@ security token in its body, so over `http://` anyone who can observe the path ca
 network of a shared compose stack (`http://ghostfolio:3333`). When the traffic crosses any other
 network, point `GHOST_HOST` at an `https://` URL.
 
-**Switching modes / rollback:** remove one variable and set the other, then recreate the
-container. Images released before `GHOST_ACCESS_TOKEN` existed only understand `GHOST_TOKEN`:
-when rolling back to one, set `GHOST_TOKEN` again first.
-
-### 2. Create an IBKR Platform
-
-1. Go to Ghostfolio **Admin** - **Platform**
-2. Click **Add Platform**
-3. Enter a name like `Interactive Brokers` and a URL like `https://www.interactivebrokers.com`
-4. Save it
-
-To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command above):
-
-```bash
-curl http://localhost:3333/api/v1/platform \
-  -H 'Authorization: Bearer YOUR_AUTH_TOKEN'
-```
-
-Look for the `id` field of the IBKR platform entry. Use this as `GHOST_PLATFORM_ID`.
-
 ### 3. Create accounts
 
 Create one Ghostfolio account per IBKR sub-account:
 
 1. Go to **Accounts** and click **Add Account**
 2. Set the name to match what you will use in `GHOST_ACCOUNT_NAMES` (for example `IBKR Individual` or `IBKR Joint`)
-3. Select the IBKR platform you created
+3. Select an IBKR platform if you use one; platform metadata is optional
 4. Set the currency to match the sub-account base currency
 5. Repeat for each sub-account
 
@@ -110,6 +82,55 @@ All configuration is done via environment variables:
 | `APPRISE_TIMEOUT` | No | Notification timeout in seconds, from 1 to 30. | `10` | `10` |
 | `DRY_RUN` | No | Simulation mode. Only `false`, `0`, `no`, or `off` request writes. | `true` | Simulation |
 
+
+## Compose settings
+
+The [.env.example](../.env.example) supplies interpolation values for Compose.
+`GHOST_DOCKER_NETWORK` selects the existing external network, default `ghostfolio`.
+It is a Compose setting, not a connector runtime variable. Use a Ghostfolio
+service name/alias on that network for `GHOST_HOST`.
+
+The `_INDIVIDUAL` and `_JOINT` account/query/name values map to the container's
+unsuffixed ENV names. `CRON_INDIVIDUAL` and `CRON_JOINT` select separate schedules.
+`DRY_RUN` applies to all services. See [multiple accounts and migration](getting-started.md#multiple-accounts).
+
+## Optional platform metadata
+
+### 2. Create an IBKR Platform
+
+Optional. GHOST_PLATFORM_ID is not required for import or the first installation.
+Use these steps only if you want to fill missing platform metadata.
+
+1. Go to Ghostfolio **Admin** - **Platform**
+2. Click **Add Platform**
+3. Enter a name like `Interactive Brokers` and a URL like `https://www.interactivebrokers.com`
+4. Save it
+
+To find the Platform ID, query the API with a session token (the `authToken` returned by the curl command above):
+
+```bash
+curl http://localhost:3333/api/v1/platform \
+  -H 'Authorization: Bearer YOUR_AUTH_TOKEN'
+```
+
+Look for the `id` field of the IBKR platform entry. Use this as `GHOST_PLATFORM_ID`.
+
+## Legacy authentication
+
+- **`GHOST_TOKEN` (legacy)** — a session bearer you obtain yourself; it is used as is and
+  **expires**, so you have to regenerate it periodically:
+
+  ```bash
+  curl -X POST http://localhost:3333/api/v1/auth/anonymous \
+    -H 'Content-Type: application/json' \
+    -d '{"accessToken": "YOUR_GHOSTFOLIO_SECURITY_TOKEN"}'
+  ```
+
+  The response contains an `authToken` field. Use it as `GHOST_TOKEN`.
+
+**Switching modes / rollback:** remove one variable and set the other, then recreate the
+container. Images released before `GHOST_ACCESS_TOKEN` existed only understand `GHOST_TOKEN`:
+when rolling back to one, set `GHOST_TOKEN` again first.
 
 ## Mapping and reconciliation
 

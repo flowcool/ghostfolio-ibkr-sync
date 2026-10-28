@@ -31,20 +31,10 @@
    >   recognises previously synced activities, but older manual entries or activities
    >   from another importer may need reconciliation before importing the wider report.
    >
-   > **Recovery if you already used a shorter period:** review existing activities
-   > against the statement before widening the query. The repository contains
-   > `cleanup_duplicates.py` and `cleanup_dividends.py`. They require matching
-   > account, currency and asset-profile identity, unique one-to-one matches,
-   > and fresh records before mutation. These checks cannot prove that two
-   > similar payments represent the same event, and the tools do not provide
-   > transactional protection against concurrent edits. Review every proposed
-   > pair against the statement and take a verified backup before `--apply`;
-   > dry-run output alone is not proof that deletion is safe. These tools are
-   > not included in the Docker image.
-   > Dividend cleanup lists candidates up to 35 days apart in dry-run, but
-   > `--apply` keeps both records unchanged when their dates differ by more than
-   > 7 days and exits 1. Verify distant ex-date/payment-date pairs manually;
-   > there is no bypass flag. A shorter date gap still does not prove event identity.
+   > **Recovery after a shorter window:** compare existing history before widening
+   > the query. See [historical maintenance](maintenance.md). Pair cleanup tools
+   > are not qualified for v2 history; never run them there without separate
+   > qualification and operation approval. A simulation does not authorize deletion.
 
 4. Select the following sections and fields:
 
@@ -102,6 +92,7 @@ In the section options, tick only these types: **Dividends**, **Payment In Lieu 
 - ActionID
 - Ex Date
 - Report Date
+- Dividend Type (when available; `dividendType`)
 
 ConID, ActionID and Ex Date are mandatory: a report without them fails the account (see [Prepare for structured dividend quantities](#prepare-for-structured-dividend-quantities)).
 
@@ -119,10 +110,27 @@ Mandatory as soon as the report has dividend, payment-in-lieu or withholding cas
 - Ex Date
 - Pay Date
 - Report Date
+- Symbol and ISIN
+- Gross Rate, Gross Amount, Tax, Fee and Net Amount (available evidence)
 
 Dividends are read from these actual cash payments, not from dividend accruals: IBKR marks accrual corrections, cancellations and payouts all with the same code, so importing every accrual reversal produces phantom and duplicate dividends. Cash Transactions also give the withholding tax actually paid. **Change in Dividend Accruals** supplies quantity evidence only; include it with the fields above.
 
 > **Upgrading from an older version:** add the Cash Transactions section before running the new image. Without it the run logs an `ERROR`, imports trades but no dividends, and exits 1. Dividends already in Ghostfolio are recognised by their `dividend#` comment, or, for manual or legacy rows without that comment, by a dividend of the same symbol in the same account within 3 days (logged as `INFO` when the gross agrees, otherwise as one `WARNING` telling you to check IBKR and add the payment by hand if it is distinct), so they are not imported twice. Phantom dividends imported by older versions are not removed: check your IBKR dividends in Ghostfolio by hand.
+
+### Corporate Actions (required)
+
+Select **Corporate Actions**, even when the report contains no events. An empty
+section records no observed event in that report window. A missing section holds
+all BUY/SELL for that source account; independent cash keeps its existing guards.
+
+Include ClientAccountID (`accountId`), Type, ActionID, TransactionID,
+LevelOfDetail, ConID, ISIN, Symbol, Quantity, CurrencyPrimary, Date/Time **with
+time zone**, Report Date, Description and Action Description. Include available
+Amount, Proceeds and realized/value fields. Missing cash is different from zero.
+Do not add Open Positions solely for this feature. These fields do not prove
+complete lifetime coverage or authorize corporate-action treatment.
+
+### Query output settings
 
 5. Under **General Configuration**, set **Include Currency Rates** to **No**
 
@@ -139,39 +147,15 @@ Dividends are read from these actual cash payments, not from dividend accruals: 
 
 6. Save the query and note the Query ID (click the info icon next to the query to find it)
 
-### Corporate Actions (required)
-
-Select **Corporate Actions**, even when the report contains no events. An empty
-section records no observed event in that report window. A missing section holds
-all BUY/SELL for that source account; independent cash keeps its existing guards.
-
-Include ClientAccountID (`accountId`), Type, ActionID, TransactionID,
-LevelOfDetail, ConID, ISIN, Symbol, Quantity, CurrencyPrimary, Date/Time **with
-time zone**, Report Date, Description and Action Description. Include available
-Amount, Proceeds and realized/value fields. Missing cash is different from zero.
-Do not add Open Positions solely for this feature. These fields do not prove
-complete lifetime coverage or authorize corporate-action treatment.
-
 ### Prepare for structured dividend quantities
 
 Enrich the query before upgrading. Dividend quantities now require structured
 accrual evidence. Description inference and the one-unit fallback are removed.
 
-In **Performance & Reports > Flex Queries**, edit the existing **Activity Flex
-Query** used by the connector:
-
-1. Open **Cash Transactions**. Keep **Dividends**, **Payment In Lieu Of Dividends**,
-   **Withholding Tax**, and **Detail**. Select **all available fields**, including
-   action ID, contract ID, dividend type, ex-date and report date. These appear in
-   XML as `actionID`, `conid`, `dividendType`, `exDate` and `reportDate`. Click **Save**.
-2. Add **Change in Dividend Accruals** and select **all available fields**. Include
-   account, currency, symbol, ISIN, contract/action IDs, **Quantity**, **Gross Rate**,
-   **Gross Amount**, **Tax**, **Fee**, **Net Amount**, **Code**, **Date**, **Ex Date**,
-   **Pay Date** and **Report Date**. Click **Save**.
-3. Preserve **Account Information**, **Trades (Execution)** and **Cash Report**.
-   Keep the same single account, **XML**, and **Last 365 Calendar Days**. Preserve
-   **YYYYMMDD** dates and **HHmmss TimeZone** times. Keep other existing settings.
-   Click **Continue** and save.
+Update the existing single-account query with the
+[required sections and field checklist](#2-create-a-flex-query), including Cash
+Transactions, Change in Dividend Accruals and Corporate Actions. Keep XML, the
+365-day window and the stated date/time formats. Save it before upgrading.
 
 Structured accruals can support quantity and component identity. They do not
 replace Cash Transactions as the source of paid gross amounts and withholding.
@@ -180,13 +164,14 @@ cancellations. Do not import accrual rows directly as dividend payments.
 
 Required payment keys: a report where a payment attribute appears on no relevant cash row fails the account before any write, including trades and cash. The run logs one `ERROR` that names each missing attribute with the IBKR field to tick. It does not enable `DRY_RUN`. This matches the time-zone check.
 
-- `accountId`: ClientAccountID
-- `conid`: ConID (Contract ID)
-- `currency`: CurrencyPrimary
-- `actionID`: ActionID
-- `exDate`: Ex Date
-
-When the report has a relevant payment, dividend or withholding cash row, the `ChangeInDividendAccruals` section is also required. If it is absent, the account fails the same way. If it has rows, each of these attributes must appear on at least one of them: `accountId`, `conid`, `currency`, `actionID`, `exDate`, `quantity` (Quantity), `code` (Code), `date` (Date), `payDate` (Pay Date) and `reportDate` (Report Date). A present but empty section stays valid. Withholding rows do not need accrual fields such as quantity or code. For a new action write, every withholding/refund row must have nonempty `accountId`, `actionID`, `conid`, `currency` and a payment-day `dateTime` that match exactly one payment action. Its `exDate` may be absent or empty; a nonempty value must match. Do not allocate tax by description or amount. Withholding-only groups remain not payable and do not fail solely because tax is present.
+The checklist above owns the field list. Required XML payment keys are
+`accountId/conid/currency/actionID/exDate`. With relevant cash rows, the accrual
+section is required. A present empty section is valid; when it has rows, required
+attributes must be represented. Withholding rows do not need accrual quantity/code.
+For a new action, each tax/refund row must match one payment by account, action,
+contract, currency and payment day. exDate may be empty; a nonempty value must
+match. Never allocate tax by description or amount. A withholding-only group is
+not payable and does not fail solely because tax is present.
 
 Missing quantity evidence in a short report window and invalid or conflicting accrual quantities reject the affected group with the existing local outcome. New action partition errors fail the account: incomplete or conflicting payment keys, negative-net actions, mixed currencies, or tax rows without a unique cash association. Every dividend action in that security/day group is withheld; trades, safe sales, independent cash and later accounts continue. Candidate payment account IDs must match the verified report account. Missing or unsafe account/action identities and oversized comments stop that account before any financial write. Rejected payments are not marked imported and can retry after the query or report window is corrected. Empty sections without payments are valid. Unrelated rows do not block valid payments. Existing dividends are deduplicated before evidence checks and remain untouched and unverified.
 

@@ -1,5 +1,27 @@
 # Troubleshooting
 
+Find the symptom below. Each entry names the likely cause and safe action.
+After correction, run a simulation and check [Cycle result](configuration.md#cycle-result)
+and [Notification result](configuration.md#notification-result). A clean result
+has no unresolved user action; do not treat exit 0 alone as proof of full import.
+After a correction, expect the named reason to disappear; inspect remaining
+findings before enabling writes.
+
+## Missing corporate-action state or active trade hold
+
+**Cause:** CORPORATE_ACTION_STATE_FILE is unset, missing, invalid, unwritable or
+locked, or current evidence leaves a corporate-action hold.
+
+**Action:** inspect the named path and private log. For first installation, use a
+private persistent directory owned by `10001:10001` and run simulation to initialize
+it after valid report acquisition. For state loss, preserve surviving evidence and
+follow [recovery](corporate-actions.md#native-splits-notifications-and-recovery).
+Do not delete state, bypass a lock or resend uncertain writes.
+
+**Expected result:** missing prerequisites or active holds produce exit 1, including
+simulation. Resolve the actual proof before enabling BUY/SELL. Independent cash
+retains its own guards and does not release a trade hold.
+
 ## "has no Cash Transactions section: dividends not synced"
 
 The Flex Query does not include the Cash Transactions section. Add it as described in [Create a Flex Query](ibkr-setup.md#2-create-a-flex-query); trades still sync meanwhile, but the run exits 1.
@@ -56,8 +78,8 @@ Before any import, the tool reads all existing Ghostfolio activities in one requ
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Every account synced cleanly |
-| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), a Ghostfolio target is repeated, at least one account failed, or an unhandled error occurred |
+| 0 | No account failed; required actions or deferred work may remain. Read Cycle result. |
+| 1 | Missing or inconsistent configuration (including a missing or invalid mapping file, or both/neither Ghostfolio credential), the Ghostfolio login failed (`GHOST_ACCESS_TOKEN`), the initial activities fetch failed or could not be trusted (redacted values, count mismatch), a Ghostfolio target is repeated, corporate-action state is missing/invalid/unwritable or a trade hold is active, at least one account failed, or an unhandled error occurred |
 
 A run is best-effort: an error on one account is logged and the remaining accounts are still processed, but any failure makes the whole run exit 1. Failures that count include an IBKR Flex Query fetch error, a Flex query without the time-zone suffix or the required dividend fields, a refused cash balance (currency mismatch or no base currency), an unknown trade side, a Ghostfolio account name that does not exist, an import returning 4xx/5xx, a failed cash balance update, and an unexpected error while processing the account (logged with its traceback; the other accounts are still processed).
 
@@ -81,7 +103,7 @@ IBKR sometimes appends a suffix to symbol names for certain listings. The tool f
 
 The IBKR Flex Web Service token expires based on the expiry you set when generating it. Set a calendar reminder before it expires. If the script starts failing with authentication errors, generate a new token in IBKR Account Management.
 
-With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [Ghostfolio Setup](configuration.md#configuration-reference) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
+With `GHOST_ACCESS_TOKEN` the Ghostfolio side needs no renewal: each run logs in afresh. With the legacy `GHOST_TOKEN`, the session token expires: regenerate it using the curl command in the [legacy authentication](configuration.md#legacy-authentication) section and update your container environment variable, or switch to `GHOST_ACCESS_TOKEN`. An expired or invalid token makes the run exit 1 with `ghost_startup: token_rejected`, which is notified when `APPRISE_URLS` is set.
 
 In legacy mode, startup reads the JWT's `exp` claim locally. Within **14 days** of
 expiry (including an already expired token), it logs a `WARNING` with the days
