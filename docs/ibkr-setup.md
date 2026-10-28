@@ -215,7 +215,9 @@ HTTP calls or financial writes. Simulation keeps login, reads and preview,
 without activity, cash or platform writes.
 
 Failed simulations send one configured Failure notification. Successful
-simulations, including expiry-only reminders and previews, send nothing.
+simulations notify when a user action is required, including token renewal or
+timezone correction, or when a corporate-action notice is eligible. A deliberate
+clean preview alone sends nothing.
 Failure combined with an expiry reminder or forced preview sends one summary.
 Without configured Apprise, nothing is sent. Delivery does not change exit status.
 Set `DRY_RUN=true` for the first run. After review, set `DRY_RUN=false` and keep
@@ -237,9 +239,9 @@ this does not undo financial writes.
    Flex abbreviations such as `EST` and `EDT` are provenance, not the IANA `TZ`.
    Missing or invalid `TZ` forces the whole run into `DRY_RUN` before accounts
    run. One WARNING names the reason. The final notification also names it
-   when Apprise is configured and `DRY_RUN` is explicitly false, even if every
-   account succeeds. Successful default/blank/truthy simulations send nothing,
-   including expiry-only reminders and previews. Failed simulations send Failure.
+   when Apprise is configured, even if every account succeeds and in all simulation
+   modes. Required actions repeat each completed run until resolved. A clean
+   simulation sends nothing; failed simulations send Failure.
 4. Upgrade the image and run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` and no `CRON`,
    using the [README preview command](configuration.md#dry-run-first). Read the
    container logs. Verify no forced-preview WARNING or account suffix failure.

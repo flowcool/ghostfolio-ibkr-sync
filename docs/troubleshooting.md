@@ -88,8 +88,9 @@ expiry (including an already expired token), it logs a `WARNING` with the days
 remaining and sends an Apprise reminder after the run completes, when configured.
 Set `GHOST_TOKEN_EXPIRY_WARNING_DAYS` to an integer from `0` to `365` to change the
 window; `0` disables the reminder, and invalid values warn and fall back to `14`.
-The reminder alone never fails the sync. A dry run logs the warning but sends no
-notification; interrupted runs send none either. Tokens without a usable numeric
+The reminder alone never fails the sync. Every completed run, including simulation,
+sends the configured reminder while renewal remains required. Interrupted runs
+send no completion notification. Tokens without a usable numeric
 `exp` (including malformed JWTs) skip the check with a fixed debug message. The
 payload is not signature-verified and is used only for the reminder: Ghostfolio
 still decides whether the token is valid. The token and its other claims are never
