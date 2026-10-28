@@ -113,3 +113,78 @@ def test_numeric_residue_does_not_accept_arbitrary_minor_difference():
     from ghostfolio_ibkr_sync.activity_review import source_events
     event = next(iter(source_events(report(trade_xml("T1", qty=1, currency="JPY", tradePrice="100")), "U1", "acc", {}).values()))
     assert not reconciliation.numeric_evidence(event, dict(event["values"], unitPrice="101"))["calculation residue"]
+
+
+def matching_events(xml=None):
+    from test_activity_review import source_events
+    return source_events(xml)
+
+
+def matching_row(**kwargs):
+    from test_activity_review import destination
+    return destination(quantity=D("10"), **kwargs)
+
+
+def test_unique_matching_complete_graph_both_directions():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    events = matching_events(report(trade_xml("T1") + trade_xml("T2")))
+    rows = [matching_row(id="one"), matching_row(id="two", fee=D("999"))]
+    for ordered in (rows, rows[::-1]):
+        proposals, _ = refresh_proposals({}, events, ordered, {"U1": "acc"}, reconciliation="balanced", timezone="UTC")
+        assert len(proposals) == 4
+        assert not any(p["automatic eligible"] for p in proposals.values())
+    unique, _ = refresh_proposals({}, matching_events(), [rows[0]], {"U1": "acc"}, reconciliation="balanced", timezone="UTC")
+    assert next(iter(unique.values()))["automatic eligible"]
+
+
+@pytest.mark.parametrize("name,reference,eligible", [
+    ("conservative", None, False), ("conservative", "IBKR#v2#U1:TRADE:T1", True),
+    ("balanced", None, True), ("off", None, False),
+])
+def test_unique_matching_reference_and_profile(name, reference, eligible):
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    proposals, _ = refresh_proposals({}, matching_events(), [matching_row(comment=reference, fee=D("100"))],
+                                    {"U1": "acc"}, reconciliation=name, timezone="UTC")
+    assert next(iter(proposals.values()))["automatic eligible"] is eligible
+
+
+def test_unique_matching_exact_conflict_prevents_proximity():
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    rows = [matching_row(comment="IBKR#v2#U1:TRADE:T1", currency="EUR"), matching_row(id="near")]
+    proposals, _ = refresh_proposals({}, matching_events(), rows, {"U1": "acc"}, reconciliation="permissive", timezone="UTC")
+    assert len(proposals) == 1
+    assert not next(iter(proposals.values()))["automatic eligible"]
+
+
+@pytest.mark.parametrize("zone,source,target,name,eligible", [
+    ("America/New_York", "2026-08-02T00:30:00Z", "2026-08-01T23:30:00Z", "balanced", True),
+    ("Europe/Zurich", "2026-03-29T00:30:00Z", "2026-03-29T22:30:00Z", "balanced", False),
+    ("Europe/Zurich", "2026-03-29T00:30:00Z", "2026-03-31T00:30:00Z", "permissive", True),
+    ("UTC", "2026-08-01T23:59:00Z", "2026-08-04T00:00:00Z", "permissive", False),
+    ("bad/zone", "2026-08-01T00:00:00Z", "2026-08-01T00:00:00Z", "balanced", False),
+    ("", "2026-08-01T00:00:00Z", "2026-08-01T00:00:00Z", "balanced", False),
+])
+def test_unique_matching_local_calendar(zone, source, target, name, eligible):
+    assert reconciliation.date_eligible(name, source, target, "BUY", zone)[0] is eligible
+
+
+@pytest.mark.parametrize("zone", ["America/New_York", "Asia/Tokyo"])
+def test_unique_matching_dividend_midnight_local_dates(zone):
+    allowed, context = reconciliation.date_eligible("balanced", "2026-07-15T00:00:00Z",
+                                                  "2026-07-15T01:00:00Z", "DIVIDEND", zone)
+    assert allowed
+    assert context["source local date"] == context["destination local date"]
+    assert reconciliation.date_eligible("permissive", "2026-07-15T00:00:00Z", "2026-07-18T00:00:00Z", "DIVIDEND", zone)[0]
+    assert not reconciliation.date_eligible("permissive", "2026-07-15T00:00:00Z", "2026-07-19T00:00:00Z", "DIVIDEND", zone)[0]
+
+
+@pytest.mark.parametrize("change", [{"assetProfile": {"symbol": "KO", "isin": "OTHER", "dataSource": "YAHOO"}},
+                                    {"assetProfile": {"symbol": "KO", "dataSource": "MANUAL"}},
+                                    {"comment": "IBKR#v2#U1:TRADE:T2"},
+                                    {"date": "2026-08-01T10:00:00.0000001Z"}])
+def test_unique_matching_refuses_conflicting_evidence(change):
+    from ghostfolio_ibkr_sync.activity_review import refresh_proposals
+    proposals, _ = refresh_proposals({}, matching_events(), [matching_row(**change)],
+                                     {"U1": "acc"}, reconciliation="permissive", timezone="UTC")
+    assert not any(item["automatic eligible"] for item in proposals.values())

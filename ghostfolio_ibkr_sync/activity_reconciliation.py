@@ -1,15 +1,38 @@
 """Bounded reconciliation authority. Matching never changes transport precision."""
 
+import re
 from collections.abc import Mapping
+from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
 from math import isfinite, ulp
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PROFILES = ("off", "conservative", "balanced", "permissive")
 PRECISION = {"JPY": 0, "GBP": 2, "USD": 2, "EUR": 2, "CAD": 2}
 LIMITS = {"conservative": (0, Decimal(0)),
           "balanced": (1, Decimal("0.001")),
           "permissive": (100, Decimal("0.01"))}
+
+
+def date_eligible(name: str, source: str, target: str, kind: str,
+                  timezone: str) -> tuple[bool, dict[str, str]]:
+    try:
+        if any(re.search(r"\.[0-9]{7,}", value) for value in (source, target)):
+            return False, {"reason": "Unsupported timestamp precision"}
+        zone = ZoneInfo(timezone)
+        instants = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in (source, target)]
+        if any(value.tzinfo is None for value in instants):
+            return False, {"reason": "Missing source or destination timezone"}
+        dates = [value.astimezone(zone).date() for value in instants]
+        distance = abs((dates[1] - dates[0]).days)
+        limit = (3 if kind == "DIVIDEND" else 2) if name == "permissive" else 0
+        return name in LIMITS and distance <= limit, {
+            "timezone": timezone, "source instant": source, "destination instant": target,
+            "source local date": str(dates[0]), "destination local date": str(dates[1]),
+            "calendar distance": str(distance), "elapsed seconds": str((instants[1] - instants[0]).total_seconds())}
+    except (ValueError, ZoneInfoNotFoundError):
+        return False, {"reason": "Missing or invalid timezone or timestamp"}
 
 
 def denomination(currency: str) -> tuple[str, Decimal]:

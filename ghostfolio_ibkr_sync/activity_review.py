@@ -23,6 +23,7 @@ from uuid import uuid4
 
 import yaml
 
+from ghostfolio_ibkr_sync import activity_reconciliation as reconciliation_rules
 from ghostfolio_ibkr_sync.activity_preservation import preserved_values
 from ghostfolio_ibkr_sync.ghostfolio import (
     activity_date_is_current,
@@ -498,7 +499,8 @@ def update_payload(row: dict[str, Any], proposed: dict[str, Any]) -> dict[str, A
     return payload
 
 
-def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: bool) -> str | None:
+def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: bool,
+                     timezone: str = "UTC") -> str | None:
     reference = marker_of(row)
     if reference == event["event"] or reference in event["legacy"]:
         return "exact reference"
@@ -507,32 +509,72 @@ def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: b
     target = event["values"]
     asset = profile(row)
     if (row.get("accountId") != event["destination account"] or row.get("type") != target["type"]
-            or row.get("currency") != target["currency"] or not activity_is_active(row)
+            or reconciliation_rules.denomination(row.get("currency", ""))[0] != reconciliation_rules.denomination(target["currency"])[0]
+            or not activity_is_active(row)
             or asset.get("dataSource") != "YAHOO"
             or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
             or not (asset.get("symbol") == target["symbol"]
                     or (event["isin"] and asset.get("isin") == event["isin"]))):
         return None
-    distance = abs((instant(row.get("date")).date() - instant(target["date"]).date()).days)
-    return "UTC calendar proximity" if distance <= (3 if target["type"] == "DIVIDEND" else 2) else None
+    instant(row.get("date"))
+    instant(target["date"])
+    eligible, _ = reconciliation_rules.date_eligible("permissive", target["date"], row["date"], target["type"], timezone)
+    return "local calendar proximity" if eligible else None
+
+
+def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]],
+                    name: str, timezone: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build all eligible edges before selecting mutually unique pairs."""
+    edges: dict[tuple[str, str], dict[str, Any]] = {}
+    for event_id, event in events.items():
+        exact = any(marker_of(row) == event_id or marker_of(row) in event["legacy"] for row in rows)
+        for row in rows:
+            try:
+                reason = candidate_reason(row, event, exact, timezone)
+                reference = marker_of(row)
+                asset, source = profile(row), event["values"]
+                if (reason is None or name == "off" or (name == "conservative" and reason != "exact reference")
+                        or row.get("accountId") != event["destination account"]
+                        or row.get("type") != source["type"] or not activity_is_active(row)
+                        or asset.get("dataSource") != "YAHOO"
+                        or asset.get("symbol") != source["symbol"]
+                        or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
+                        or (reference and reference.startswith("IBKR#v2#") and reference != event_id)):
+                    continue
+                current = values_of(row)
+                date_ok, date_context = reconciliation_rules.date_eligible(name, source["date"], current["date"], source["type"], timezone)
+                numbers = reconciliation_rules.numeric_evidence(event, current)
+                quantity_ok = (numeric(source["quantity"]) == numeric(current["quantity"])
+                               or source["type"] == "DIVIDEND")
+                amount_ok = reconciliation_rules.gross_within_limits(name,
+                    Decimal(numbers["source gross"]), Decimal(numbers["destination gross"]), numbers["currency"])
+                if date_ok and quantity_ok and (amount_ok or numbers["calculation residue"]):
+                    edges[event_id, row["id"]] = {"numeric evidence": numbers, "profile date context": date_context}
+            except (RuntimeError, ValueError, ArithmeticError, KeyError):
+                continue
+    return {pair: evidence for pair, evidence in edges.items()
+            if sum(other[0] == pair[0] for other in edges) == 1
+            and sum(other[1] == pair[1] for other in edges) == 1}
 
 
 PROPOSAL_FIELDS = {"key", "source account", "source event", "destination account", "activity id",
                    "match reason", "current values", "proposed values", "changed fields", "status",
                    "approve", "actionable", "binding", "date context", "review revision"}
 DISPLAY_FIELDS = {"section", "evidence level", "execution path"}
+AUTOMATIC_FIELDS = {"automatic eligible", "profile", "numeric evidence", "profile date context"}
 
 
 def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]],
                       rows: list[dict[str, Any]], accounts: dict[str, str],
-                      journal_bindings: set[tuple[str, str, str]] | None = None
+                      journal_bindings: set[tuple[str, str, str]] | None = None,
+                      *, reconciliation: str = "off", timezone: str = "UTC"
                       ) -> tuple[dict[str, Any], set[str]]:
     """Rebuild evidence; file fields never become replacement input."""
     by_id = {row["id"]: row for row in rows}
     if len(by_id) != len(rows):
         raise RuntimeError("Duplicate destination activity IDs")
     for key, old in previous.items():
-        if (set(old) not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
+        if (set(old) - AUTOMATIC_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
                 or (old["destination account"] != accounts.get(old["source account"])
                     and (old["source event"], old["destination account"], old["activity id"])
                     not in (journal_bindings or set()))
@@ -545,13 +587,14 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             raise RuntimeError("Unbound or invalid review proposal")
     result: dict[str, Any] = {}
     satisfied: set[str] = set()
+    automatic = automatic_pairs(events, rows, reconciliation, timezone)
     for event_id, event in sorted(events.items()):
         exact_exists = any(marker_of(row) == event_id or marker_of(row) in event["legacy"] for row in rows)
         occupied = sorted((row["id"], row.get("accountId"), marker_of(row)) for row in rows
                           if marker_of(row) == event_id or marker_of(row) in event["legacy"])
         for row in sorted(rows, key=lambda item: item["id"]):
             try:
-                reason = candidate_reason(row, event, exact_exists)
+                reason = candidate_reason(row, event, exact_exists, timezone)
             except RuntimeError:
                 continue
             if reason is None:
@@ -604,19 +647,24 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     "match reason": reason, "current values": current, "proposed values": proposed,
                     "changed fields": changes, "status": status, "approve": None,
                     "actionable": actionable, "binding": binding, "review revision": uuid4().hex,
-                    "date context": "Full UTC instants; proximity uses UTC calendar dates"}
+                    "date context": "Full instants; proximity uses local calendar dates"}
             item.update(section="reference_updates" if changes == ["comment"] else "activity_corrections",
                         **{"evidence level": ("blocked" if not actionable else
                                              "exact" if reason == "exact reference" else "probable"),
                            "execution path": "normal run"})
             old = previous.get(key)
             if old:
-                comparison = {k: v for k, v in old.items() if k not in ("approve", "status", "review revision")}
-                if comparison == {k: v for k, v in item.items() if k not in ("approve", "status", "review revision")}:
+                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS}
+                comparison = {k: v for k, v in old.items() if k not in ignored}
+                if comparison == {k: v for k, v in item.items() if k not in ignored}:
                     item["approve"] = old["approve"] if actionable else None
                     item["review revision"] = old["review revision"]
                 else:
                     item["status"] = "changed evidence; approval cleared" if actionable else status
+            auto = automatic.get((event_id, row["id"]))
+            item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
+                         "numeric evidence": auto["numeric evidence"] if auto else {},
+                         "profile date context": auto["profile date context"] if auto else {}})
             result[key] = item
     # Keep missing targets and unavailable sources; reassignment needs positive evidence.
     for key, old in previous.items():

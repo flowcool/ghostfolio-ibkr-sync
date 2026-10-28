@@ -12,7 +12,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 3. Complete candidate graph
 
-- [ ] 3.1 Build complete candidate graphs with reference precedence, local calendar windows and mutual uniqueness. Include DST, invalid TZ, collisions and competing candidates. Requirements: Unique matching and business dates. Files: activity_reconciliation.py, activity_review.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "unique_matching or review_candidates"`.
+- [x] 3.1 Build complete candidate graphs with reference precedence, local calendar windows and mutual uniqueness. Include DST, invalid TZ, collisions and competing candidates. Requirements: Unique matching and business dates. Files: activity_reconciliation.py, activity_review.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "unique_matching or review_candidates"`.
 
 ## 4. Mapping-owned reference migration
 
