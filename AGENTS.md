@@ -91,7 +91,10 @@ This mode replaces the global per-step ceremony. The invariants above still appl
   flowcool/ghostfolio-ibkr-sync` in one call. Exit 2 means re-run. Fix or answer
   actionable comments, resolve them and re-run. A pushed fix needs a review of
   the new head. After a second unresolved round, leave the PR open and report.
-- **Docs:** README and user docs required by the spec only. No new plan, review
+- **Docs:** Write repository documentation in English. Follow ASD-STE-100 writing principles.
+  Use short sentences, one idea per sentence, active voice and direct instructions.
+  Remove repetition. Keep commands, prerequisites, safety limits and recovery steps complete.
+  Write README and user docs required by the spec only. No new plan, review
   or contract files.
 - **Subagents:** only on the operator's explicit request. The PR lifecycle uses
   no subagent: the implementing agent runs `pr-ship` (global Delegation rule).

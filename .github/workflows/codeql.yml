@@ -15,35 +15,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Documentation-only PRs (docs/, openspec/, *.md) skip the work below; the
-  # required checks still report (skipped = success). Fails open: any scope
-  # error runs everything.
-  scope:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      code: ${{ steps.files.outputs.code }}
-    steps:
-      - id: files
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          code=true
-          if [ -n "$PR" ]; then
-            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only || true)
-            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
-              code=false
-            fi
-          fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-
+  # The branch rules require a CodeQL result for every PR, including docs.
   analyze:
-    needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

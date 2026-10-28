@@ -10,6 +10,18 @@ SELL and DIVIDEND events. Blank retains the existing additive import path.
 The reader accepts a canonical v2 first line, one blank separator line and
 preserved user notes, even after review is disabled.
 
+## Choose the next action
+
+| Proposal or result | Action |
+| --- | --- |
+| `blocked`, missing proof or conflicting values | Resolve the reason. `yes` cannot enable it. |
+| Eligible `normal run` | Compare the full values. After qualification, approve only that proposal. |
+| `historical maintenance` | Use the separate preparation and authorized apply procedure. |
+| Pending or uncertain request | Stop dependent writes. Follow [Recovery](#recovery). Do not resend. |
+
+See [proposal review](#review-a-proposal), [approval](#approve-a-proposal) and
+[execution paths](#choose-the-execution-path).
+
 ## Safety limits
 
 Review dispatch is qualified for Ghostfolio image
