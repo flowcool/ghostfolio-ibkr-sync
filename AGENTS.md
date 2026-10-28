@@ -43,7 +43,7 @@ propagation in its PR.
 
 - OpenSpec change `simplify-user-onboarding` is implemented and archived at `openspec/changes/archive/2026-10-28-simplify-user-onboarding/`. The primary Compose example uses one account; `compose.multi-account.yaml` retains the two-account setup. Detailed user guides live under `docs/`.
 
-- OpenSpec change `profiled-activity-reconciliation` is implemented and archived at `openspec/changes/archive/2026-10-28-profiled-activity-reconciliation/`. Offline acceptance passed. PR review, exact-image qualification and release remain pending.
+- OpenSpec change `profiled-activity-reconciliation` is implemented and archived at `openspec/changes/archive/2026-10-28-profiled-activity-reconciliation/`. Implementation and release are complete. Stable `v4.0.0` reuses the RC4 digest qualified in both labs with all three profiles. Beads holds the acceptance and verified publication evidence.
 
 ## Working mode: fast-track
 
