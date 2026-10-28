@@ -135,8 +135,8 @@ For one deliberately enabled run, with the schedule still stopped:
 docker compose run --rm -e DRY_RUN=false -e CRON= ibkr-sync-individual
 ```
 
-After the first import, [add missing currency pairs](configuration.md#4-add-currencies)
-and run [Gather All Data](configuration.md#5-after-your-first-import).
+After the first import, [add missing currency pairs](configuration.md#add-currencies)
+and run [Gather All Data](configuration.md#after-your-first-import).
 Check the result. A successful buy can remain if a later sell fails.
 Do not resend an uncertain operation. Follow its recovery guide and keep journals.
 Image rollback does not undo financial writes.

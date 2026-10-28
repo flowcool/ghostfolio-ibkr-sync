@@ -1,5 +1,33 @@
 # Corporate-action safety
 
+## Resolve a blocked trade
+
+1. Read the hold reason in the private log. Check the named account, event and file.
+2. If state is missing or unwritable, check the `/state` mount, owner `10001:10001` and directory mode `0700`.
+   For first setup, follow [persistent state](getting-started.md#prepare-private-persistent-state).
+   After state loss, preserve surviving evidence and use [recovery](#native-splits-notifications-and-recovery).
+3. If event evidence is missing, check the Flex Corporate Actions section and retained reports.
+   For a missing market effective date, use [official date evidence](#official-effective-date-evidence).
+   Missing quantities, source coverage or ISIN mappings need the corresponding source proof.
+4. Stop the scheduled connector before a manual simulation. Use the same state directory.
+
+```bash
+docker compose stop ibkr-sync-individual
+docker compose run --rm -e DRY_RUN=true -e CRON= ibkr-sync-individual
+```
+
+For two accounts, select `compose.multi-account.yaml` on both commands.
+See [file selection](getting-started.md#multiple-accounts).
+
+Read the new hold reason and `Cycle result`.
+The hold clears only when current evidence satisfies the event checks.
+A matching quantity alone does not prove cost or source history.
+If the hold remains, keep writes disabled for the affected work and investigate its reason.
+Do not delete state, bypass locks or approve a review proposal to release it.
+Corporate-action treatment remains manual.
+
+## State and evidence reference
+
 Select **Corporate Actions** in Flex, even when empty.
 Use the [required fields](ibkr-setup.md#corporate-actions-required).
 A missing section blocks all BUY/SELL for that source account.
