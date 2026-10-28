@@ -9,6 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PROFILES = ("off", "conservative", "balanced", "permissive")
+POLICY_VERSION = "profiled-activity-reconciliation-v1"
 PRECISION = {"JPY": 0, "GBP": 2, "USD": 2, "EUR": 2, "CAD": 2}
 LIMITS = {"conservative": (0, Decimal(0)),
           "balanced": (1, Decimal("0.001")),

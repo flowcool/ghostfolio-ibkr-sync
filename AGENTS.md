@@ -43,6 +43,8 @@ propagation in its PR.
 
 - OpenSpec change `simplify-user-onboarding` is implemented and archived at `openspec/changes/archive/2026-10-28-simplify-user-onboarding/`. The primary Compose example uses one account; `compose.multi-account.yaml` retains the two-account setup. Detailed user guides live under `docs/`.
 
+- OpenSpec change `profiled-activity-reconciliation` is implemented and archived at `openspec/changes/archive/2026-10-28-profiled-activity-reconciliation/`. Offline acceptance passed. PR review, exact-image qualification and release remain pending.
+
 ## Working mode: fast-track
 
 This mode replaces the global per-step ceremony. The invariants above still apply.

@@ -1,6 +1,6 @@
 # Tasks
 
-Commands below are future offline acceptance, not current passing evidence. Runtime paths are under `ghostfolio_ibkr_sync/`. Every slice includes synthetic tests and mocked HTTP. Slices changing existing behavior also update and run their affected tests/test_activity_review.py scenarios: review_candidates, review_approval, review_source_scope, review_refresh and review_simulation; do not defer these updates to integration. Requirement names refer to this change’s delta specs.
+Commands below define offline acceptance. All eleven tasks passed the complete offline gate. Delivery evidence stays in the owning work item. Runtime paths are under `ghostfolio_ibkr_sync/`. Every slice includes synthetic tests and mocked HTTP. Slices changing existing behavior also update and run their affected tests/test_activity_review.py scenarios: review_candidates, review_approval, review_source_scope, review_refresh and review_simulation; do not defer these updates to integration. Requirement names refer to this change’s delta specs.
 
 ## 1. Profile configuration and financial limits
 
@@ -44,4 +44,4 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 11. Integrated compatibility
 
-- [ ] 11.1 Prove unchanged disabled behavior, retained reader generations, recovery and all profile paths together. Requirements: all three delta specs and their named scenarios. Verify: `bash scripts/check.sh` and `python -m pytest -q`. Reconcile README.md and required user docs with delivered behavior. Update ADR 0002/0003 references and proposed ADR 0009 status only when implemented. Reconcile affected repository guidance with the approved exception through its policy-confirmation rule. Archive the completed change in the final implementation commit and repair ADR links; verify `openspec validate --all --strict` and `git diff --check`. Record pending exact-image qualification separately; offline success grants no financial or publication authority.
+- [x] 11.1 Prove unchanged disabled behavior, retained reader generations, recovery and all profile paths together. Requirements: all three delta specs and their named scenarios. Verify: `bash scripts/check.sh` and `python -m pytest -q`. Reconcile README.md and required user docs with delivered behavior. Update ADR 0002/0003 references and proposed ADR 0009 status only when implemented. Reconcile affected repository guidance with the approved exception through its policy-confirmation rule. Archive the completed change in the final implementation commit and repair ADR links; verify `openspec validate --all --strict` and `git diff --check`. Record pending exact-image qualification separately; offline success grants no financial or publication authority.

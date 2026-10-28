@@ -19,7 +19,7 @@ preserved user notes, even after review is disabled.
 | `historical maintenance` | Use the separate preparation and authorized apply procedure. |
 | Pending or uncertain request | Stop dependent writes. Follow [Recovery](#recovery). Do not resend. |
 
-See [proposal review](#review-a-proposal), [approval](#approve-a-proposal) and
+See [proposal review](#review-a-proposal), [approval](#decide-on-a-proposal) and
 [execution paths](#choose-the-execution-path).
 
 ## Safety limits
@@ -65,8 +65,8 @@ services:
 Review acquires and validates all configured reports once before corrections,
 then reuses them for normal processing. Exact references take priority over
 proximity, including outside the date window. Other candidates require the same
-account, operation type, security and denomination. Trade proximity is inclusive
-±2 local calendar days; dividend proximity is inclusive ±3 days. Amount agreement
+account, operation type, security and denomination. Manual discovery with profiles off uses UTC dates. Active profiles use `TZ`.
+Trade proximity is inclusive ±2 calendar days; dividend proximity is inclusive ±3 days. Amount agreement
 never grants approval. A manual BUY two days later remains a candidate even when
 its quantity differs. A dividend three days later also remains a candidate.
 Separate fills/actions are never combined. Dividend cash portions from one action
@@ -371,7 +371,8 @@ Independently unique one-to-one dividend pairs can proceed within their profile.
 
 Results distinguish already consistent, automatically corrected, manually
 corrected, automatic work deferred, manual review required, rejected association,
-blocked and would correct. Only exact readback records a completed correction.
+blocked and would correct. Reference migrations and distinct corrected targets have separate counts.
+Only exact readback records a completed correction.
 Simulation reports would correct. It never reports an applied correction.
 Queue position and remaining eligible runs describe the current inventory.
 They are estimates. Future source, destination or profile changes can alter them.

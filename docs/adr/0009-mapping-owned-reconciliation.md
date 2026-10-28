@@ -16,7 +16,7 @@ The connector validates current source provenance, mapped destination ownership,
 
 Automatic correction requires an explicit non-off reconciliation profile. A profile defines accepted date and gross differences. Conservative requires a recognized unique reference; balanced and permissive can authorize mutually unique unreferenced matches. It does not turn a threshold match into exact identity proof. Fees do not establish identity. BUY/SELL quantities remain exact. Duplicate or conflicting current evidence cannot be overridden by a profile. Every write retains the qualified budget, durable intent, exact readback and uncertainty fence.
 
-This implemented exception extends ADR 0003. Stable publication and production activation retain their separate GO. Manual review and separately authorized historical maintenance remain available. The full behavior is specified in [profiled-activity-reconciliation](../../openspec/changes/profiled-activity-reconciliation/proposal.md).
+This implemented exception extends ADR 0003. Stable publication and production activation retain their separate GO. Manual review and separately authorized historical maintenance remain available. The full behavior is specified in [profiled-activity-reconciliation](../../openspec/changes/archive/2026-10-28-profiled-activity-reconciliation/proposal.md).
 
 ## Alternatives considered
 

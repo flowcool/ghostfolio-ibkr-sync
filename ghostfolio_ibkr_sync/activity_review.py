@@ -680,6 +680,8 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
                         or row.get("type") != source["type"] or not activity_is_active(row)
                         or asset.get("dataSource") != "YAHOO"
                         or asset.get("symbol") != source["symbol"]
+                        or reconciliation_rules.denomination(row.get("currency", ""))[0]
+                           != reconciliation_rules.denomination(source["currency"])[0]
                         or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
                         or (reference and reference.startswith("IBKR#v2#") and reference != event_id)):
                     continue
@@ -764,6 +766,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     satisfied: set[str] = set()
     automatic = automatic_pairs(events, rows, reconciliation, timezone)
     migration_pairs = automatic_pairs(events, rows, "permissive", timezone)
+    discovery_timezone = "UTC" if reconciliation == "off" else timezone
     historical_pairs = {(item["source event"], item["destination account"], item["activity id"])
                         for item in previous.values() if item.get("execution path") == "historical maintenance"}
     for event_id, event in sorted(events.items()):
@@ -774,7 +777,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                           and row.get("accountId") == event["destination account"]))
         for row in sorted(rows, key=lambda item: item["id"]):
             try:
-                reason = candidate_reason(row, event, exact_exists, timezone)
+                reason = candidate_reason(row, event, exact_exists, discovery_timezone)
             except RuntimeError:
                 continue
             if reason is None:
@@ -915,6 +918,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     result = {key: item for key, item in result.items() if item["source event"] not in satisfied}
     rejected = {(item["source event"], item["activity id"]) for item in result.values() if item.get("rejected")}
     automatic = automatic_pairs(events, rows, reconciliation, timezone, rejected)
+    eligible_at = datetime.now(UTC).isoformat()
     for item in result.values():
         item["automatic eligible"] = bool(item.get("execution path") == "normal run"
             and item["actionable"] and not item.get("rejection cooldown")
@@ -922,7 +926,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
         old = previous.get(item["key"])
         retained = old.get("first eligible") if old and old["review revision"] == item["review revision"] else None
         eligible = item.get("automatic eligible") or (item["approve"] == "yes" and item["actionable"])
-        item["first eligible"] = retained or (datetime.now(UTC).isoformat() if eligible else None)
+        item["first eligible"] = retained or (eligible_at if eligible else None)
     return result, {item["source event"] for item in result.values() if proposal_holds(item)}
 
 
@@ -1089,7 +1093,15 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         state["evidence"]["rebuild cooldown"] -= 1
     cooling: set[str] = set()
     counts = dict.fromkeys(RECONCILIATION_COUNTS, 0)
+    corrected_targets: set[str] = set()
     consistent: dict[str, Any] = {}
+
+    def completed(entry: dict[str, Any]) -> None:
+        counts["manually corrected" if entry.get("authority", "manual") == "manual" else "automatically corrected"] += 1
+        corrected_targets.add(entry["activity id"])
+        counts["corrected targets"] = len(corrected_targets)
+        if changed_fields(entry["before"], entry["after"]) == ["comment"]:
+            counts["reference migrations"] += 1
 
     def publish(proposals: dict[str, Any]) -> None:
         publish_review(state, {"version": 1, "proposals": proposals, "consistent": consistent,
@@ -1125,6 +1137,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     blocked: set[str] = set()
     unresolved: set[str] = set()
     unresolved_events: set[str] = set()
+    recovered_events: set[str] = set()
     for entry in state["journal"]["entries"].values():
         if entry["status"] == "confirmed":
             # A confirmed journal never overrides current source/target evidence.
@@ -1140,7 +1153,8 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             entry["status"] = "confirmed"
             entry["verified result"] = entry["after"]
             publish_journal(state)
-            counts["manually corrected" if entry.get("authority", "manual") == "manual" else "automatically corrected"] += 1
+            recovered_events.add(entry["source event"])
+            completed(entry)
         else:
             unresolved.add(entry["destination account"])
             unresolved_events.add(entry["source event"])
@@ -1152,7 +1166,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     refreshed, held = refresh(remaining_previous, snapshot_rows(config))
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     for event_id, event in events.items():
-        if event_id in unresolved_events or any(item["source event"] == event_id for item in refreshed.values()):
+        if event_id in unresolved_events | recovered_events or any(item["source event"] == event_id for item in refreshed.values()):
             continue
         matches = [row for row in rows if marker_of(row) == event_id]
         if len(matches) == 1:
@@ -1228,7 +1242,8 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                  "before": values_of(row), "after": after, "request": plain(wire_values(payload)),
                  "status": "pending", "verified result": None,
                  "authority": "manual" if current["approve"] == "yes" else current["profile"],
-                 "eligibility": {"timezone": os.environ.get("TZ", "").strip(),
+                 "eligibility": {"policy version": reconciliation_rules.POLICY_VERSION,
+                                 "timezone": os.environ.get("TZ", "").strip(),
                                  "dates": current.get("profile date context", {}),
                                  "numeric evidence": current.get("numeric evidence", {})}}
         state["journal"]["version"] = 2
@@ -1248,7 +1263,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         entry["status"] = "confirmed"
         entry["verified result"] = after
         publish_journal(state)
-        counts["manually corrected" if entry["authority"] == "manual" else "automatically corrected"] += 1
+        completed(entry)
         refreshed = {key: candidate for key, candidate in refreshed.items()
                      if candidate["source event"] != item["source event"]}
         publish(refreshed)

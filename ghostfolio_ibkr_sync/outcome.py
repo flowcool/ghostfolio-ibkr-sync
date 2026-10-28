@@ -43,7 +43,7 @@ class RunOutcome(TypedDict):
 
 RECONCILIATION_COUNTS = ("already consistent", "automatically corrected", "manually corrected",
                          "automatic work deferred", "manual review required", "rejected association",
-                         "blocked", "would correct")
+                         "blocked", "would correct", "reference migrations", "corrected targets")
 
 
 # Allowed failure reasons per stage. External summaries use only these codes,

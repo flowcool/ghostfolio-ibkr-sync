@@ -732,3 +732,83 @@ def test_financial_limits_preserve_tiny_excess_and_large_display():
     event["source evidence"].update(quantity="1", tradePrice="1e300")
     evidence = reconciliation.numeric_evidence(event, event["values"])
     assert evidence["source display"] == "1" + "0" * 300 + ".00"
+
+
+def test_legacy_migration_profile_requires_compatible_denomination():
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(comment="IBKR#T1", currency="EUR")
+    proposals, held = review.refresh_proposals({}, matching_events(), [row], {"U1": "acc"},
+                                               reconciliation="conservative")
+    assert held and not any(item["automatic eligible"] for item in proposals.values())
+
+
+def test_profile_execution_newly_eligible_revisions_share_cycle_time():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events(report(trade_xml("T1") + trade_xml("T2", symbol="PEP", isin="US7134481081")))
+    rows = [matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("99")),
+            matching_row(id="row2", comment="IBKR#v2#U1:TRADE:T2", fee=D("99"),
+                         assetProfile={"symbol": "PEP", "dataSource": "YAHOO", "isin": "US7134481081"})]
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"}, reconciliation="conservative")
+    assert len(proposals) == 2 and all(item["automatic eligible"] for item in proposals.values())
+    assert len({item["first eligible"] for item in proposals.values()}) == 1
+
+
+def test_profile_execution_recovered_result_is_counted_once(tmp_path, monkeypatch):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    server = ReviewServer(monkeypatch, [matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("99"))], "unchanged")
+    path = tmp_path / "review.yaml"
+    cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+           "activity_reconciliation": "balanced", "activity_review_file": str(path)}
+    state = review.open_review(str(path), [])
+    try:
+        assert review.process_review(state, cfg, matching_events(), {"U1": "acc"})[0] == {"acc"}
+    finally:
+        review.close_review(state)
+    server.rows[0]["fee"] = D("1")  # Delayed observed completion, without a resend.
+    cfg["_corporate_outcome"] = new_run_outcome()
+    state = review.open_review(str(path), [])
+    try:
+        assert not review.process_review(state, cfg, matching_events(), {"U1": "acc"})[0]
+        counts = cfg["_corporate_outcome"]["reconciliation"]
+        assert counts["automatically corrected"] == 1
+        assert counts["already consistent"] == 0
+        assert len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+def test_unique_matching_off_retains_utc_manual_discovery():
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events(report(trade_xml("T1", date="20260801;233000")))
+    row = matching_row(date="2026-08-04T00:00:00Z")
+    off, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"},
+                                       reconciliation="off", timezone="Europe/Zurich")
+    active, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"},
+                                          reconciliation="permissive", timezone="Europe/Zurich")
+    assert not off
+    assert len(active) == 1 and next(iter(active.values()))["automatic eligible"]
+
+
+def test_profile_execution_reference_outcome_and_policy_version(tmp_path, monkeypatch):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    server = ReviewServer(monkeypatch, [matching_row(comment="IBKR#T1", fee=D("99"))])
+    state = review.open_review(str(tmp_path / "review.yaml"), [])
+    outcome = new_run_outcome()
+    cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+           "activity_reconciliation": "conservative", "activity_review_file": str(state["path"]),
+           "_corporate_outcome": outcome}
+    try:
+        review.process_review(state, cfg, matching_events(), {"U1": "acc"})
+        assert len(server.writes) == 1
+        assert outcome["reconciliation"]["reference migrations"] == 1
+        assert outcome["reconciliation"]["corrected targets"] == 1
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["eligibility"]["policy version"] == reconciliation.POLICY_VERSION
+    finally:
+        review.close_review(state)
