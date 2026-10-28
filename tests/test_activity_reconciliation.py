@@ -485,6 +485,19 @@ def test_pair_rejection_dividend_selection_does_not_globally_remove_target():
     assert dividend_dedup_decision(two, "acc", {}, positions, comments, rejected)[0] == "proximity"
 
 
+def test_pair_rejection_dividend_group_keeps_target_available_to_other_action():
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync.ghostfolio import index_existing_activities
+    from ghostfolio_ibkr_sync.app import select_account_activities
+    from test_activity_review import destination
+    row = destination(type="DIVIDEND", date="2026-07-15T00:00:00Z", quantity=D("100"), unitPrice=D("0.25"))
+    ids, comments, positions = index_existing_activities({"activities": [row], "count": 1})
+    xml = report(divs=div_xml() + div_xml().replace('actionID="A1"', 'actionID="A2"'))
+    activities, _, _, ok = select_account_activities(xml, "U1", "acc", {}, ids, comments, positions,
+        review_rejections={"IBKR#v2#U1:DIVIDEND:A1": {"row1"}})
+    assert ok and [item["comment"] for item in activities] == ["IBKR#v2#U1:DIVIDEND:A1"]
+
+
 def test_pair_rejection_summed_fill_does_not_reuse_rejected_target():
     from _sync_helpers import report, trade_xml
     from ghostfolio_ibkr_sync.ghostfolio import index_existing_activities
@@ -706,3 +719,16 @@ def test_group_diagnosis_distinct_dividends_keep_independent_pairs():
     assert group["status"] == "independent unique pairs"
     assert group["source totals"]["USD"]["gross"] == "75"
     assert group["destination totals"]["USD"]["gross"] == "75"
+
+
+def test_financial_limits_preserve_tiny_excess_and_large_display():
+    source = {"quantity": "1", "unitPrice": "100", "currency": "USD", "type": "BUY"}
+    target = {**source, "unitPrice": "100.01" + "0" * 110 + "1"}
+    assert not reconciliation.financial_eligible("balanced", source, target)
+    assert reconciliation.gross_within_limits("conservative", D("1e300"), D("1e300"), "USD")
+    events = matching_events()
+    event = next(iter(events.values()))
+    event["values"].update(quantity="1", unitPrice="1e300")
+    event["source evidence"].update(quantity="1", tradePrice="1e300")
+    evidence = reconciliation.numeric_evidence(event, event["values"])
+    assert evidence["source display"] == "1" + "0" * 300 + ".00"

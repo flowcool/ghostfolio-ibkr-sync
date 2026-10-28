@@ -19,10 +19,12 @@ propagation in its PR.
 - Typed modular runtime: installed package `ghostfolio_ibkr_sync`, run with
   `python -m ghostfolio_ibkr_sync`, Docker only, no launcher
   (docs/adr/0001-single-file-runtime.md is superseded).
-- Imports are additive. Optional activity review permits only the exact approved
-  one-to-one correction after qualification, journaling and readback
-  (docs/adr/0003-additive-imports.md). Never delete activities during sync.
-  Cleanup tools retain separate explicit operator authorization.
+- Imports are additive. Optional activity review permits an exact one-to-one
+  correction with manual `yes` or bounded profile authority. Qualification,
+  durable journaling and exact readback remain required. Permit at most one
+  correction per cycle. Never delete activities during sync
+  (docs/adr/0003-additive-imports.md). Stable publication and production require
+  separate explicit GO. Cleanup tools retain separate operator authorization.
 - Deduplication by comment and proximity (docs/adr/0002); cash update is independent
   of imports (docs/adr/0004).
 - `DRY_RUN` truthy runs the full pipeline without financial writes. Tests and

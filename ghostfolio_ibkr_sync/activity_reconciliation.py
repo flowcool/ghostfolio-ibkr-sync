@@ -15,6 +15,24 @@ LIMITS = {"conservative": (0, Decimal(0)),
           "permissive": (100, Decimal("0.01"))}
 
 
+def arithmetic_precision(*values: Any) -> int:
+    """Budget exact finite decimal products, aligned sums and display totals."""
+    def width(value: Any) -> int:
+        if isinstance(value, Mapping):
+            return sum(width(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return sum(width(item) for item in value)
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation:
+            return 0
+        if not number.is_finite():
+            return 0
+        parts = number.as_tuple()
+        return len(parts.digits) + abs(int(parts.exponent))
+    return max(100, sum(width(value) for value in values) + 20)
+
+
 def date_eligible(name: str, source: str, target: str, kind: str,
                   timezone: str) -> tuple[bool, dict[str, str]]:
     try:
@@ -48,7 +66,7 @@ def gross_within_limits(name: str, source: Decimal, destination: Decimal,
         return False
     units, relative = LIMITS[name]
     with localcontext() as context:
-        context.prec = max(50, len(source.as_tuple().digits) + len(destination.as_tuple().digits) + 20)
+        context.prec = arithmetic_precision(source, destination, relative)
         difference = abs(destination - source)
         # Multiplication avoids division rounding at the inclusive relative edge.
         return (difference <= Decimal(units).scaleb(-PRECISION[major])
@@ -70,7 +88,7 @@ def financial_eligible(name: str, source: Mapping[str, str], destination: Mappin
         if quantity != other_quantity and (source["type"] != "DIVIDEND" or not dividend_quantity_proven):
             return False
         with localcontext() as context:
-            context.prec = 100
+            context.prec = arithmetic_precision(source, destination)
             gross = quantity * Decimal(source["unitPrice"]) * factor
             other = other_quantity * Decimal(destination["unitPrice"]) * other_factor
         return gross_within_limits(name, gross, other, major)
@@ -95,7 +113,7 @@ def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -
     if major not in PRECISION or major != other_major:
         raise RuntimeError("Unsupported automatic denomination")
     with localcontext() as context:
-        context.prec = 100
+        context.prec = arithmetic_precision(event, destination, Decimal.from_float(ulp(0.0)))
         quantity = Decimal(values["quantity"])
         if values["type"] in ("BUY", "SELL"):
             raw_quantity = abs(Decimal(evidence["quantity"]))
@@ -138,6 +156,12 @@ def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -
 
 def group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
     """Connected candidate groups with each endpoint counted exactly once."""
+    with localcontext() as context:
+        context.prec = arithmetic_precision(events, proposals)
+        return _group_diagnosis(events, proposals)
+
+
+def _group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
     pending = set(proposals)
     groups = {}
     while pending:
@@ -162,7 +186,7 @@ def group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> 
                 try:
                     currency, factor = denomination(values["currency"])
                     with localcontext() as context:
-                        context.prec = 100
+                        context.prec = arithmetic_precision(records, events)
                         quantity = Decimal(values["quantity"])
                         gross = quantity * Decimal(values["unitPrice"]) * factor
                         if source and currency in PRECISION:

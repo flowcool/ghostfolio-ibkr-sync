@@ -91,6 +91,7 @@ from ghostfolio_ibkr_sync.sync import (
     filter_trades_by_holdings,
     load_mapping,
     log_dividend_proximity_skip,
+    partition_dividend_actions,
     rejected_sell_symbols,
     resolve_symbol,
     split_import_phases,
@@ -424,6 +425,7 @@ def select_account_activities(
     proposed_dividend_context: dict[str, DividendContext] = {}
     div_skipped_dup = 0
     candidates = []
+    selected_dividend_actions: dict[int, set[str]] = {}
     for div in dividends:
         if div["amount"] > 0 and div.get("isin") and div["isin"] not in mapping:
             record_action(outcome, "mapping_unverified", f"{ibkr_account_id}:{div['isin']}")
@@ -432,6 +434,30 @@ def select_account_activities(
             continue
         dedup, symbol, matched = dividend_dedup_decision(
             div, ghost_account_id, mapping, positions, existing_dividend_comments, review_rejections)
+        if (review_rejections and dedup in ("new", "proximity")
+                and len({row.get("actionID") for row in div["payments"]}) > 1
+                and any(format_versioned_activity_identity(ibkr_account_id, "DIVIDEND", row["actionID"])
+                        in review_rejections for row in div["payments"])):
+            # Keep whole-group identity/partial-coverage guards and conversion.
+            # A rejection changes proximity selection for its own action only.
+            parts = partition_dividend_actions(div, dividends, outcome=outcome)
+            if parts is None:
+                ok = False
+                continue
+            selected: set[str] = set()
+            for part in parts:
+                choice, part_symbol, nearby = dividend_dedup_decision(
+                    part, ghost_account_id, mapping, positions, existing_dividend_comments, review_rejections)
+                if choice == "new":
+                    selected.update(format_versioned_activity_identity(ibkr_account_id, "DIVIDEND", row["actionID"])
+                                    for row in part["payments"])
+                elif choice == "proximity":
+                    log_dividend_proximity_skip(cast(str, part_symbol), part, cast(DividendEntry, nearby), outcome=outcome)
+                    div_skipped_dup += 1
+            if selected:
+                candidates.append(div)
+                selected_dividend_actions[id(div)] = selected
+            continue
         if dedup == "not_payable":
             # Preserve existing diagnostics for reversals and tax-only rows.
             convert_dividend_to_activity(div, ghost_account_id, mapping, unmapped, outcome=outcome)
@@ -481,6 +507,9 @@ def select_account_activities(
             if not partition_ok:
                 ok = False
                 continue
+            if id(div) in selected_dividend_actions:
+                proposed = [activity for activity in proposed
+                            if activity["comment"] in selected_dividend_actions[id(div)]]
             if any(not date_is_current(activity) for activity in proposed):
                 if account_result is not None and account_result["deferred"] is not None:
                     account_result["deferred"].update(activity["comment"] for activity in proposed)

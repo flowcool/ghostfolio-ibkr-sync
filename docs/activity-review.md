@@ -142,10 +142,10 @@ Apply still requires the reviewed target, qualified preservation and pacing,
 settled requests, exclusive destination writers, backup and a separate operation GO.
 Do not bypass a blocked runtime trade by editing its evidence or execution path.
 
-Schema 1 remains readable. The first schema-2 refresh clears old approvals once;
-read the new presentation before setting yes again. Journals retain pending
-request fences. An older connector refuses schema 2. Keep a private file copy
-before upgrade; do not downgrade or edit a pending journal to resume writes.
+Schemas 1 and 2 remain readable. The first schema-3 refresh clears old approvals
+once. Read the compact presentation before setting yes again. Journals retain
+pending request fences. Back up all companions before upgrade. Keep a compatible
+reader until every pending request is resolved.
 
 ## Execute an approved correction
 
@@ -210,7 +210,7 @@ Keep the existing corporate-action mount at `/state`; review uses `/review`.
 The connector does not discover host mounts.
 
 For an eligible `normal run` proposal, compare current and proposed values and
-execution path. Edit only `approve` between runs. Only lowercase literal `yes`
+execution path. Edit only `decision` between runs. Only lowercase literal `yes`
 approves that exact eligible proposal. Never approve proposals in bulk. Simulation
 executes no financial write. Already approved work waiting for the qualified limit
 remains automatic work; do not approve again or force reruns.
@@ -220,8 +220,7 @@ restore current source and destination proof. `yes` cannot make blocked work
 executable. Historical maintenance needs the documented preparation and separate
 operation authorization; normal sync cannot execute it. For an uncertain request,
 inspect the preserved journal and exact destination readback. Do not resend,
-delete or edit the journal to release a hold. False matches need the documented
-manual resolution and retain separate cleanup authority.
+delete or edit the journal to release a hold. Use `decision: reject` for a false association. Cleanup retains separate authority.
 
 
 ## Activity review journals

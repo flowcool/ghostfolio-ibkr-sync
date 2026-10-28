@@ -110,3 +110,11 @@ uses exact numbers and full UTC instants, with inclusive ±2-day trade and ±3-d
 dividend proximity. Pending events are held before ordinary selection. Approved
 correction is the reviewed-update exception. Extended reading remains after
 review is disabled; rollback after notes-bearing writes must retain that reader.
+
+## Bounded reconciliation
+
+[ADR 0009](0009-mapping-owned-reconciliation.md) extends reference migration
+under the configured account mapping. Optional profiles use complete one-to-one
+candidate graphs and fixed date and gross limits. A valid rejected association
+excludes its target only from that source event's ordinary proximity selection.
+Recognized reference, holdings and uncertainty guards still apply.

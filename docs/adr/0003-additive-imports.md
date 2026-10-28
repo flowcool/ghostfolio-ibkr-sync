@@ -6,8 +6,8 @@ Synchronization imports new activities and never deletes existing Ghostfolio
 activities. Optional activity review is the exact reviewed-update exception.
 With review disabled, stable identities prevent repeats but do not reconcile
 later trade corrections, dividend revisions or reversals against stored records.
-This keeps automatic synchronization from rewriting the operator's history;
-corrections need explicit manual review rather than an automatic repair policy.
+A non-off reconciliation profile can authorize a bounded one-to-one correction.
+Manual decisions remain available. See [ADR 0009](0009-mapping-owned-reconciliation.md).
 
 The guarantee concerns activities, not all writes: the sync updates account cash
 and may fill a missing platform ID. The separate
@@ -18,9 +18,10 @@ Sources: `ghost_import_activities` and `ghost_update_cash_balance` in the
 [How it works](../../README.md#how-it-works).
 
 An existing activity can be replaced only through the optional persistent review
-with unchanged literal `approve: yes`, qualified finite execution limits,
+with unchanged literal `decision: yes` or bounded profile authority, qualified
+finite execution limits,
 fresh ownership/occupancy checks, durable before/after intent and exact readback.
 Preserve ID, account, owner, tags and notes. No fill aggregation, deletion or
-unreviewed repair is authorized. Correction failure fences later account writes,
+repair outside this authority is authorized. Correction failure fences later account writes,
 including cash/platform writes. Simulation consumes no approval and resolves no
 real journal. See the [workflow](../activity-review.md).
