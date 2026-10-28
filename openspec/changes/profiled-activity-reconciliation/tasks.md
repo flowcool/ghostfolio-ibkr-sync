@@ -4,7 +4,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 1. Profile configuration and financial limits
 
-- [ ] 1.1 Add validated default-off profiles, exact gross limits and quantity rules. Document the ENV and limits in docs/configuration.md. Requirements: Explicit reconciliation profiles; Bounded gross differences and exact quantities. Files: config.py, models.py, activity_reconciliation.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "profile_config or financial_limits"`.
+- [x] 1.1 Add validated default-off profiles, exact gross limits and quantity rules. Document the ENV and limits in docs/configuration.md. Requirements: Explicit reconciliation profiles; Bounded gross differences and exact quantities. Files: config.py, models.py, activity_reconciliation.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "profile_config or financial_limits"`.
 
 ## 2. Proven numerical representations
 

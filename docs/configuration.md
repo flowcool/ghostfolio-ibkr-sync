@@ -75,6 +75,7 @@ All configuration is done via environment variables:
 | `CORPORATE_ACTION_STATE_FILE` | For BUY/SELL | Private persistent state, initialized in simulation. | `/state/corporate-actions.yaml` | Missing: trade hold and exit 1 |
 | `CORPORATE_ACTION_EVIDENCE_FILE` | No | Private official effective-date document bindings. | `/state/effective-dates.yaml` | Dates remain unproven |
 | `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
+| `ACTIVITY_RECONCILIATION` | No | Correction profile: `off`, `conservative`, `balanced`, or `permissive`. Requires a persistent review file when enabled. | `balanced` | `off` |
 | `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
 | `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
 | `LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. | `INFO` | `INFO` |
@@ -677,3 +678,25 @@ needed. The version is the target software version. An RC reports the same targe
 version before stable publication; its registry tag still contains `-rc.N`.
 Stable promotion preserves the qualified digest. Older images retain their original
 RC build text. Local builds without release metadata report `dev` and `unknown`.
+
+### Reconciliation profile limits
+
+Automatic profiles require the persistent review file and a valid `TZ`.
+An invalid or missing `TZ` forces simulation for the whole run.
+`off` retains manual review and recovery. It grants no automatic correction.
+
+| Profile | Absolute gross difference | Relative gross difference |
+| --- | --- | --- |
+| `conservative` | Zero, except reproduced calculation residue | Zero, except that residue |
+| `balanced` | One currency minor unit | 0.1% |
+| `permissive` | One hundred currency minor units | 1% |
+
+Both limits must pass, including their edges. Compare unrounded gross amounts.
+The relative limit uses the positive source gross as its denominator.
+Automatic financial corrections support JPY, GBP, GBp, USD, EUR and CAD only.
+JPY has zero decimal places. The other major units have two decimal places.
+GBP/GBp uses the fixed factor 100. No exchange rate establishes a match.
+BUY and SELL quantities must agree exactly. Dividend representation changes
+require the validated source quantity. Fees do not select or rank candidates.
+After unique association, corrections use validated source fees.
+Manual review retains differences outside these limits.
