@@ -32,7 +32,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 8. Qualified profile dispatch
 
-- [ ] 8.1 Integrate fresh automatic authority with manual decisions, shared finite budget, journal intent, exact readback and no-resend recovery. Test off, dry-run, conflicts and account fences. Document activation qualification. Requirements: Bounded execution and visible outcomes; activity-correction-review: Verified correction and dependent import state. Files: activity_review.py, app.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "profile_execution or review_approval or review_simulation"`.
+- [x] 8.1 Integrate fresh automatic authority with manual decisions, shared finite budget, journal intent, exact readback and no-resend recovery. Test off, dry-run, conflicts and account fences. Document activation qualification. Requirements: Bounded execution and visible outcomes; activity-correction-review: Verified correction and dependent import state. Files: activity_review.py, app.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k "profile_execution or review_approval or review_simulation"`.
 
 ## 9. Grouped diagnosis and outcomes
 

@@ -697,6 +697,7 @@ DISPLAY_FIELDS = {"section", "evidence level", "execution path"}
 AUTOMATIC_FIELDS = {"automatic eligible", "profile", "numeric evidence", "profile date context"}
 EVIDENCE_FIELDS = {"source evidence", "diagnostic differences"}
 REJECTION_FIELDS = {"rejection binding", "rejected", "rejection cooldown", "recognized claim"}
+QUEUE_FIELDS = {"first eligible"}
 
 
 def association_binding(event: dict[str, Any], current: dict[str, Any],
@@ -733,7 +734,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     if len(by_id) != len(rows):
         raise RuntimeError("Duplicate destination activity IDs")
     for key, old in previous.items():
-        if (set(old) - AUTOMATIC_FIELDS - EVIDENCE_FIELDS - REJECTION_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
+        if (set(old) - AUTOMATIC_FIELDS - EVIDENCE_FIELDS - REJECTION_FIELDS - QUEUE_FIELDS not in (PROPOSAL_FIELDS, PROPOSAL_FIELDS | DISPLAY_FIELDS) or old["key"] != key
                 or (old["destination account"] != accounts.get(old["source account"])
                     and (old["source event"], old["destination account"], old["activity id"])
                     not in (journal_bindings or set()))
@@ -831,7 +832,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                            "execution path": "normal run"})
             old = previous.get(key)
             if old:
-                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS, *EVIDENCE_FIELDS, *REJECTION_FIELDS}
+                ignored = {"approve", "status", "review revision", *AUTOMATIC_FIELDS, *EVIDENCE_FIELDS, *REJECTION_FIELDS, *QUEUE_FIELDS}
                 comparison = {k: v for k, v in old.items() if k not in ignored}
                 if comparison == {k: v for k, v in item.items() if k not in ignored}:
                     item["approve"] = old["approve"] if actionable else None
@@ -893,6 +894,10 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     for item in result.values():
         item["automatic eligible"] = bool(item["actionable"] and not item.get("rejection cooldown")
             and item["source event"] in events and (item["source event"], item["activity id"]) in automatic)
+        old = previous.get(item["key"])
+        retained = old.get("first eligible") if old and old["review revision"] == item["review revision"] else None
+        eligible = item.get("automatic eligible") or (item["approve"] == "yes" and item["actionable"])
+        item["first eligible"] = retained or (datetime.now(UTC).isoformat() if eligible else None)
     return result, {item["source event"] for item in result.values() if proposal_holds(item)}
 
 
@@ -917,6 +922,18 @@ def approved_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
             blocked.add(item["destination account"])
             log.error("Conflicting review approvals for account %s; financial writes blocked", item["destination account"])
     return [item for item in approved if item["destination account"] not in blocked], blocked
+
+
+def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]], set[str]]:
+    manual, blocked = approved_proposals(proposals)
+    selected = manual + [item for item in proposals.values() if item.get("automatic eligible")
+                          and item["approve"] is None and item["actionable"]
+                          and item.get("execution path") == "normal run"]
+    for item in selected:
+        if (sum(other["source event"] == item["source event"] for other in selected) > 1
+                or sum(other["activity id"] == item["activity id"] for other in selected) > 1):
+            blocked.add(item["destination account"])
+    return [item for item in selected if item["destination account"] not in blocked], blocked
 
 
 # Isolated full-update/readback/background proof covers one correction at a time.
@@ -1038,15 +1055,33 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     assert_unchanged(state)
     validate_journal(state, config)
     original = state["document"]["proposals"]
+    from ghostfolio_ibkr_sync.config import timezone_preview_reason
+
+    simulated = bool(config.get("dry_run") or timezone_preview_reason())
+    rebuilt_cooling = state["evidence"]["rebuild cooldown"] > 1
+    if not simulated and state["evidence"]["rebuild cooldown"]:
+        state["evidence"]["rebuild cooldown"] -= 1
+    cooling: set[str] = set()
     # Journal-owned historical proposals may outlive a configured account.
     # This does not permit dispatch without a fresh source and matching target.
     journal_bindings = {(entry["source event"], entry["destination account"], entry["activity id"])
                         for entry in state["journal"]["entries"].values()}
+
+    def refresh(previous: dict[str, Any], current_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], set[str]]:
+        fresh, current_held = refresh_proposals(previous, events, current_rows, accounts, journal_bindings,
+            reconciliation=config.get("activity_reconciliation", "off"), timezone=os.environ.get("TZ", "").strip())
+        cooling.update(key for key, item in fresh.items() if item.get("rejection cooldown"))
+        for key, item in fresh.items():
+            if key in cooling:
+                item["rejection cooldown"] = 1
+            if key in cooling or rebuilt_cooling:
+                item["automatic eligible"] = False
+        return fresh, current_held
+
     rows = snapshot_rows(config)
     # Validate every file binding before any journal completion or correction.
-    refreshed, held = refresh_proposals(original, events, rows, accounts, journal_bindings)
+    refreshed, held = refresh(original, rows)
     blocked: set[str] = set()
-    simulated = bool(config.get("dry_run"))
     unresolved: set[str] = set()
     unresolved_events: set[str] = set()
     for entry in state["journal"]["entries"].values():
@@ -1072,9 +1107,9 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                 for entry in state["journal"]["entries"].values() if entry["status"] == "confirmed"}
     remaining_previous = {key: item for key, item in original.items()
                           if (key, item["review revision"]) not in consumed}
-    refreshed, held = refresh_proposals(remaining_previous, events, snapshot_rows(config), accounts, journal_bindings)
+    refreshed, held = refresh(remaining_previous, snapshot_rows(config))
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
-    approved, refreshed_blocked = approved_proposals(refreshed)
+    approved, refreshed_blocked = selected_proposals(refreshed)
     blocked |= refreshed_blocked
     # Simulation cannot consume a proposal whose pending request now appears applied.
     for key, old in original.items():
@@ -1082,7 +1117,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             refreshed[key] = {**old, "status": "unresolved request; account writes blocked"}
     publish_review(state, {"version": 1, "proposals": refreshed})
     executed = 0
-    for item in sorted(approved, key=lambda item: item["key"]):
+    for item in sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])):
         account = item["destination account"]
         if (account in blocked or item["source event"] not in events or not item["actionable"]
                 or item["key"] not in refreshed or item.get("execution path") != "normal run"):
@@ -1104,10 +1139,13 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             time.sleep(delay)
         assert_unchanged(state)
         fresh_rows = snapshot_rows(config)
-        fresh, _ = refresh_proposals(refreshed, events, fresh_rows, accounts, journal_bindings)
+        fresh, _ = refresh(refreshed, fresh_rows)
         apply_corporate_review_holds(config, fresh, fresh_rows)
         current = fresh.get(item["key"])
-        if current is None or current["approve"] != "yes" or not current["actionable"]:
+        fresh_selection, fresh_conflicts = selected_proposals(fresh)
+        blocked |= fresh_conflicts
+        authorized = current is not None and any(candidate["key"] == item["key"] for candidate in fresh_selection)
+        if not authorized or current is None or account in blocked or not current["actionable"]:
             log.error("Review evidence changed before dispatch; account %s blocked", account)
             blocked.add(account)
             refreshed = fresh
@@ -1129,7 +1167,11 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         entry = {"review revision": current["review revision"], "proposal key": item["key"], "source event": item["source event"], "destination account": account,
                  "activity id": row["id"], "host": config["ghost_host"], "binding": current["binding"],
                  "before": values_of(row), "after": after, "request": plain(wire_values(payload)),
-                 "status": "pending", "verified result": None, "authority": "manual", "eligibility": {}}
+                 "status": "pending", "verified result": None,
+                 "authority": "manual" if current["approve"] == "yes" else current["profile"],
+                 "eligibility": {"timezone": os.environ.get("TZ", "").strip(),
+                                 "dates": current.get("profile date context", {}),
+                                 "numeric evidence": current.get("numeric evidence", {})}}
         state["journal"]["version"] = 2
         state["journal"]["entries"][request_key] = entry
         publish_journal(state)
@@ -1152,7 +1194,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         publish_review(state, {"version": 1, "proposals": refreshed})
     # Rediscover new context and release reassigned alternatives after confirmed PUTs.
     if not simulated and executed:
-        refreshed, _ = refresh_proposals(refreshed, events, snapshot_rows(config), accounts, journal_bindings)
+        refreshed, _ = refresh(refreshed, snapshot_rows(config))
     apply_corporate_review_holds(config, refreshed, snapshot_rows(config))
     publish_review(state, {"version": 1, "proposals": refreshed})
     held = {item["source event"] for item in refreshed.values() if proposal_holds(item)} | unresolved_events

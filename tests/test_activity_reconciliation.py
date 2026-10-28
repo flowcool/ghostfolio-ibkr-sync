@@ -495,3 +495,141 @@ def test_pair_rejection_summed_fill_does_not_reuse_rejected_target():
         "U1", "acc", {}, ids, comments, positions, review_rejections={"IBKR#v2#U1:TRADE:T1": {"row1"}})
     assert [item["comment"] for item in activities] == ["IBKR#v2#U1:TRADE:T1"]
     assert ("U1", "T2") not in positions.get("manual_trade_ids", set())
+
+
+@pytest.mark.parametrize("name,dry,writes", [("off", False, 0), ("conservative", False, 1),
+    ("balanced", False, 1), ("permissive", True, 0)])
+def test_profile_execution_fresh_authority_and_exact_journal(tmp_path, monkeypatch, name, dry, writes):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("99"))
+    server = ReviewServer(monkeypatch, [row])
+    state = review.open_review(str(tmp_path / "review.yaml"), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": dry, "activity_reconciliation": name, "activity_review_file": str(state["path"])}
+    try:
+        blocked, held = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert len(server.writes) == writes and not blocked
+        if writes:
+            entry = next(iter(state["journal"]["entries"].values()))
+            assert entry["authority"] == name and entry["status"] == "confirmed"
+            assert entry["eligibility"]["timezone"] == "UTC"
+            assert entry["request"]["fee"] == "1"
+            assert not held
+        else:
+            assert not state["journal"]["entries"] and held
+            assert next(iter(state["document"]["proposals"].values()))["approve"] is None
+    finally:
+        review.close_review(state)
+
+
+def test_profile_execution_single_budget_and_oldest_manual_work_first(tmp_path, monkeypatch):
+    from _sync_helpers import report, trade_xml
+    from test_activity_review import ReviewServer, write_review
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("99"))
+    first, _ = review.refresh_proposals({}, matching_events(), [row], {"U1": "acc"})
+    item = next(iter(first.values())); item["approve"] = "yes"; item["first eligible"] = "2020-01-01T00:00:00+00:00"
+    second = dict(row, id="second", comment="IBKR#v2#U1:TRADE:T2")
+    server = ReviewServer(monkeypatch, [row, second])
+    path = tmp_path / "review.yaml"; write_review(path, {"version": 1, "proposals": first})
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False, "activity_reconciliation": "balanced", "activity_review_file": str(state["path"])}
+    try:
+        events = matching_events(report(trade_xml("T1") + trade_xml("T2")))
+        blocked, held = review.process_review(state, config, events, {"U1": "acc"})
+        assert not blocked and len(server.writes) == 1 and server.writes[0]["id"] == "row1"
+        assert held == {"IBKR#v2#U1:TRADE:T2"}
+        assert next(iter(state["journal"]["entries"].values()))["authority"] == "manual"
+    finally:
+        review.close_review(state)
+
+
+def test_profile_execution_timeout_restart_off_does_not_resend(tmp_path, monkeypatch):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("99"))
+    server = ReviewServer(monkeypatch, [row], "unchanged")
+    path = tmp_path / "review.yaml"; state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False, "activity_reconciliation": "balanced", "activity_review_file": str(state["path"])}
+    try:
+        blocked, held = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert blocked == {"acc"} and held and len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+    config["activity_reconciliation"] = "off"
+    state = review.open_review(str(path), [])
+    try:
+        blocked, held = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert blocked == {"acc"} and held and len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("cooldown", ["rebuild", "rejection"])
+def test_profile_execution_cooldown_requires_prior_blank_publication(tmp_path, monkeypatch, cooldown):
+    from test_activity_review import ReviewServer, write_review
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(fee=D("99"))
+    previous, _ = review.refresh_proposals({}, matching_events(), [row], {"U1": "acc"})
+    key = next(iter(previous))
+    if cooldown == "rejection":
+        previous[key]["approve"] = "reject"
+        previous, _ = review.refresh_proposals(previous, matching_events(), [row], {"U1": "acc"})
+        row["unitPrice"] = D("60.0001")
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"; write_review(path, {"version": 1, "proposals": previous})
+    state = review.open_review(str(path), [])
+    if cooldown == "rebuild":
+        state["evidence"]["rebuild cooldown"] = 2
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+              "activity_reconciliation": "balanced", "activity_review_file": str(path)}
+    try:
+        review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert not server.writes
+        assert next(iter(state["document"]["proposals"].values()))["approve"] is None
+    finally:
+        review.close_review(state)
+    state = review.open_review(str(path), [])
+    try:
+        blocked, _ = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert not blocked and len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("timezone", ["", "bad/timezone"])
+def test_profile_execution_invalid_timezone_never_writes(tmp_path, monkeypatch, timezone):
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    monkeypatch.setenv("TZ", timezone)
+    server = ReviewServer(monkeypatch, [matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("99"))])
+    state = review.open_review(str(tmp_path / "review.yaml"), [])
+    try:
+        config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+                  "activity_reconciliation": "permissive", "activity_review_file": str(state["path"])}
+        review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert not server.writes and not state["journal"]["entries"]
+    finally:
+        review.close_review(state)
+
+
+def test_profile_execution_revalidates_profile_before_dispatch(tmp_path, monkeypatch):
+    import requests
+    from test_activity_review import ReviewServer
+    from ghostfolio_ibkr_sync import activity_review as review
+    server = ReviewServer(monkeypatch, [matching_row(fee=D("99"))])
+    state = review.open_review(str(tmp_path / "review.yaml"), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+              "activity_reconciliation": "balanced", "activity_review_file": str(state["path"])}
+    def get(*args, **kwargs):
+        response = server.get(*args, **kwargs)
+        if server.reads == 4:
+            config["activity_reconciliation"] = "off"
+        return response
+    monkeypatch.setattr(requests, "get", get)
+    try:
+        blocked, _ = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert not server.writes and blocked == {"acc"}
+    finally:
+        review.close_review(state)

@@ -584,8 +584,9 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         assert len(server.cash) == passes  # Ordinary cash processing still runs.
         assert len(imports) == 1  # Unrelated new activity imports despite deferred approvals.
         document = review.load_review(path)
-        assert document["proposals"] == {key: value for key, value in expected_pending.items()
-                                         if key in document["proposals"]}
+        stable = lambda item: {key: value for key, value in item.items() if key not in review.QUEUE_FIELDS}
+        assert {key: stable(value) for key, value in document["proposals"].items()} == {
+            key: stable(value) for key, value in expected_pending.items() if key in document["proposals"]}
         assert len(document["proposals"]) == max(0, len(expected_pending) - limit)
         expected_pending = document["proposals"]
 

@@ -323,3 +323,27 @@ still apply. Rejection grants no cleanup or historical-maintenance authority.
 Missing sources suspend decisions. A complete listing can suspend an already
 rejected absent target without restoring that pair's candidate hold.
 An inactive or unreadable target retains its hold.
+
+### Activate a reconciliation profile
+
+Start with `ACTIVITY_RECONCILIATION=off` and `DRY_RUN=true`.
+Read the [fixed financial limits](configuration.md#reconciliation-profile-limits).
+Conservative requires a recognized source reference. Balanced and permissive
+also permit mutually unique profile matches. Fees never select the match.
+A threshold match is a profile match, not exact identity proof.
+
+Qualify the exact connector image in isolated empty and golden labs before real
+activation. Cover full updates, comments, tags, background effects, duplicate
+references, restart recovery, private-state recovery and no repeated writes.
+Offline tests and the existing destination budget do not qualify a new image.
+A failed preservation case keeps affected corrections unavailable.
+
+Profiles and manual consent share the qualified limit of one PUT per run.
+A reference migration consumes that same limit. The next financial correction
+uses a fresh revision after confirmed migration. Oldest first-eligible revisions
+run first. Remaining eligible work retains its hold for later normal cycles.
+Do not force reruns or approve deferred work again.
+Every automatic request records its profile authority separately from consent.
+The journal records exact source/target dates, timezone and financial evidence.
+Simulation sends no financial request and records no applied result.
+Disabling a profile never resolves a pending request or permits a resend.
