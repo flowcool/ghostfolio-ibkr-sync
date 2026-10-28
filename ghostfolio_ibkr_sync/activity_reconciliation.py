@@ -74,29 +74,6 @@ def gross_within_limits(name: str, source: Decimal, destination: Decimal,
                 and difference <= source * relative)
 
 
-def financial_eligible(name: str, source: Mapping[str, str], destination: Mapping[str, str],
-                       *, dividend_quantity_proven: bool = False) -> bool:
-    """Fees cannot select a pair. Source conversion already validates them."""
-    try:
-        major, factor = denomination(source["currency"])
-        other_major, other_factor = denomination(destination["currency"])
-        if major != other_major or source["type"] != destination["type"]:
-            return False
-        quantity, other_quantity = Decimal(source["quantity"]), Decimal(destination["quantity"])
-        if (not quantity.is_finite() or not other_quantity.is_finite()
-                or quantity <= 0 or other_quantity <= 0):
-            return False
-        if quantity != other_quantity and (source["type"] != "DIVIDEND" or not dividend_quantity_proven):
-            return False
-        with localcontext() as context:
-            context.prec = arithmetic_precision(source, destination)
-            gross = quantity * Decimal(source["unitPrice"]) * factor
-            other = other_quantity * Decimal(destination["unitPrice"]) * other_factor
-        return gross_within_limits(name, gross, other, major)
-    except (KeyError, InvalidOperation, ValueError):
-        return False
-
-
 def decimal_text(number: Decimal) -> str:
     text = format(number, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text

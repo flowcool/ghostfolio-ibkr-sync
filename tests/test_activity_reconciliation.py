@@ -62,15 +62,17 @@ def test_financial_limits_both_bounds(name, source, target, currency, accepted):
     assert reconciliation.gross_within_limits(name, D(source), D(target), currency) is accepted
 
 
-def test_financial_limits_quantity_and_denomination():
-    source = dict(type="BUY", quantity="10", unitPrice="10", currency="GBP", fee="1")
-    target = dict(source, unitPrice="1000", currency="GBp", fee="999")
-    assert reconciliation.financial_eligible("balanced", source, target)
-    assert not reconciliation.financial_eligible("permissive", source, dict(target, quantity="10.00001"))
-    assert not reconciliation.financial_eligible("permissive", source, dict(target, currency="EUR"))
-    dividend = dict(source, type="DIVIDEND")
-    assert not reconciliation.financial_eligible("balanced", dividend, dict(dividend, quantity="1", unitPrice="100"))
-    assert reconciliation.financial_eligible("balanced", dividend, dict(dividend, quantity="1", unitPrice="100"), dividend_quantity_proven=True)
+@pytest.mark.parametrize("currency,quantity,price,accepted", [
+    ("GBp", "10", "1000", True),
+    ("GBp", "10.00001", "1000", False),
+    ("EUR", "10", "10", False),
+])
+def test_financial_limits_quantity_and_denomination(currency, quantity, price, accepted):
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync.activity_review import automatic_pairs
+    events = matching_events(report(trade_xml("T1", qty=10, currency="GBP", tradePrice="10")))
+    row = matching_row(currency=currency, quantity=D(quantity), unitPrice=D(price), fee=D("999"))
+    assert bool(automatic_pairs(events, [row], "balanced", "UTC")) is accepted
 
 
 def test_numeric_residue_reproduces_existing_trade_conversion():
@@ -122,7 +124,7 @@ def matching_events(xml=None):
 
 def matching_row(**kwargs):
     from test_activity_review import destination
-    return destination(quantity=D("10"), **kwargs)
+    return destination(**{"quantity": D("10"), **kwargs})
 
 
 def test_unique_matching_complete_graph_both_directions():
@@ -722,9 +724,13 @@ def test_group_diagnosis_distinct_dividends_keep_independent_pairs():
 
 
 def test_financial_limits_preserve_tiny_excess_and_large_display():
-    source = {"quantity": "1", "unitPrice": "100", "currency": "USD", "type": "BUY"}
-    target = {**source, "unitPrice": "100.01" + "0" * 110 + "1"}
-    assert not reconciliation.financial_eligible("balanced", source, target)
+    from ghostfolio_ibkr_sync.activity_review import automatic_pairs
+    events = matching_events()
+    event = next(iter(events.values()))
+    event["values"].update(quantity="1", unitPrice="100")
+    event["source evidence"].update(quantity="1", tradePrice="100")
+    row = matching_row(quantity=D("1"), unitPrice=D("100.01" + "0" * 110 + "1"))
+    assert not automatic_pairs(events, [row], "balanced", "UTC")
     assert reconciliation.gross_within_limits("conservative", D("1e300"), D("1e300"), "USD")
     events = matching_events()
     event = next(iter(events.values()))

@@ -230,10 +230,10 @@ def ghost_get_existing_orders(
       holding the same ISIN paid on the same day do not dedup against each other
     - positions: {"qty": net BUY-SELL qty by (accountId, symbol),
                   "isin_symbols": symbols seen by (accountId, isin),
-                  "manual_sells": [[date, qty], ...] by (accountId, symbol) for
+                  "manual_sells": [[date, qty, activity_id], ...] by (accountId, symbol) for
                                   SELLs without an IBKR# comment,
                   "manual_buys": same for BUYs without an IBKR# comment,
-                  "dividend_dates": [(date, gross, currency, fee), ...] by
+                  "dividend_dates": [(date, gross, currency, fee, activity_id), ...] by
                                     (accountId, symbol) for every DIVIDEND without a
                                     connector comment; gross and fee are Decimal or None}
     """
