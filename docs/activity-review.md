@@ -260,3 +260,19 @@ checks. Software rollback does not restore financial data.
 Runtime and offline identity readers use the first line of notes-bearing v2
 comments. Extended reading does not qualify destructive maintenance tools;
 their existing separate image-qualification boundary remains.
+
+### Proven numeric representations
+
+Profiles compare exact source and destination gross values in major units.
+They can normalize GBP and GBp by the fixed factor 100.
+They do not use exchange rates or inferred market scaling.
+
+A calculation residue must reproduce the existing converter's division,
+fixed-unit multiplication and JSON number serialization.
+For example, the converter can represent a scaled price of `1.8` as
+`1.7999999999999998`. A nearby unexplained value is not that residue.
+The evidence retains the source total, payload total, destination total,
+unrounded difference, reproduced price and finite binary error bound.
+Display totals use decimal half-even rounding once, after multiplication.
+The connector does not round quantities or payload prices for matching.
+Readback still requires the exact transmitted values.

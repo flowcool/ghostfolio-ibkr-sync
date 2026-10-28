@@ -8,7 +8,7 @@ Commands below are future offline acceptance, not current passing evidence. Runt
 
 ## 2. Proven numerical representations
 
-- [ ] 2.1 Reuse conversion, reproduce bounded calculation residue and normalize GBP/GBp without rounding payloads. Document accepted causes in docs/activity-review.md. Requirements: Proven calculation residue without payload rounding. Files: activity_reconciliation.py, sync.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "numeric_residue"`.
+- [x] 2.1 Reuse conversion, reproduce bounded calculation residue and normalize GBP/GBp without rounding payloads. Document accepted causes in docs/activity-review.md. Requirements: Proven calculation residue without payload rounding. Files: activity_reconciliation.py, sync.py, tests/test_activity_reconciliation.py. Verify: `python -m pytest -q tests/test_activity_reconciliation.py -k "numeric_residue"`.
 
 ## 3. Complete candidate graph
 
