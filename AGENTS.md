@@ -45,6 +45,46 @@ propagation in its PR.
 
 - OpenSpec change `profiled-activity-reconciliation` is implemented and archived at `openspec/changes/archive/2026-10-28-profiled-activity-reconciliation/`. Implementation and release are complete. Stable `v4.0.0` reuses the RC4 digest qualified in both labs with all three profiles. Beads holds the acceptance and verified publication evidence.
 
+## Project boundaries (Florent 2026-10-30)
+
+Each scope has one owner agent. Work only in the repositories and runtime of
+your own project. This project: `ghostfolio-ibkr-sync`.
+
+| Beads `project` | Agent | Owns |
+| --- | --- | --- |
+| `infra` | Claude, `~/claude_project/infra` | Production deployment (Komodo, GitOps `flowcool/mylittlemess`), image and catalog pins, schedules, collector task configuration, hosts and NAS outside the labs, Paperless configuration and permissions, SOPS secrets, backup, monitoring. |
+| `BillCollector` | Codex | The engine only (`flowcool/BillCollector`): generic actions, scheduler, vault and TOTP, throttles, delivery, recipe schema, engine contract, upstream engine contributions. |
+| `billcollector-recipes` | Codex | Every provider recipe end to end (`flowcool/billcollector-recipes`): portal exploration, selectors, history window, qualification on the exact engine revision, catalog release, upstream recipe contributions. |
+| `ghostfolio-ibkr-sync`, `ghostfolio-degiro-sync`, `ghostfolio-boursedirect-sync` | Codex | Connector code, spec, lab tests, PRs and releases. The Ghostfolio financial operation, under Florent's GO. |
+
+- **Routing.** For a need in another scope, search the open issues of the owner
+  first. If no issue covers it, create one with
+  `--metadata '{"project":"<owner>"}'`, the evidence, the exact need and its
+  acceptance. Link it `related` to your issue. Never edit, deploy or test the
+  code or runtime of another project.
+- **Usual routes.** Portal, selector or history window: `billcollector-recipes`.
+  Missing engine action, throttle, vault or delivery defect: `BillCollector`.
+  Deployment, pin, schedule, task configuration, Komodo stack, NAS file,
+  Paperless workflow or permission: `infra`. Importer behavior: the connector.
+- **Release boundary.** A development project stops at a qualified release: an
+  immutable image digest or catalog tag, with its proof. Infra deploys it.
+- **Labs: free use on agentvm.** Create, configure, reset, restart, redeploy and
+  scratch lab stacks under `stacks/a/` (Komodo server `a`). To add your own
+  lab, open a `flowcool/mylittlemess` PR limited to `stacks/a/<lab>/` and its
+  `komodo/sync.toml` entry; merge it on green CI. Separate authority remains for
+  production, a login to a real broker or portal (Florent GO per provider),
+  production secrets in a lab, and removal of proof. Reserve a shared lab and
+  stop it after use (Infra runbook `docs/runbooks/ghostfolio-lab.md`).
+- **Lab gate before merge.** Test the PR image in the lab before merge when the
+  PR changes financial logic, deduplication or activity identity, Ghostfolio
+  authentication, transport or writes, the state or journal format, a recipe,
+  or a major dependency or base image. Connectors run the empty and golden
+  Ghostfolio labs. Recipes and the engine run an isolated collector lab with
+  synthetic fixtures. Other PRs need CI only.
+- **Lab gate at release.** Every release passes the same lab scenarios on its
+  exact digest. Promote that digest without a rebuild. Reuse the pre-merge proof
+  when the digest is identical.
+
 ## Working mode: fast-track
 
 This mode replaces the global per-step ceremony. The invariants above still apply.
