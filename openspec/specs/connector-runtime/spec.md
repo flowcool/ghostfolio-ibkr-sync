@@ -720,7 +720,7 @@ Trade qualification SHALL likewise check overlapping-report stability, repeated/
 
 ### Requirement: Destination comment compatibility gates
 
-The destination qualification reference SHALL be Ghostfolio 3.86.0, source commit `ef47c0d1b2c48fa4e97fb381561b514e657928cf`. Existing local lab documentation binds it to image digest `sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`. This is saved deployment evidence, not a current runtime observation. Production desired configuration uses mutable `latest`; version drift SHALL require renewed qualification.
+Qualification SHALL cover connector behavior. Ghostfolio image and version SHALL NOT be qualification dimensions. Each release SHALL record the Ghostfolio version observed in its labs as information. Production desired configuration uses mutable `latest`. Version or image drift SHALL NOT require renewed qualification. If a future background chain exceeds D, exact readback and stop-on-uncertainty SHALL still protect data; a new connector release SHALL raise D.
 
 Pinned source observations:
 

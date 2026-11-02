@@ -1,6 +1,6 @@
 # RC activity-review burst qualification
 
-This procedure validates the RC permit on one immutable Ghostfolio image. Run it
+This procedure validates the connector RC behavior. Run it
 once in `a-ghostfolio-lab` and once in `a-ghostfolio-lab-golden`. Use the
 versioned infra entry point from the selected stack directory. Reserve the lab,
 record the operation reference, and stop the instance after the run.
@@ -8,6 +8,12 @@ record the operation reference, and stop the instance after the run.
 The RC permit is five corrections with a 15-second minimum delay. Stable
 promotion requires PASS in both instances on the same connector digest. This
 procedure does not authorize stable publication or production writes.
+
+Qualification covers connector behavior. Each release records the Ghostfolio
+version observed in its labs as information. A Ghostfolio version or image change
+does not invalidate qualification. If a future background chain exceeds the delay,
+exact readback and stop-on-uncertainty still protect the data. Raise the delay in
+a new connector release.
 
 ## Prepare six date-only corrections
 
@@ -43,8 +49,8 @@ python3 ghostfolio/scripts/lab.py connector-run --instance "$INSTANCE" --dry-run
 ```
 
 Open the private `ACTIVITY_REVIEW_FILE` produced by that run. Set `approve: yes`
-for `T1` through `T5`. Leave `T6` with `approve: null`. The sixth proposal is
-the deferral check. Keep the review file at mode 0600.
+for `T1` through `T6`. The sixth approved proposal must remain deferred
+by the shared budget. Keep the review file at mode 0600.
 
 ## Observe each PUT and its background jobs
 

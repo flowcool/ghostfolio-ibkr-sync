@@ -312,7 +312,7 @@ def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_
     config = {"ghost_host": "http://ghost", "ghost_token": "secret", "dry_run": dry_run,
               "activity_review_file": str(path), "_corporate_outcome": run_outcome}
     # This is an isolated execution-budget fixture, not image qualification.
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-image", 2, 0.5))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0.5))
     blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
     return server, state, config, blocked, held
 
@@ -387,7 +387,7 @@ def test_review_replacement_all_types_preserve_tags_notes_and_full_instants(tmp_
         path = directory / "review.yaml"
         state = review.open_review(str(path), [])
         config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False, "activity_review_file": str(path)}
-        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
         try:
             review.process_review(state, config, events, {"U1": "acc"})
             proposals = deepcopy(state["document"])
@@ -489,7 +489,7 @@ def test_review_execution_budget_sequential_limit_delay_and_deferred_yes(tmp_pat
     write_review(path, {"version": 1, "proposals": proposals})
     path.chmod(0o600)
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0.5))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0.5))
     config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False, "activity_review_file": str(path)}
     try:
         blocked, held = review.process_review(state, config, events, {"U1": "acc"})
@@ -515,7 +515,7 @@ def test_review_execution_budget_dispatches_five_corrections_across_one_run(tmp_
     path = tmp_path / "review.yaml"
     write_review(path, {"version": 1, "proposals": proposals})
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 5, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (5, 0))
     config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
               "activity_review_file": str(path)}
     try:
@@ -541,7 +541,7 @@ def test_review_execution_failure_stops_burst_and_keeps_later_approvals(tmp_path
     path = tmp_path / "review.yaml"
     write_review(path, {"version": 1, "proposals": proposals})
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 5, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (5, 0))
     config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
               "activity_review_file": str(path)}
     try:
@@ -568,7 +568,7 @@ def test_review_execution_delay_waits_for_delayed_background_job(tmp_path, monke
     path = tmp_path / "review.yaml"
     write_review(path, {"version": 1, "proposals": proposals})
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 15.0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 15.0))
     config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
               "activity_review_file": str(path)}
     try:
@@ -593,7 +593,7 @@ def test_review_journal_v3_recovers_mid_burst_without_resend(tmp_path, monkeypat
     path = tmp_path / "review.yaml"
     write_review(path, {"version": 1, "proposals": proposals})
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
               "activity_review_file": str(path)}
     try:
@@ -631,7 +631,7 @@ def test_review_budget_is_shared_across_accounts(tmp_path, monkeypatch):
     path = tmp_path / "review.yaml"
     write_review(path, {"version": 1, "proposals": proposals})
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 5, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (5, 0))
     config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
               "activity_review_file": str(path)}
     try:
@@ -702,7 +702,7 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     item = next(iter(document["proposals"].values()))
     item["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     assert app.run_sync(new_run_outcome()) == 0
     assert len(server.writes) == 1 and len(server.cash) == 3
     server.rows[0]["comment"] += "\n\nUser note"
@@ -717,14 +717,15 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
     from ghostfolio_ibkr_sync.outcome import new_run_outcome
 
     if limit is None:
-        # Exercise the shipped budget through the full normal-run path too.
+        # ENV cannot weaken the shipped permit in the normal-run path.
+        monkeypatch.setenv("ACTIVITY_REVIEW_LIMIT", "999")
+        monkeypatch.setenv("ACTIVITY_REVIEW_DELAY", "0")
         assert review.QUALIFIED_EXECUTION is not None
-        image, limit, delay = review.QUALIFIED_EXECUTION
-        assert image == "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078"
+        limit, delay = review.QUALIFIED_EXECUTION
         assert (limit, delay) == (5, 15.0)
     else:
         # Synthetic larger budgets exercise the generic deferral and pacing logic.
-        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))
+        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (limit, delay))
 
     days = [(1, 1), (2, 10), (3, 20)]
     xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000") for i, day in days)
@@ -810,7 +811,7 @@ def test_review_acceptance_failure_stops_whole_run_and_fences_cash(tmp_path, mon
     document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     server.cash.clear()
     outcome = new_run_outcome()
     assert app.run_sync(outcome) == 1
@@ -981,7 +982,7 @@ def test_review_runtime_sigkill_restart_never_repeats_request(tmp_path, monkeypa
     document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (1, 0))
     remote = tmp_path / "synthetic-server.json"
     requests_file = tmp_path / "synthetic-requests"
     remote.write_text(json.dumps(server.rows, default=float))
@@ -1076,7 +1077,7 @@ def test_review_runtime_duplicate_reference_approval_never_dispatches(tmp_path, 
     for proposal in document["proposals"].values():
         proposal["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (1, 0))
     assert app.run_sync(new_run_outcome()) == 0
     assert not server.writes and server.rows == rows
     refreshed = review.load_review(path)
@@ -1237,7 +1238,7 @@ def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypa
     document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     assert app.run_sync(new_run_outcome()) == (1 if pending else 0)
     monkeypatch.setenv("IBKR_ACCOUNT_IDS", "U2")
     monkeypatch.setenv("IBKR_QUERY_IDS", "Q2")
@@ -1456,7 +1457,7 @@ def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, ca
         proposal.update(actionable=False, status="missing proof")
     if case == "source unavailable":
         proposal["status"] = case
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", None if case == "unqualified" else ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", None if case == "unqualified" else (2, 0))
     state = review.open_review(str(tmp_path / "custom.yaml"), [])
     config = {"_corporate_outcome": out, "dry_run": True}
     try:
@@ -1510,7 +1511,7 @@ def test_legacy_comment_migration_null_currency_puts_effective_and_stops_on_seco
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
               "activity_review_file": str(path)}
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     try:
         review.process_review(state, config, source_events(), {"U1": "acc"})
         document = deepcopy(state["document"])
@@ -1539,7 +1540,7 @@ def test_fee_correction_null_currency_puts_effective_currency(tmp_path, monkeypa
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
               "activity_review_file": str(path)}
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     try:
         review.process_review(state, config, source_events(), {"U1": "acc"})
         document = deepcopy(state["document"])
@@ -1830,7 +1831,7 @@ def test_review_replacement_timezone_readback_keeps_stored_instant(tmp_path, mon
     cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
            "activity_review_file": str(path), "timezone": "Europe/Paris"}
     monkeypatch.setenv("TZ", "Europe/Paris")
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     try:
         review.process_review(state, cfg, events, {"U1": "acc"})
         document = deepcopy(state["document"])
@@ -1870,7 +1871,7 @@ def test_review_replacement_timezone_different_day_uses_existing_financial_path(
     path = tmp_path / "review.yaml"
     state = review.open_review(str(path), [])
     monkeypatch.setenv("TZ", "Europe/Paris")
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (2, 0))
     cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
            "activity_review_file": str(path)}
     try:

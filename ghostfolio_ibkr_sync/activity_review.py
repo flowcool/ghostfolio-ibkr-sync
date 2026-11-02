@@ -1024,15 +1024,11 @@ def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
     return [item for item in selected if item["destination account"] not in blocked], blocked
 
 
-# The RC permit is bound to the exact destination image. Stable promotion still
-# requires the empty and golden burst gate for this exact image. The release gate
-# records any revised values when the observed background chain needs more delay.
-# The connector cannot observe Ghostfolio's internal Bull jobs through its API.
-QUALIFIED_EXECUTION: tuple[str, int, float] | None = (
-    "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078",
-    5,
-    15.0,
-)
+# Qualification covers connector behavior. Labs record the Ghostfolio version
+# as information and measure its background chain against the fixed delay.
+# Exact readback and stop-on-uncertainty protect data if a future chain is longer.
+# A longer delay requires a new connector release; ENV cannot weaken the permit.
+QUALIFIED_EXECUTION: tuple[int, float] | None = (5, 15.0)
 RECOVERY_WAITS = (0, 2, 5, 10)
 
 
@@ -1293,10 +1289,10 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             continue
         qualification = QUALIFIED_EXECUTION
         if qualification is None:
-            log.warning("Reviewed correction retained: exact-image execution budget not qualified")
+            log.warning("Reviewed correction retained: correction execution budget not qualified")
             continue
-        image, limit, delay = qualification
-        if not image or type(limit) is not int or limit < 1 or not 0 <= delay < float("inf"):
+        limit, delay = qualification
+        if type(limit) is not int or limit < 1 or not 0 <= delay < float("inf"):
             raise RuntimeError("Invalid qualified correction execution budget")
         if executed + planned >= limit:
             continue
