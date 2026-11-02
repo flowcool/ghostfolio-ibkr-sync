@@ -25,3 +25,7 @@ See `proposal.md`. `parse_ibkr_datetime` in `ibkr.py` strips the Flex suffix and
 ## Migration Plan
 
 Replay copied backup XML offline. Retain inputs and results separately under ignored worktree `tmp/`. Release as a minor version. State that new activities get corrected instants and stored activities are not rewritten. Rollback is a code revert. Flag downstream propagation only if a shared helper changes; `parse_ibkr_datetime` is IBKR-specific.
+
+Corporate-action Trade readers match the event security by ISIN and contract before parsing dates. CASH/FX rows without an ISIN do not feed these dates. A regression covers a CASH row outside the imported-category G6 bound.
+
+Preserve effective destination currency comparison from the preceding change. Retain journal version 3 and its immutable comparison policy. Same-local-day handling applies only when constructing new proposals; exact journal recovery still compares the full stored instant.

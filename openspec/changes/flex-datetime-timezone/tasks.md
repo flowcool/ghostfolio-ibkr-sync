@@ -7,7 +7,7 @@
 
 ## 2. Consumer chain
 
-- [ ] 2.1 Update trade conversion, cash dividend day, corporate-action dates and deduplication to consume the same corrected instant. Verify with `python -m pytest -q tests -k datetime_timezone_chain` (G2).
+- [ ] 2.1 Update trade conversion, cash dividend day, corporate-action dates and deduplication to consume the same corrected instant. Prove that corporate-action security matching excludes a CASH/FX row without an ISIN before date parsing, even when its date fails the imported-category G6 bound. Verify with `python -m pytest -q tests -k datetime_timezone_chain` (G2).
 - [ ] 2.2 Update activity review, reconciliation and identity migration evidence. Keep `IBKR#v2` unchanged. Compare dates by configured local day. Cover stored `2026-01-19T07:03:00Z` against source `2026-01-19T00:00:00Z` under `Europe/Paris`: no date proposal, comment-only migration eligible, stored instant preserved. Cover different local days and the existing permissive two/three-day limits. Keep stored-date repair in the existing reviewed correction path, with backup and exact readback. Build no conversion tool. Repair needs a separate operation step and operator GO after release. Verify with `python -m pytest -q tests/test_activity_review.py tests/test_activity_reconciliation.py tests/test_identity_migration.py -k 'timezone or migration'` (G3).
 
 ## 3. Acceptance gates
@@ -27,4 +27,4 @@ The offline EST/EDT fixed-offset replay covers six saved reports and 776 Trade r
 
 Checked call sites: `ibkr.parse_trades` copies fields without date use. `app.select_account_activities` filters categories before trade conversion and holdings checks. `sync.convert_trade_to_activity` rejects skipped categories before reading `dateTime`. `sync._match_manual_entry` and `sync.filter_trades_by_holdings` receive the filtered candidates from `app`. `activity_review.source_events` filters categories before conversion for review and identity migration. `ibkr.parse_cash_dividends`, `ibkr.flex_provenance_failures` and `sync._dividend_day` read cash payment records, not Trade rows. `corporate_actions.event_inventory` reads CorporateAction records, not Trade rows.
 
-HORS CHEMIN: `corporate_actions.inventory` retains unfiltered trades. `corporate_actions.source_chain` (line 1073), `corporate_actions.decide` (line 1365) and `corporate_actions.history_conclusion` (line 1670) can read their `dateTime` after security matching without an explicit category skip. The universal skip-before-date claim cannot be certified for these paths. No runtime code changed.
+Corporate-action Trade readers select the event security by ISIN and contract before date use. CASH/FX rows without an ISIN do not feed these dates. Add a regression with an excluded CASH row whose UTC date is more than one day from tradeDate.

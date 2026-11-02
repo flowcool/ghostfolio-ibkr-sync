@@ -33,3 +33,13 @@ Baseline: saved query 1671605 emitted 105 relevant timezone-qualified rows (`EST
 #### Scenario: Numbered validation gates
 - **WHEN** the implementation acceptance record runs gates G1 parser unit tests, G2 all-caller chain tests, G3 identity and migration replay, G4 empty and golden Ghostfolio labs with midnight fixtures, G5 exact readback plus review output, and G6 tradeDate cross-check on every saved Flex XML `Trade` row that the connector imports
 - **THEN** every gate passes on one immutable candidate; G6 requires an absolute distance of at most one calendar day between the converted UTC date and `tradeDate`; `CASH` and `OPT` rows are excluded because the import and review paths skip them before any date use, and FX `tradeDate` is a value date that can move across a weekend; any violation in an imported category blocks G6 and invalidates the token assumption; a failed gate blocks release and no stored date is rewritten. The retained replay has 776 rows (STK 686, CASH 86, OPT 4), with violations STK 0, CASH 12, OPT 0; the scoped result passes for all 686 imported rows.
+
+## ADDED Requirements
+
+### Requirement: Corporate-action security filtering before date use
+
+Corporate-action Trade readers SHALL match the event security by ISIN and contract before parsing its date. CASH/FX rows without an ISIN SHALL NOT feed corporate-action dates, even when their UTC date differs from tradeDate by more than one day. G6 remains limited to imported asset categories.
+
+#### Scenario: Excluded CASH dates do not feed corporate actions
+- **WHEN** a retained CASH/FX Trade has no ISIN and its converted UTC date differs from tradeDate by more than one day
+- **THEN** corporate-action source_chain, decide and history_conclusion exclude that row before date parsing; the event dates stay unchanged and G6 still applies only to imported categories.

@@ -11,7 +11,7 @@ Flex can return `YYYYMMDD;HHmmss ZONE`, for example `20260113;231127 EST`. The c
 - Apply one parser policy to trades, cash dividends, dividend days, corporate-action dates, deduplication, activity review and identity migration.
 - Keep source text, parsed instant and source calendar day available for review evidence.
 - Keep `IBKR#v2` identity event-only. Compare source and stored dates by local calendar day under configured `TZ`. The same local day produces no date proposal and remains eligible for comment-only migration when other checks pass.
-- Add offline parser, US switch-day, caller and lab validation after approval. Add G6: every saved imported Trade (an `assetCategory` outside `SKIP_ASSET_CATEGORIES`) must have a converted UTC date within one day of `tradeDate`. `CASH` and `OPT` Trade rows are skipped in the import and review paths before any date use; FX `tradeDate` is a value date and can move across a weekend. A violation in a non-skipped category fails the gate and invalidates the token assumption. No runtime change is part of this proposal.
+- Add offline parser, US switch-day, caller and lab validation after approval. Add G6: every saved imported Trade (an `assetCategory` outside `SKIP_ASSET_CATEGORIES`) must have a converted UTC date within one day of `tradeDate`. `CASH` and `OPT` Trade rows are skipped in the import and review paths before any date use; FX `tradeDate` is a value date and can move across a weekend. A violation in a non-skipped category fails the gate and invalidates the token assumption. Implementation follows the approved tasks.
 
 ## Capabilities
 
@@ -40,3 +40,5 @@ Affected code is `parse_ibkr_datetime` and all callers in `ibkr.py`, `sync.py`, 
 ## Non-goals
 
 This revision includes no historical write, Ghostfolio write, production service access, release, push, or sibling DEGIRO change. It defines a minor release for implementation. The release note must state that new activities get corrected instants and no stored activity is rewritten. The PR flags downstream propagation only if a shared helper changes; `parse_ibkr_datetime` is IBKR-specific.
+
+Corporate-action Trade readers match the event security by ISIN and contract before parsing dates. CASH/FX rows without an ISIN do not feed these dates. A regression covers a CASH row outside the imported-category G6 bound.
