@@ -1689,3 +1689,14 @@ def test_datetime_timezone_chain_cash_rows_never_feed_corporate_action_dates(mon
     assert ca.source_chain(modified, events, "SAMPLE.T", mapping, dates) == chain
     assert ca.decide(modified, "SOURCE", "TARGET", mapping, snapshot, evidence, proofs) == baseline
     assert ca.history_conclusion(modified, snapshot, "SAMPLE.T", "TARGET", mapping) == history
+
+
+def test_datetime_timezone_chain_corporate_action_trade_utc_day():
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+    reports, mapping, _, _, _ = reverse_case()
+    reports[0]["trades"].append({"accountId": "SOURCE", "tradeID": "LATE", "isin": "CA0000000002",
+        "conid": "NEW", "buySell": "BUY", "quantity": "10", "dateTime": "20250327;210000 EDT"})
+    # This trade follows the effective event day in UTC. The old parser made it ambiguous.
+    quantity, before = ca.source_chain(reports, reports[0]["events"], "SAMPLE.T", mapping,
+                                       {"EVENT1": "2025-03-27"})
+    assert quantity == 110 and before["EVENT1"] == 3000

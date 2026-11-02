@@ -1774,3 +1774,20 @@ def test_effective_currency_preview_keeps_exact_guards(case, field, value):
     result = migration_run(case, rows=[row])
     assert not result["replacements"]
     assert result["events"][0]["status"] == "conflicting"
+
+
+@pytest.mark.parametrize("zone,raw,stored", [
+    ("Europe/Paris", "20260118;190000 EST", "2026-01-19T07:03:00Z"),
+    ("America/New_York", "20260118;220000 EST", "2026-01-18T23:30:00Z"),
+    ("Asia/Tokyo", "20260118;190000 EST", "2026-01-19T07:03:00Z"),
+])
+def test_timezone_legacy_migration_compares_both_instants_in_configured_zone(case, zone, raw, stored):
+    root, cfg, save, inputs, source, snapshot = case
+    cfg["timezone"] = zone
+    result = migration_run(case, rows=[migration_row(date=stored)],
+                           trades=[migration_trade(dateTime=raw)])
+    assert len(result["replacements"]) == 1
+    event = result["events"][0]
+    assert event["new_comment"] == "IBKR#v2#U1:TRADE:123"
+    assert event["differences"] == []
+    assert json.loads(snapshot.read_text())["activities"][0]["date"] == stored
