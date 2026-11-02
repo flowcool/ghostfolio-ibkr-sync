@@ -815,7 +815,8 @@ def test_profile_execution_reference_outcome_and_policy_version(tmp_path, monkey
         assert outcome["reconciliation"]["reference migrations"] == 1
         assert outcome["reconciliation"]["corrected targets"] == 1
         entry = next(iter(state["journal"]["entries"].values()))
-        assert entry["eligibility"]["policy version"] == reconciliation.POLICY_VERSION
+        assert entry["eligibility"]["policy version"] == review.CURRENCY_POLICY
+        assert state["journal"]["version"] == 3
     finally:
         review.close_review(state)
 

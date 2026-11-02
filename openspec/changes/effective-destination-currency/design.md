@@ -44,7 +44,7 @@ Persist actual raw readback as well as expected/request evidence.
 
 ## Migration Plan
 
-Recommend a 4.0.x patch. No SQL or historical data migration. Refresh derived
+Use a minor release for journal version 3. No SQL or historical data migration. Refresh derived
 review evidence through existing atomic generations; clear changed consent.
 G1–G4 must pass before financial enablement. Flag DEGIRO propagation under ADR 0007.
 
@@ -62,3 +62,8 @@ journal version and classify the release as minor. No operator pass is required.
 
 G2 stays synthetic and conditional. The saved review state has no profile-currency
 evidence. Real-data eligibility requires G5 production observation.
+
+G1 observed the real `v4.0.0` reader accepting an unknown policy in a v2
+pending journal. It rejects journal version 3 before recovery. Use version 3 for
+new intents. Preserve existing v1/v2 entries and their exact raw comparison.
+The new reader can load mixed legacy and new entries in a version 3 journal.

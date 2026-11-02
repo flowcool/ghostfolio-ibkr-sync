@@ -394,3 +394,17 @@ currency differences remain visible. GBP and GBp remain distinct denominations.
 Legacy reference migration changes only the comment and preserves raw currency.
 Currency proof does not prove source completeness, identity, dates or amounts.
 The profile limits and the shared budget of one correction per run stay fixed.
+
+### Journal compatibility and rollback
+
+New correction intents use journal version 3. They bind the currency comparison
+policy, raw preimage, request, expected result and profile context. Confirmed
+entries retain the actual raw readback. The reader preserves the original raw
+comparison for legacy v1/v2 pending entries. It does not resend an uncertain request.
+
+This format requires a minor release. Version 4.0.0 cannot read a version 3
+journal. Stop writers and preserve the view, private state and journal before a
+downgrade. Force `DRY_RUN` and restore the previous qualified image when required.
+Keep new-policy journals for a compatible reader to resolve. Do not delete, edit
+or convert them to bypass the reader check. A code rollback does not reverse a
+financial write.

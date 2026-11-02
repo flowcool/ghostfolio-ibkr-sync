@@ -310,7 +310,7 @@ def open_review(filename: str, input_files: Sequence[str], *, rebuild: bool = Fa
         journal = (read_yaml(journal_original) if journal_original is not None
                    else {"version": 1, "entries": {}})
         document = decode_review(document, evidence)
-        if journal.get("version") not in (1, 2):
+        if journal.get("version") not in (1, 2, 3):
             raise RuntimeError("Invalid review journal version")
         validate_document({**journal, "version": 1}, "entries")
         if rebuild:
@@ -1111,6 +1111,8 @@ def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
             raise RuntimeError("Invalid or unbound review journal")
         policy = entry.get("eligibility", {}).get("policy version")
         if policy == CURRENCY_POLICY:
+            if state["journal"]["version"] != 3:
+                raise RuntimeError("Effective currency policy requires review journal version 3")
             if entry["eligibility"].get("currency comparison") != currency_contract(entry):
                 raise RuntimeError("Changed currency comparison evidence in review journal")
         elif policy not in (None, reconciliation_rules.POLICY_VERSION):
@@ -1296,7 +1298,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                                  "dates": current.get("profile date context", {}),
                                  "numeric evidence": current.get("numeric evidence", {})}}
         entry["eligibility"]["currency comparison"] = currency_contract(entry)
-        state["journal"]["version"] = 2
+        state["journal"]["version"] = 3
         state["journal"]["entries"][request_key] = entry
         publish_journal(state)
         assert_unchanged(state)

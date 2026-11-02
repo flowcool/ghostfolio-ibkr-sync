@@ -46,7 +46,7 @@ None.
 
 ## Impact
 
-Patch-level bug fix within 4.0.x, subject to compatibility gates. No database
+Minor release: the new comparison contract requires journal version 3. No database
 migration or historical financial conversion. Review generations can change;
 pending journals must retain their original comparison contract.
 

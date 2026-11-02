@@ -1388,3 +1388,89 @@ def test_effective_currency_readback_does_not_scale_gbp():
     expected = review.values_of(row)
     row["currency"] = None
     assert not review.row_matches(row, expected, review.CURRENCY_POLICY)
+
+
+def test_effective_currency_persistence_real_v400_reader(tmp_path, monkeypatch):
+    """Run the actual tagged reader, never an imitation of its policy checks."""
+    import io
+    import subprocess
+    import sys
+    import tarfile
+    from pathlib import Path
+    row = destination()
+    row["assetProfile"]["currency"] = "USD"
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, rows=[row], outcome="unchanged")
+    journal = deepcopy(state["journal"])
+    review.close_review(state)
+    old = tmp_path / "previous-release"
+    old.mkdir()
+    archive = subprocess.run(["git", "archive", "v4.0.0", "ghostfolio_ibkr_sync"], check=True, capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
+        bundle.extractall(old, filter="data")
+    # A schema-1 empty view avoids coupling this proof to derived generations.
+    path = tmp_path / "rollback.yaml"
+    path.write_bytes(review.atomic_yaml(path, {"version": 1, "proposals": {}}))
+    script = """
+import json, sys
+from ghostfolio_ibkr_sync import activity_review as r
+try:
+    state = r.open_review(sys.argv[1], [])
+    try:
+        r.validate_journal(state, {"ghost_host": "http://ghost"})
+        print("ACCEPTED_UNKNOWN_POLICY")
+    finally: r.close_review(state)
+except RuntimeError as exc:
+    print(str(exc))
+    sys.exit(3)
+"""
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("GHOST_", "IBKR_"))}
+    environment["PYTHONPATH"] = str(old)
+    results = []
+    for version in (2, 3):
+        journal["version"] = version
+        target = Path(str(path) + ".journal.yaml")
+        target.write_bytes(review.atomic_yaml(target, journal))
+        before = target.read_bytes()
+        result = subprocess.run([sys.executable, "-c", script, str(path)], cwd=old,
+                                env=environment, capture_output=True, text=True, timeout=30)
+        assert target.read_bytes() == before
+        results.append(result)
+    # v4.0.0 ignores a new policy inside v2. An explicit format is required.
+    assert results[0].returncode == 0 and "ACCEPTED_UNKNOWN_POLICY" in results[0].stdout
+    assert results[1].returncode == 3 and "Invalid review journal version" in results[1].stdout
+    assert len(server.writes) == 1
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_effective_currency_persistence_legacy_contract_is_immutable(tmp_path, monkeypatch, version):
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
+    entry = next(iter(state["journal"]["entries"].values()))
+    entry.pop("eligibility")
+    entry.pop("authority")
+    state["journal"]["version"] = version
+    review.publish_journal(state)
+    before = state["journal_path"].read_bytes()
+    try:
+        server.rows[0] = deepcopy(entry["after"])
+        for field in review.NUMBERS: server.rows[0][field] = Decimal(server.rows[0][field])
+        server.rows[0]["assetProfile"]["currency"] = "USD"
+        server.rows[0]["currency"] = None
+        blocked, _ = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert blocked == {"acc"} and len(server.writes) == 1
+        assert state["journal_path"].read_bytes() == before
+    finally: review.close_review(state)
+
+
+@pytest.mark.parametrize("edit", ["policy", "profile", "request"])
+def test_effective_currency_persistence_changed_contract_fails_closed(tmp_path, monkeypatch, edit):
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
+    entry = next(iter(state["journal"]["entries"].values()))
+    if edit == "policy": entry["eligibility"]["policy version"] = "unknown"
+    elif edit == "profile": entry["after"]["assetProfile"]["currency"] = "JPY"
+    else: entry["request"]["fee"] = "999"
+    try:
+        with pytest.raises(RuntimeError, match="policy|evidence"):
+            review.validate_journal(state, config)
+        assert len(server.writes) == 1
+    finally: review.close_review(state)
