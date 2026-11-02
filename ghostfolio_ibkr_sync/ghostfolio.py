@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, DecimalException
 from math import isfinite
-from typing import Any
+from typing import Any, TypedDict
 
 import requests
 
@@ -27,6 +27,47 @@ log = logging.getLogger(__name__)
 # Run configuration as built by `config.load_config`; the import-uncertainty marker
 # is added to it during a run.
 Config = dict[str, Any]
+
+
+# Supported observed denominations. This does not grant financial authority.
+DESTINATION_CURRENCIES = frozenset("USD EUR GBP CHF JPY KRW CAD AUD NZD HKD SGD SEK NOK DKK PLN CZK HUF ILS ZAR GBp ZAc ILA".split())
+
+
+class CurrencyEvidence(TypedDict):
+    raw: Any
+    effective: str | None
+    provenance: str
+    profile: dict[str, Any] | None
+    reason: str | None
+
+
+def effective_currency(row: Mapping[str, Any]) -> CurrencyEvidence:
+    """Resolve only explicit currency or a profile carried by the same row.
+
+    Callers establish complete unredacted capture or created-response ownership.
+    A present current profile always wins over legacy context, even if invalid.
+    """
+    key = "assetProfile" if "assetProfile" in row else "SymbolProfile"
+    asset = row.get(key)
+    context = ({name: asset[name] for name in ("id", "symbol", "dataSource", "isin", "currency")
+                if name in asset} if isinstance(asset, dict) else None)
+    raw = row.get("currency")
+    value, provenance, reason = raw, "activity", None
+    if "currency" not in row:
+        reason = "Missing activity currency field"
+    elif raw is None:
+        provenance = key
+        if (not isinstance(asset, dict) or not isinstance(asset.get("symbol"), str)
+                or not asset["symbol"].strip() or not isinstance(asset.get("dataSource"), str)
+                or not asset["dataSource"].strip()):
+            reason = "Unproven profile currency"
+        value = asset.get("currency") if isinstance(asset, dict) else None
+        if reason is None and (not isinstance(value, str) or value not in DESTINATION_CURRENCIES):
+            reason = "Missing or unsupported profile currency"
+    elif not isinstance(raw, str) or raw not in DESTINATION_CURRENCIES:
+        reason = "Invalid or unsupported activity currency"
+    return {"raw": raw, "effective": value if reason is None else None,
+            "provenance": provenance, "profile": context, "reason": reason}
 
 
 def ghost_headers(token: str | None) -> dict[str, str]:
@@ -682,10 +723,8 @@ def _existing_dividend_amounts(
 
     quantity, price, fee = (decimal(order.get(key)) for key in ("quantity", "unitPrice", "fee"))
     gross = quantity * price if quantity is not None and price is not None else None
-    currency = order.get("currency")
-    if currency is None:
-        currency = profile.get("currency")
-    return gross, currency if isinstance(currency, str) and currency else None, fee
+    row = order if "assetProfile" in order or "SymbolProfile" in order else {**order, "assetProfile": profile}
+    return gross, effective_currency(row)["effective"], fee
 
 
 

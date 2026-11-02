@@ -670,3 +670,39 @@ def test_v2_identity_writer_shared_format_is_account_scoped(kind):
 def test_v2_identity_writer_rejects_unknown_kind(kind):
     with pytest.raises(ghostfolio.InvalidActivityIdentityError):
         ghostfolio.format_versioned_activity_identity("U1", kind, "ID")
+
+
+@pytest.mark.parametrize("code", ["USD", "JPY", "GBp", "KRW", "SEK", "ZAc", "ILA"])
+@pytest.mark.parametrize("key", ["assetProfile", "SymbolProfile"])
+def test_effective_currency_resolution_null_and_override(code, key):
+    from copy import deepcopy
+    from decimal import Decimal
+    row = activity(profile_key=key, currency=None, quantity="2", unitPrice="10", fee="1")
+    row[key]["currency"] = code
+    original = deepcopy(row)
+    proof = ghostfolio.effective_currency(row)
+    assert proof["effective"] == code and proof["provenance"] == key
+    assert row == original
+    assert ghostfolio._existing_dividend_amounts(row, row[key]) == (Decimal(20), code, Decimal(1))
+    row["currency"] = "KRW"
+    assert ghostfolio.effective_currency(row)["effective"] == "KRW"
+
+
+@pytest.mark.parametrize("patch", [
+    {"currency": ""}, {"currency": "AAA"}, {"currency": False}, {"currency": 1},
+    {"assetProfile": None}, {"assetProfile": {"currency": "USD"}},
+    {"assetProfile": {"symbol": "KO", "dataSource": "YAHOO", "currency": "AAA"}},
+])
+def test_effective_currency_resolution_invalid_never_hidden(patch):
+    row = activity(currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    row["SymbolProfile"] = dict(row["assetProfile"])
+    row.update(patch)
+    assert ghostfolio.effective_currency(row)["effective"] is None
+    assert ghostfolio.effective_currency(row)["reason"]
+
+
+def test_effective_currency_resolution_missing_is_not_null():
+    row = activity()
+    row["assetProfile"]["currency"] = "USD"
+    assert ghostfolio.effective_currency(row)["effective"] is None
