@@ -26,7 +26,7 @@ replay input stays read-only. No production or broker access is needed.
 ## 4. Keep historical identity tools consistent and stricter
 
 - [x] 4.1 Use effective currency in historical identity preview without relaxing exact financial/day/coverage or selection-replay checks. Files: `identity_migration.py`, `tests/test_identity_migration.py`. Requirement: `specs/connector-runtime/spec.md` — Exact acceptance with nullable currency evidence. Scenario: historical preview remains exact. Verify: `python -m pytest -q tests/test_identity_migration.py -k effective_currency`.
-- [ ] 4.2 Use effective currency in recovery accepted-payload and positive readback comparisons. Permit a legitimate explicit override while retaining independent existing-row, identity and settlement guards. Files: `identity_recovery.py`, `tests/test_identity_recovery.py`. Same requirement. Scenario: recovery remains exact. Verify: `python -m pytest -q tests/test_identity_recovery.py -k effective_currency`.
+- [x] 4.2 Use effective currency in recovery accepted-payload and positive readback comparisons. Permit a legitimate explicit override while retaining independent existing-row, identity and settlement guards. Files: `identity_recovery.py`, `tests/test_identity_recovery.py`. Same requirement. Scenario: recovery remains exact. Verify: `python -m pytest -q tests/test_identity_recovery.py -k effective_currency`.
 
 ## 5. Verify the complete offline behavior
 
