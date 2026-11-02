@@ -375,8 +375,8 @@ references, restart recovery, private-state recovery and no repeated writes.
 Offline tests and the existing destination budget do not qualify a new image.
 A failed preservation case keeps affected corrections unavailable.
 
-Profiles and manual consent share the digest-bound qualified limit. The current
-candidate is five PUTs per run with a 15-second minimum delay. A reference
+Profiles and manual consent share the digest-bound qualified limit. The RC permit
+allows five PUTs per run with a 15-second minimum delay. A reference
 migration consumes that same limit. The next financial correction
 uses a fresh revision after confirmed migration. Oldest first-eligible revisions
 run first. Remaining eligible work retains its hold for later normal cycles.
