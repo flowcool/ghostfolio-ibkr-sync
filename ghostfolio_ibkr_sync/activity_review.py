@@ -652,7 +652,7 @@ def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: b
     target = event["values"]
     asset = profile(row)
     if (row.get("accountId") != event["destination account"] or row.get("type") != target["type"]
-            or reconciliation_rules.denomination(row.get("currency", ""))[0] != reconciliation_rules.denomination(target["currency"])[0]
+            or reconciliation_rules.denomination(str(effective_currency(row)["effective"]))[0] != reconciliation_rules.denomination(target["currency"])[0]
             or not activity_is_active(row)
             or asset.get("dataSource") != "YAHOO"
             or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
@@ -686,7 +686,7 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
                         or row.get("type") != source["type"] or not activity_is_active(row)
                         or asset.get("dataSource") != "YAHOO"
                         or asset.get("symbol") != source["symbol"]
-                        or reconciliation_rules.denomination(row.get("currency", ""))[0]
+                        or reconciliation_rules.denomination(str(effective_currency(row)["effective"]))[0]
                            != reconciliation_rules.denomination(source["currency"])[0]
                         or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
                         or (reference and reference.startswith("IBKR#v2#") and reference != event_id)):
@@ -877,8 +877,20 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             auto = automatic.get((event_id, row["id"]))
             try:
                 numbers = reconciliation_rules.numeric_evidence(event, current)
-            except (RuntimeError, KeyError, ArithmeticError, ValueError):
-                numbers = {"cause": "Missing or unsupported exact financial evidence"}
+            except (RuntimeError, KeyError, ArithmeticError, ValueError) as exc:
+                cause = str(exc) if isinstance(exc, RuntimeError) else "Missing or invalid exact source evidence"
+                numbers = {"cause": cause, "currency evidence": effective_currency(row)}
+                if auto and changes == ["comment"]:
+                    numbers["operation"] = "Eligible comment-only migration; financial calculation unavailable"
+            if not auto:
+                reasons = []
+                if not actionable:
+                    reasons.append(status)
+                if "source gross" in numbers and not reconciliation_rules.gross_within_limits(reconciliation,
+                        Decimal(numbers["source gross"]), Decimal(numbers["destination gross"]), numbers["currency"]):
+                    reasons.append("Gross difference exceeds profile limits")
+                if reasons:
+                    numbers["eligibility reasons"] = reasons
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
                          "numeric evidence": numbers,
                          "profile date context": auto["profile date context"] if auto else {}})
@@ -1123,7 +1135,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     # Journal-owned historical proposals may outlive a configured account.
     # This does not permit dispatch without a fresh source and matching target.
     journal_bindings = {(entry["source event"], entry["destination account"], entry["activity id"])
-                        for entry in state["journal"]["entries"].values()}
+                        for entry in state["journal"]["entries"].values() if entry["status"] == "pending"}
 
     def refresh(previous: dict[str, Any], current_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], set[str]]:
         from ghostfolio_ibkr_sync.corporate_actions import candidate_held
@@ -1165,6 +1177,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             entry["verified result"] = entry["after"]
             publish_journal(state)
             recovered_events.add(entry["source event"])
+            journal_bindings.discard((entry["source event"], entry["destination account"], entry["activity id"]))
             completed(entry)
         else:
             unresolved.add(entry["destination account"])

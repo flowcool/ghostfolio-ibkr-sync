@@ -818,3 +818,76 @@ def test_profile_execution_reference_outcome_and_policy_version(tmp_path, monkey
         assert entry["eligibility"]["policy version"] == reconciliation.POLICY_VERSION
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("code", ["USD", "JPY", "GBp", "KRW", "SEK"])
+def test_effective_currency_legacy_trade_keeps_identity_authority(code):
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events(report(trade_xml("T1", currency=code)))
+    row = matching_row(comment="IBKR#T1", currency=None, fee=D(999))
+    row["assetProfile"]["currency"] = code
+    item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="balanced")[0].values()))
+    assert item["automatic eligible"] and item["changed fields"] == ["comment"]
+    assert item["proposed values"]["currency"] is None
+    if code in ("KRW", "SEK"):
+        assert item["numeric evidence"]["operation"].startswith("Eligible comment-only")
+
+
+@pytest.mark.parametrize("failure", ["amount", "source", "identity", "date", None])
+def test_effective_currency_legacy_dividend_independent_gates(failure):
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events(report(divs=div_xml()))
+    event = next(iter(events.values()))
+    row = matching_row(comment=event["legacy"][0], type="DIVIDEND", date=event["values"]["date"],
+                       currency=None, quantity=D(1), unitPrice=D(25), fee=D(0))
+    row["assetProfile"]["currency"] = "USD"
+    if failure == "amount": row["unitPrice"] = D(30)
+    if failure == "source": event["source evidence"]["accruals"] = []
+    if failure == "identity": row["assetProfile"]["isin"] = "OTHER"
+    if failure == "date": row["date"] = "2020-01-01T00:00:00Z"
+    pairs = review.automatic_pairs(events, [row], "balanced", "UTC")
+    assert bool(pairs) is (failure is None)
+    if not failure:
+        item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="balanced")[0].values()))
+        assert item["proposed values"]["quantity"] == "1"
+        assert item["changed fields"] == ["comment"]
+
+
+@pytest.mark.parametrize("change,reason", [({"currency": None}, "profile currency"), ({"currency": "AAA"}, "activity currency"), ({"currency": "EUR"}, "Conflicting"), ({"currency": "KRW"}, "Unsupported automatic financial")])
+def test_effective_currency_diagnosis_distinct_reasons(change, reason):
+    from copy import deepcopy
+    event = next(iter(matching_events().values()))
+    row = matching_row(**change)
+    if change["currency"] == "KRW":
+        event = deepcopy(event)
+        event["values"]["currency"] = "KRW"
+    with pytest.raises(RuntimeError, match=reason):
+        reconciliation.numeric_evidence(event, row)
+
+
+def test_effective_currency_diagnosis_groups_resolve_and_report_unknown():
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events()
+    one = matching_row(id="one", currency=None, comment=next(iter(events)))
+    one["assetProfile"]["currency"] = "USD"
+    two = matching_row(id="two", currency=None, comment=next(iter(events)))
+    proposals = review.refresh_proposals({}, events, [one, two], {"U1": "acc"}, reconciliation="balanced")[0]
+    group = next(iter(reconciliation.group_diagnosis(events, proposals).values()))
+    assert group["destination totals"]["USD"]["gross"] == "600"
+    assert group["unavailable totals"][0]["id"] == "two"
+
+
+@pytest.mark.parametrize("code,factor,allowed", [("GBp", D(".01"), True), ("ZAc", D(".01"), False), ("ILA", D(".01"), False)])
+def test_effective_currency_scaling_keeps_authority(code, factor, allowed):
+    from _sync_helpers import report, trade_xml
+    event = next(iter(matching_events(report(trade_xml("T1", currency="GBP"))).values()))
+    row = matching_row(currency=None, unitPrice=D(6000), fee=D(100))
+    row["assetProfile"]["currency"] = code
+    if allowed:
+        proof = reconciliation.numeric_evidence(event, row)
+        assert proof["destination gross"] == "600"
+        assert proof["currency evidence"]["effective"] == "GBp"
+    else:
+        with pytest.raises(RuntimeError): reconciliation.numeric_evidence(event, row)
