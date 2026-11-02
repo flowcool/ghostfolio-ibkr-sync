@@ -10,6 +10,12 @@ Current behavior and settings are in the [configuration guide](docs/configuratio
 
 ## Unreleased — minor release
 
+Required-action notifications now group unique events by reason and count. They
+notify on a group change or clearance and remind after a fixed seven days.
+Private state records confirmed delivery. Full event detail stays in private logs.
+Approved work deferred only by qualification or the run budget does not notify.
+Failed runs keep their immediate consolidated notification.
+
 Qualified Flex timestamps now use fixed EST (UTC-05:00) and EDT (UTC-04:00)
 offsets. New activities get corrected UTC instants. No stored activity is rewritten.
 Unknown qualified tokens fail the account before all financial writes.

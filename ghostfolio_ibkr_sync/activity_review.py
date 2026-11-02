@@ -1422,7 +1422,7 @@ def report_review_outcome(state: ReviewState, config: dict[str, Any], proposals:
         elif item.get("rejected"):
             reason = "review_evidence"
         elif (not item.get("actionable") or item.get("status") in
-              ("source unavailable", "target missing or unavailable") or QUALIFIED_EXECUTION is None):
+              ("source unavailable", "target missing or unavailable")):
             reason = "review_evidence"
         elif item.get("approve") == "yes" or item.get("automatic eligible"):
             deferred.add(event)

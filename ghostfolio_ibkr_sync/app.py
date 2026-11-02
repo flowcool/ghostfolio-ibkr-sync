@@ -16,10 +16,15 @@ from xml.etree.ElementTree import ParseError
 import requests
 
 from ghostfolio_ibkr_sync import corporate_actions as ca
+from ghostfolio_ibkr_sync.action_notifications import (
+    confirm_action_notification,
+    plan_action_notification,
+)
 from ghostfolio_ibkr_sync.activity_review import (
     ReviewState,
     assert_unchanged,
     close_review,
+    fingerprint,
     open_review,
     process_review,
     source_events,
@@ -588,19 +593,30 @@ def finalize_run(outcome: RunOutcome, code: int) -> None:
 
 
 def _finalize_notification(outcome: RunOutcome, code: int) -> None:
-    """Send at most one notification for failures or a legacy-token reminder.
-
-    Clean successful simulations remain silent. Failures
-    notify in every mode, including invalid configuration. Delivery never changes
-    the exit code. A reminder on a failed run joins its failure notification.
-    """
-    actions = action_summary(outcome)
+    """Coalesce immediate failures, changed groups and due seven-day reminders."""
     days = outcome.get("token_expiry_days")
     preview = outcome.get("forced_preview")
+    if days is not None:
+        record_action(outcome, "token_renewal", "GHOST_TOKEN")
+    if preview:
+        record_action(outcome, "timezone_correction", "TZ")
+    actions = action_summary(outcome)
+    # Failure can mean incomplete acquisition. Never certify group resolution
+    # or advance the successful snapshot from that partial evidence.
+    plan = None if code else plan_action_notification(
+        outcome, os.environ.get("CORPORATE_ACTION_STATE_FILE", "").strip() or None,
+        fingerprint([os.environ.get(key, "") for key in
+                     ("GHOST_HOST", "IBKR_ACCOUNT_IDS", "IBKR_QUERY_IDS", "GHOST_ACCOUNT_NAMES")]),
+        inputs=[Path(value) for key in ("MAPPING_FILE", "ACTIVITY_REVIEW_FILE",
+                                        "CORPORATE_ACTION_STATE_FILE", "CORPORATE_ACTION_EVIDENCE_FILE")
+                if (value := os.environ.get(key, "").strip())])
     corporate = outcome.get("corporate_notification")
-    corporate_due = corporate is not None and bool(corporate["sent"])
+    corporate_due = corporate is not None and any(
+        not record["held"] for record in corporate["sent"].values())
+    if code and corporate is not None:
+        corporate_due = bool(corporate["sent"])
     maintenance_due = outcome.get("corporate_maintenance", False)
-    if code == 0 and not actions and not corporate_due and not maintenance_due and days is None and not preview:
+    if code == 0 and plan is not None and not plan["due"] and not corporate_due and not maintenance_due:
         report_delivery(outcome, "not required")
         return
     label = "Failure" if code else ("Corporate actions" if corporate_due or maintenance_due else
@@ -626,7 +642,10 @@ def _finalize_notification(outcome: RunOutcome, code: int) -> None:
         elif days is not None:
             title, body = TOKEN_EXPIRY_NOTIFY_TITLE, build_token_expiry_summary(days)
         else:
-            title, body = "ghostfolio-ibkr-sync: user action required", "User action required."
+            if plan is not None and plan["cleared"] and not plan["document"]["groups"]:
+                title, body = "ghostfolio-ibkr-sync: user action resolved", "Required actions resolved."
+            else:
+                title, body = "ghostfolio-ibkr-sync: user action required", "User action required."
         if corporate_due and corporate is not None:
             body += "\n" + "\n".join(f"- corporate_actions: {key} ({value})"
                                        for key, value in corporate["counts"].items()
@@ -635,6 +654,9 @@ def _finalize_notification(outcome: RunOutcome, code: int) -> None:
             body += "\n- corporate_actions: maintenance_incomplete (1)"
         if actions:
             body += "\n" + actions
+        if plan is not None:
+            body += "".join(f"\n- {reason} (0): resolved in the current run."
+                            for reason in plan["cleared"])
         from ghostfolio_ibkr_sync.notify import reconciliation_summary
         if outcome.get("reconciliation"):
             body += "\n" + reconciliation_summary(outcome)
@@ -647,7 +669,9 @@ def _finalize_notification(outcome: RunOutcome, code: int) -> None:
                 "invalid_destination": "invalid configuration"}.get(status, "failed")
     report_delivery(outcome, delivery)
     if status == "sent":
-        if corporate_due and corporate is not None:
+        if plan is not None and (plan["document"]["groups"] or plan["cleared"]):
+            confirm_action_notification(plan)
+        if corporate is not None:
             ca.confirm_notification(corporate)
         log.info("%s notification sent", label)
     elif status == "timeout":
