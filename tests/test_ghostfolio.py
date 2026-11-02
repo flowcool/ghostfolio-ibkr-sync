@@ -730,3 +730,19 @@ def test_effective_currency_acceptance_unknown_outcome_never_resends(monkeypatch
     assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
     assert cfg["_uncertain_import_accounts"] == {"synthetic"}
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("code", ["MXN", "TRY", "TWD", "CNY"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_effective_currency_acceptance_outside_reconciliation_allowlist(monkeypatch, code, nullable):
+    from decimal import Decimal
+    candidate = {**import_candidate(), "currency": code}
+    row = created(candidate)
+    row["assetProfile"]["currency"] = code if nullable else "USD"
+    row["currency"] = None if nullable else code
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG}
+    assert ghostfolio.ghost_import_activities(cfg, [candidate]) == ([candidate], True)
+    assert not cfg.get("_uncertain_import_accounts")
+    assert ghostfolio._existing_dividend_amounts(row, row["assetProfile"]) == (
+        Decimal(str(row["quantity"])) * Decimal(str(row["unitPrice"])), code, Decimal(str(row["fee"])))
