@@ -721,7 +721,8 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         assert review.QUALIFIED_EXECUTION is not None
         image, limit, delay = review.QUALIFIED_EXECUTION
         assert image == "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078"
-        assert (limit, delay) == (5, 15.0)
+        assert (limit, delay) == (1, 0.0)
+        assert review.CANDIDATE_EXECUTION == (image, 5, 15.0)
     else:
         # Synthetic larger budgets exercise the generic deferral and pacing logic.
         monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))
@@ -816,6 +817,7 @@ def test_review_acceptance_failure_stops_whole_run_and_fences_cash(tmp_path, mon
     assert app.run_sync(outcome) == 1
     assert server.cash == []
     assert outcome["accounts_failed"] == 0
+    assert outcome["failures"] == [{"stage": "review", "reason": "correction_uncertain", "ordinal": None}]
     assert fetched == ["Q1", "Q2", "Q1", "Q2"]
     assert len(server.writes) == 1
 

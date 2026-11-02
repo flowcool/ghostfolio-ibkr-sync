@@ -1024,11 +1024,17 @@ def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
     return [item for item in selected if item["destination account"] not in blocked], blocked
 
 
-# The candidate permit is bound to the exact destination image. The five-request
+# The currently qualified permit remains the previously proven single correction.
+# The candidate permit is bound to the exact destination image. Its five-request
 # budget and 15-second spacing remain unavailable until the new burst qualification
 # passes on that image; the release gate records the measured values.
 # The connector cannot observe Ghostfolio's internal Bull jobs through its API.
 QUALIFIED_EXECUTION: tuple[str, int, float] | None = (
+    "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078",
+    1,
+    0.0,
+)
+CANDIDATE_EXECUTION: tuple[str, int, float] = (
     "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078",
     5,
     15.0,

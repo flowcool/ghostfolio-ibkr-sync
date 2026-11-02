@@ -2,12 +2,12 @@
 
 ## Runtime contract
 
-Keep `activity_review.QUALIFIED_EXECUTION` as the single image-bound permit:
-`(destination_image, limit, delay_seconds)`. Set the candidate permit to five
-corrections and fifteen seconds. The lab qualification record is the authority
-for activation. Do not read a budget from ENV; a future lower-only setting may
-reduce the count, but it must never increase the count or reduce the qualified
-delay.
+Keep `activity_review.QUALIFIED_EXECUTION` as the active image-bound permit:
+`(destination_image, limit, delay_seconds)`. Keep the proposed five-correction,
+fifteen-second permit in `CANDIDATE_EXECUTION` until the lab qualification
+record authorizes activation. Do not read a budget from ENV; a future
+lower-only setting may reduce the count, but it must never increase the count or
+reduce the qualified delay.
 
 The existing `recovery_read` remains the request completion gate. It performs
 bounded exact reads and records the raw observed result in the v3 journal. The
@@ -21,7 +21,7 @@ writes. The account fence remains in `_review_blocked_accounts`. Later approved
 proposals retain their approval and hold for a later recovery run. A confirmed
 first correction remains confirmed.
 
-The existing outcome path records `review_uncertain`; finalization sends the
+The existing outcome path records `correction_uncertain`; finalization sends the
 single redacted failure notification. Ordinary budget deferral remains silent.
 
 ## Offline destination mock
