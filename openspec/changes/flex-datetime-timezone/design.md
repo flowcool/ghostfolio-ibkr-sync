@@ -29,3 +29,5 @@ Replay copied backup XML offline. Retain inputs and results separately under ign
 Corporate-action Trade readers match the event security by ISIN and contract before parsing dates. CASH/FX rows without an ISIN do not feed these dates. A regression covers a CASH row outside the imported-category G6 bound.
 
 Preserve effective destination currency comparison from the preceding change. Retain journal version 3 and its immutable comparison policy. Same-local-day handling applies only when constructing new proposals; exact journal recovery still compares the full stored instant.
+
+Cash payment instants control the UTC import day. A date-only accrual retains its source calendar day and is associated with the payment source day. Qualified accrual timestamps use the same UTC conversion as the payment. Do not invent a clock or zone for date-only accrual evidence.

@@ -721,3 +721,47 @@ def test_parse_ibkr_datetime_fixed_offsets_and_dst(raw, expected):
 @pytest.mark.parametrize("suffix", ["UTC", "JST", "CET", "America/New_York", "est", "EST5EDT1", "E S T", "+05:00"])
 def test_parse_ibkr_datetime_unknown_qualified_token(suffix):
     assert ibkr.parse_ibkr_datetime("20260113;231127 " + suffix) is None
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("20260118;190000 EST", "2026-01-19T00:00:00+00:00"),  # Tokyo morning
+    ("20260113;231127 EST", "2026-01-14T04:11:27+00:00"),  # New York night
+    ("20260713;203000 EDT", "2026-07-14T00:30:00+00:00"),  # London midnight
+])
+def test_datetime_timezone_chain_consumers(raw, expected):
+    from _sync_helpers import report, trade_xml, div_xml
+    from ghostfolio_ibkr_sync.activity_review import source_events
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+    from test_corporate_actions import action
+    from datetime import datetime, timedelta
+    trade = ibkr.parse_trades(report(trade_xml("TZ", date=raw)))[0]
+    payload = sync.convert_trade_to_activity(trade, "target", {}, {})
+    assert payload["date"] == expected
+    # The corrected day is exactly two days from this entry; the old clock was three away.
+    day = datetime.fromisoformat(expected).date()
+    entry = [(day + timedelta(days=2)).isoformat(), 10, "manual"]
+    assert sync._match_manual_entry(trade, [entry]) == ("match", entry)
+    xml = report(trade_xml("TZ", date=raw), div_xml(date=raw))
+    groups = ibkr.parse_cash_dividends(xml)
+    assert groups[0]["date"] == expected[:10]
+    assert groups[0]["payments"][0]["dateTime"] == raw
+    assert sync._dividend_day(raw) == expected[:10]
+    assert sync.convert_dividend_to_activity(groups[0], "target", {}, {})["date"] == expected[:10] + "T00:00:00+00:00"
+    event = source_events(xml, "U1", "target", {})["IBKR#v2#U1:TRADE:TZ"]
+    assert event["values"]["date"] == expected
+    assert event["source evidence"]["dateTime"] == raw
+    assert "invalid_processing_time" not in ca.event_inventory([action(dateTime=raw)])["reasons"]
+
+
+
+@pytest.mark.parametrize("accrual_day,accepted", [
+    ("20260113", True), ("2026-01-13", True),
+    ("20260113;231127 EST", True), ("20260114", False),
+    ("20260112", False), ("20260113;231127 JST", False),
+])
+def test_datetime_timezone_chain_accrual_day_evidence(accrual_day, accepted):
+    from _sync_helpers import report, div_xml
+    group = ibkr.parse_cash_dividends(report(divs=div_xml(date="20260113;231127 EST")))[0]
+    for field in ("payDate", "date", "reportDate"):
+        group["accruals"][0][field] = accrual_day
+    assert (sync.dividend_action_quantities(group) is not None) is accepted

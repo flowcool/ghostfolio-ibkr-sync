@@ -1662,3 +1662,30 @@ def test_operator_action_corporate_repeats_with_review_and_fingerprint_loss(monk
     assert len(sent) == 2
     assert all("corporate_action (1)" in body and "review_approval (1)" in body for body in sent)
     assert all("PRIVATE" not in body and "EVENT1" not in body and str(tmp_path) not in body for body in sent)
+
+
+def test_datetime_timezone_chain_cash_rows_never_feed_corporate_action_dates(monkeypatch):
+    from copy import deepcopy
+    from datetime import datetime
+    from ghostfolio_ibkr_sync import corporate_actions as ca
+    from ghostfolio_ibkr_sync.ibkr import parse_ibkr_datetime
+    reports, mapping, snapshot, evidence, proofs = reverse_case()
+    baseline = ca.decide(reports, "SOURCE", "TARGET", mapping, snapshot, evidence, proofs)
+    events = reports[0]["events"]
+    dates = {"EVENT1": "2025-03-27"}
+    chain = ca.source_chain(reports, events, "SAMPLE.T", mapping, dates)
+    history = ca.history_conclusion(reports, snapshot, "SAMPLE.T", "TARGET", mapping)
+    raw = "20250404;190000 EDT"
+    assert abs((datetime.fromisoformat(parse_ibkr_datetime(raw)).date()
+                - datetime(2025, 4, 7).date()).days) > 1
+    modified = deepcopy(reports)
+    modified[0]["trades"].append({"assetCategory": "CASH", "symbol": "USD.JPY", "conid": "FX",
+        "accountId": "SOURCE", "tradeID": "FX-EXCLUDED", "buySell": "BUY", "quantity": "1",
+        "tradePrice": "1", "currency": "JPY", "dateTime": raw, "tradeDate": "20250407"})
+    def guarded(value):
+        assert value != raw, "Excluded FX row reached the corporate-action date parser"
+        return parse_ibkr_datetime(value)
+    monkeypatch.setattr(ca, "parse_ibkr_datetime", guarded)
+    assert ca.source_chain(modified, events, "SAMPLE.T", mapping, dates) == chain
+    assert ca.decide(modified, "SOURCE", "TARGET", mapping, snapshot, evidence, proofs) == baseline
+    assert ca.history_conclusion(modified, snapshot, "SAMPLE.T", "TARGET", mapping) == history
