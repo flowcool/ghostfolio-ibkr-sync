@@ -2075,3 +2075,28 @@ def test_operator_action_result_early_failure_has_no_invented_zeros(monkeypatch,
     assert "Cycle result: failure" in caplog.text
     assert "imports=unavailable" in caplog.text and "cash=unavailable" in caplog.text
     assert "notification=disabled" in caplog.text
+
+
+@pytest.mark.parametrize("tag", ["Trade", "CashTransaction", "ChangeInDividendAccrual", "CorporateAction"])
+@pytest.mark.parametrize("suffix", ["JST", "UTC", "EST5EDT1", "E S T", "+05:00"])
+def test_historical_diagnostic_preflight_unknown_token_blocks_every_write(monkeypatch, tag, suffix):
+    root = ET.fromstring(report(trades=trade_xml("T1"), divs=div_xml()))
+    statement = root.find(".//FlexStatement")
+    row = ET.SubElement(statement, tag, dateTime="20260113;231127 " + suffix)
+    if tag == "CashTransaction":
+        row.set("type", "Other Fees")  # No suffix required, but unknown tokens still fail.
+    w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
+    def denied(*args, **kwargs):
+        raise AssertionError("Unexpected HTTP request, including platform update")
+    monkeypatch.setattr(requests.sessions.Session, "request", denied)
+    cfg = {**CFG, "ghost_platform_id": "synthetic-platform"}
+    assert app.process_account(cfg, "U1", "q1", "IBKR", {}, set(), set(), positions()) == ({}, False)
+    assert w.imported == [] and w.cash_calls == []
+    assert cfg["dry_run"] is False
+
+
+@pytest.mark.parametrize("tag", ["Trade", "CashTransaction", "ChangeInDividendAccrual", "CorporateAction"])
+@pytest.mark.parametrize("raw", ["20260113;231127 EST", "20260713;231127 EDT", "20260113;231127", "2026-01-13, 23:11:27"])
+def test_historical_diagnostic_preflight_supported_tokens_and_legacy_forms(tag, raw):
+    xml = f'<FlexQueryResponse><{tag} dateTime="{raw}"/></FlexQueryResponse>'
+    assert ibkr.flex_provenance_failures(xml) == {}

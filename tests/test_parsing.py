@@ -111,8 +111,8 @@ def test_parse_cash_report_missing_or_invalid_is_none(xml):
     ("20260801", "2026-08-01T00:00:00+00:00"),
     ("2026-08-01", "2026-08-01T00:00:00+00:00"),
     (" 20260801 ", "2026-08-01T00:00:00+00:00"),
-    ("20260115;093000 EST", "2026-01-15T09:30:00+00:00"),
-    ("20260715;093000 EDT", "2026-07-15T09:30:00+00:00"),
+    ("20260115;093000 EST", "2026-01-15T14:30:00+00:00"),
+    ("20260715;093000 EDT", "2026-07-15T13:30:00+00:00"),
 ])
 def test_parse_ibkr_datetime_formats(raw, iso):
     assert ibkr.parse_ibkr_datetime(raw) == iso
@@ -120,8 +120,8 @@ def test_parse_ibkr_datetime_formats(raw, iso):
 
 @pytest.mark.parametrize("raw,iso", [
     ("20260801;143000", "2026-08-01T14:30:00+00:00"),
-    ("20260115;093000 EST", "2026-01-15T09:30:00+00:00"),
-    ("20260715;093000 EDT", "2026-07-15T09:30:00+00:00"),
+    ("20260115;093000 EST", "2026-01-15T14:30:00+00:00"),
+    ("20260715;093000 EDT", "2026-07-15T13:30:00+00:00"),
 ])
 def test_historical_diagnostic_parser(raw, iso):
     assert ibkr.parse_ibkr_datetime(raw) == iso
@@ -701,3 +701,23 @@ def test_v2_event_partition_withholding_cannot_escape_into_tax_only_group(tax_ov
     assert sync.convert_dividend_actions(payment_group, "ghost-account", {}, {}, groups) == ([], False)
     [tax_only] = [group for group in groups if not group["payments"]]
     assert sync.dividend_dedup_decision(tax_only, "ghost-account", {}, {}, set())[0] == "not_payable"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("20260113;231127 EST", "2026-01-14T04:11:27+00:00"),
+    ("20260713;231127 EDT", "2026-07-14T03:11:27+00:00"),
+    ("20260308;015900 EST", "2026-03-08T06:59:00+00:00"),
+    ("20260308;030000 EDT", "2026-03-08T07:00:00+00:00"),
+    ("20261101;013000 EDT", "2026-11-01T05:30:00+00:00"),
+    ("20261101;013000 EST", "2026-11-01T06:30:00+00:00"),
+    # Explicit offsets apply even to wall times that an IANA zone would reject.
+    ("20260308;023000 EST", "2026-03-08T07:30:00+00:00"),
+    ("20260308;023000 EDT", "2026-03-08T06:30:00+00:00"),
+])
+def test_parse_ibkr_datetime_fixed_offsets_and_dst(raw, expected):
+    assert ibkr.parse_ibkr_datetime(raw) == expected
+
+
+@pytest.mark.parametrize("suffix", ["UTC", "JST", "CET", "America/New_York", "est", "EST5EDT1", "E S T", "+05:00"])
+def test_parse_ibkr_datetime_unknown_qualified_token(suffix):
+    assert ibkr.parse_ibkr_datetime("20260113;231127 " + suffix) is None

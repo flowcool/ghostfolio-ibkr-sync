@@ -2,8 +2,8 @@
 
 ## 1. Parser contract
 
-- [ ] 1.1 Update the parser contract and offline tests. Accept only EST=-05:00 and EDT=-04:00 as query account timezone tokens. Use no IANA lookup for source tokens. Test midnight rollover, unqualified legacy compatibility, invalid and unknown tokens. Add fixtures for 2026-03-08 before and after the EST/EDT flip and 2026-11-01 with both tokens for the repeated hour. Verify with `python -m pytest -q tests/test_parsing.py -k datetime` (G1).
-- [ ] 1.2 Extend the existing cash preflight to reject any unknown qualified token on Trade, CashTransaction, ChangeInDividendAccrual and CorporateAction. Prove account failure before all financial writes, including cash and platform updates, without forcing `DRY_RUN`. Retain existing cash suffix prerequisites and supported unqualified legacy forms. Verify with `python -m pytest -q tests/test_orchestration.py -k historical_diagnostic_preflight`.
+- [x] 1.1 Update the parser contract and offline tests. Accept only EST=-05:00 and EDT=-04:00 as query account timezone tokens. Use no IANA lookup for source tokens. Test midnight rollover, unqualified legacy compatibility, invalid and unknown tokens. Add fixtures for 2026-03-08 before and after the EST/EDT flip and 2026-11-01 with both tokens for the repeated hour. Verify with `python -m pytest -q tests/test_parsing.py -k datetime` (G1).
+- [x] 1.2 Extend the existing cash preflight to reject any unknown qualified token on Trade, CashTransaction, ChangeInDividendAccrual and CorporateAction. Prove account failure before all financial writes, including cash and platform updates, without forcing `DRY_RUN`. Retain existing cash suffix prerequisites and supported unqualified legacy forms. Verify with `python -m pytest -q tests/test_orchestration.py -k historical_diagnostic_preflight`.
 
 ## 2. Consumer chain
 
