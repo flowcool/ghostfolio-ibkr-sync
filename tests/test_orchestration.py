@@ -1059,8 +1059,9 @@ def test_short_acceptance_does_not_inflate_later_account_holdings(monkeypatch):
     assert w.pos["qty"][(ACC, "KO")] == 10
 
 
-def test_v2_accepted_state_short_import_acceptance_keeps_proven_buys_and_continues_safely(
-        env, caplog):
+@pytest.mark.parametrize("nullable", [False, True])
+def test_effective_currency_acceptance_short_import_keeps_proven_buys_and_continues_safely(
+        env, caplog, nullable):
     from types import SimpleNamespace
 
     env.setenv("GHOST_ACCOUNT_NAMES", "A,B")
@@ -1087,7 +1088,8 @@ def test_v2_accepted_state_short_import_acceptance_keeps_proven_buys_and_continu
         accepted = activities[:1] if len(batches) == 1 else activities
         rows = [
             {**activity, "id": f"created-{activity['comment']}",
-             "assetProfile": {"symbol": activity["symbol"],
+             "currency": None if nullable else activity["currency"],
+             "assetProfile": {"symbol": activity["symbol"], "currency": activity["currency"],
                               "dataSource": activity["dataSource"]}}
             for activity in accepted
         ]

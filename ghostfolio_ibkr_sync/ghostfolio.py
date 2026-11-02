@@ -500,9 +500,11 @@ def accepted_import_subset(
                 if (isinstance(value, bool) or not isinstance(value, (int, float))
                         or not isfinite(value) or value < 0):
                     raise RuntimeError("Accepted activity has invalid financial evidence")
-        for field in ("type", "quantity", "unitPrice", "fee", "currency"):
+        for field in ("type", "quantity", "unitPrice", "fee"):
             if row.get(field) != original.get(field):
                 raise RuntimeError("Accepted activity differs from submitted financial evidence")
+        if effective_currency(row)["effective"] != original.get("currency") or not original.get("currency"):
+            raise RuntimeError("Accepted activity lacks matching proven currency evidence")
         seen.add(key)
         created_ids.add(row["id"])
         accepted.append({**original, "symbol": profile["symbol"]})

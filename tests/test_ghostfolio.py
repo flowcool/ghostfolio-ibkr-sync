@@ -706,3 +706,27 @@ def test_effective_currency_resolution_missing_is_not_null():
     row = activity()
     row["assetProfile"]["currency"] = "USD"
     assert ghostfolio.effective_currency(row)["effective"] is None
+
+
+@pytest.mark.parametrize("raw,profile_code,accepted", [(None, "KRW", True), ("KRW", "USD", True), ("KRW", "KRW", True), (None, None, False), (None, "USD", False), ("GBp", "KRW", False)])
+def test_effective_currency_acceptance_exact_created_evidence(raw, profile_code, accepted):
+    candidate = {**import_candidate(), "currency": "KRW"}
+    row = created(candidate)
+    row["currency"] = raw
+    row["assetProfile"]["currency"] = profile_code
+    if accepted:
+        assert ghostfolio.accepted_import_subset([candidate], {"activities": [row]}) == [candidate]
+    else:
+        with pytest.raises(RuntimeError, match="currency evidence"):
+            ghostfolio.accepted_import_subset([candidate], {"activities": [row]})
+
+
+def test_effective_currency_acceptance_unknown_outcome_never_resends(monkeypatch):
+    calls = []
+    row = created(import_candidate())
+    row["currency"] = None
+    monkeypatch.setattr(requests, "post", lambda *a, **k: calls.append(k) or Resp({"activities": [row]}, 201))
+    cfg = {**CFG}
+    assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
+    assert cfg["_uncertain_import_accounts"] == {"synthetic"}
+    assert len(calls) == 1
