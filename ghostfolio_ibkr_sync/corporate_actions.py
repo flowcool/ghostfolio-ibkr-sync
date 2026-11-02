@@ -67,7 +67,7 @@ def number(value: object) -> Decimal:
         if not result.is_finite():
             raise ValueError
         return result
-    except DecimalException, ValueError:
+    except (DecimalException, ValueError):
         raise RuntimeError("Invalid corporate-action decimal") from None
 
 
@@ -1535,7 +1535,7 @@ def plan_notifications(
             safe_path(path, [])
             original = file_bytes(path)
             previous = notification_document(original)["deliveries"]
-        except RuntimeError, OSError:
+        except (RuntimeError, OSError):
             # Losing only delivery state repeats eligible findings, never holds.
             log.warning(
                 "Corporate-action delivery state unavailable; eligible notices may repeat"
@@ -1614,7 +1614,7 @@ def confirm_notification(plan: NotificationPlan) -> bool:
         doc["deliveries"].update(plan["sent"])
         atomic_yaml(path, doc)
         return True
-    except RuntimeError, OSError:
+    except (RuntimeError, OSError):
         log.warning(
             "Corporate-action delivery was not recorded; notices remain eligible"
         )
@@ -1678,5 +1678,5 @@ def history_conclusion(
             if source_cost == destination_cost and source_days == stored_days
             else "bounded_cost_dates_differ"
         )
-    except RuntimeError, KeyError, DecimalException:
+    except (RuntimeError, KeyError, DecimalException):
         return "missing_proof"

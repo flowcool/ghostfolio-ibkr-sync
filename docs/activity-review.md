@@ -45,13 +45,17 @@ Exact journal recovery still compares the full instant, including intraday drift
 
 Review dispatch is qualified for Ghostfolio image
 `sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`
-with **at most one correction per connector run**, across all configured accounts.
-Other approved proposals remain unchanged for later runs and keep their import
-holds. The zero inter-correction delay is unused with this single-correction
-limit; it does not certify immediate repeated runs or background completion.
-Verify the destination image before enabling review. A different image requires
-renewed qualification. No ENV setting changes this budget. Production activation
-and stable publication retain their separate approval. See
+with a **candidate limit of five corrections per connector run**, across all
+configured accounts, and a **candidate minimum delay of 15 seconds** between
+confirmed corrections. These values are not qualified until the exact image
+passes the burst lab gate. Other approved proposals remain unchanged for later
+runs and keep their import holds. Each PUT needs exact readback before the next
+PUT. Ghostfolio 3.96.0 exposes no completion signal through the activity API.
+The delay is the connector's qualified pacing gate. Verify the destination image
+before enabling review. A different image requires renewed qualification. No ENV
+setting changes the qualified ceiling. A lower-only setting may be added only by
+a later approved change. Production activation and stable publication retain
+their separate approval. See
 [qualification evidence and limits](releasing.md#activity-review-qualification).
 
 ## Configure persistent review
@@ -251,7 +255,10 @@ restore current source and destination proof. `yes` cannot make blocked work
 executable. Historical maintenance needs the documented preparation and separate
 operation authorization; normal sync cannot execute it. For an uncertain request,
 inspect the preserved journal and exact destination readback. Do not resend,
-delete or edit the journal to release a hold. Use `decision: reject` for a false association. Cleanup retains separate authority.
+delete or edit the journal to release a hold. The first failed or uncertain
+correction stops the whole financial run. Later approved corrections remain
+deferred. Use `decision: reject` for a false association. Cleanup retains
+separate authority.
 
 
 ## Activity review journals
@@ -368,8 +375,9 @@ references, restart recovery, private-state recovery and no repeated writes.
 Offline tests and the existing destination budget do not qualify a new image.
 A failed preservation case keeps affected corrections unavailable.
 
-Profiles and manual consent share the qualified limit of one PUT per run.
-A reference migration consumes that same limit. The next financial correction
+Profiles and manual consent share the digest-bound qualified limit. The current
+candidate is five PUTs per run with a 15-second minimum delay. A reference
+migration consumes that same limit. The next financial correction
 uses a fresh revision after confirmed migration. Oldest first-eligible revisions
 run first. Remaining eligible work retains its hold for later normal cycles.
 Do not force reruns or approve deferred work again.
@@ -412,7 +420,9 @@ override stays in effect, even when it differs from the profile currency. Real
 currency differences remain visible. GBP and GBp remain distinct denominations.
 Legacy reference migration changes only the comment and preserves raw currency.
 Currency proof does not prove source completeness, identity, dates or amounts.
-The profile limits and the shared budget of one correction per run stay fixed.
+The profile limits and the shared digest-bound budget stay fixed. A failed or
+uncertain correction stops the whole financial run. Preserve the v3 journal and
+resolve it with exact expected-after evidence before another write.
 
 ### Journal compatibility and rollback
 
