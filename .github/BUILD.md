@@ -10,10 +10,14 @@ moderate or worse dependency vulnerabilities, including development scope.
 The native CodeQL merge rule rejects new medium or worse security findings
 and error-level findings; a successful analysis alone is insufficient.
 The mandatory checks must pass before merging.
+CI does not replace the risk-based [pre-merge lab gate](../CONTRIBUTING.md#scope-and-lab-gates).
+Every release also needs both lab scenarios on its exact digest. Promote that
+digest without a rebuild. Reuse pre-merge proof only for identical digests.
 
 `docker-publish.yml` validates main, staging, tag pushes, pull requests and
 manual runs without publishing. Builds for the same ref are serialized.
-The Python base is pinned by its multiarchitecture digest; Dependabot proposes reviewed Docker digest updates.
+The Python base is pinned by its multiarchitecture digest. Renovate proposes
+ordinary Docker digest updates. Dependabot owns security updates.
 A weekly `main` run pulls that pinned base and rebuilds without cache, then runs
 the same isolated runtime checks and security scans on both native architectures.
 It does not advance the base digest or publish an image; base-image fixes require
@@ -22,12 +26,11 @@ fail CI. The supercronic binary is excluded from the blocking scan and remains
 covered by a separate advisory scan that never blocks.
 
 Requirements pin the complete dependency closure with sha256 hashes, installed with
-`pip --require-hashes`. Once enabled for this
-repository, Renovate proposes weekly Python, GitHub Actions and Docker updates
+`pip --require-hashes`. Renovate proposes weekly Python, GitHub Actions and Docker updates
 after 14 days for Python and 3 days for Actions and images. Major updates require
 Dependency Dashboard approval; merges stay manual. Dependabot owns security
-alerts and repair PRs. Its ordinary update limits become zero after the
-Dependency Dashboard is open. Supercronic is a separate upstream binary:
+alerts and repair PRs. Its ordinary update limits are zero.
+Supercronic is a separate upstream binary:
 updating its version also requires both architecture checksums. Never auto-merge
 dependency changes without the required checks.
 
@@ -68,7 +71,7 @@ A published, non-draft GitHub prerelease with an exact `vX.Y.Z-rc.N` tag
 checks and publication guard. It never creates or moves `latest`, `X.Y.Z` or
 `X.Y`. A stable `vX.Y.Z` is refused unless it is on the commit of its highest
 RC, when one exists. RC tags are not for normal use; see
-[Releasing](../docs/releasing.md#release-candidate-optional).
+[Releasing](../docs/releasing.md#release-candidate).
 
 Weekly security checks do not refresh tags. Maintainers must merge fixes and
 select a new release; compatibility-neutral security fixes increment PATCH.
@@ -76,6 +79,9 @@ A rerun refuses an existing version even if its `latest` promotion failed.
 Explicit recovery may promote only the verified manifest digest of the current
 stable release, as described in [Releasing](../docs/releasing.md#recover-a-failed-latest-promotion).
 Publication does not deploy or recreate a running container.
+Connector delivery ends with the qualified immutable digest and its evidence.
+Infra owns managed production deployment, image pins and schedules. Infra also
+owns the shared lab runner and its runbook; this project owns connector lab tests.
 
 ## Rollback
 
