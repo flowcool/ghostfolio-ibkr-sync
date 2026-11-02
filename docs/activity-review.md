@@ -22,6 +22,25 @@ preserved user notes, even after review is disabled.
 See [proposal review](#review-a-proposal), [approval](#decide-on-a-proposal) and
 [execution paths](#choose-the-execution-path).
 
+## Compare dates
+
+Review converts qualified Flex timestamps to UTC with the fixed EST/EDT offset.
+It then compares source and destination calendar days in configured `TZ`.
+Different times on the same local day produce no date proposal.
+Other approved field updates and comment-only migrations preserve the stored instant.
+For example, `00:00Z` and `07:03Z` on 19 January have the same day in `Europe/Paris`.
+
+A different local day is a date difference. It excludes comment-only migration.
+Conservative and balanced profiles require the same local day for correction.
+Permissive allows two days for BUY/SELL and three days for DIVIDEND, including weekends.
+Source text, source day, source token, UTC instants and local-day evidence stay visible.
+The event-only `IBKR#v2` identity does not change with the date.
+
+Normal sync does not rewrite stored activities.
+Historical date repair uses the existing reviewed correction path after release.
+It requires separate operator authority, backup, a durable journal and exact readback.
+Exact journal recovery still compares the full instant, including intraday drift.
+
 ## Safety limits
 
 Review dispatch is qualified for Ghostfolio image

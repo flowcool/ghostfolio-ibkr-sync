@@ -700,7 +700,9 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
                         "conservative", source["date"], current["date"], source["type"], timezone)
                     if same_day:
                         edges[event_id, row["id"]] = {"numeric evidence": {}, "profile date context": context}
-                    continue
+                        continue
+                    # A different day needs the complete financial correction
+                    # checks below, never comment-only mapping authority.
                 date_ok, date_context = reconciliation_rules.date_eligible(name, source["date"], current["date"], source["type"], timezone)
                 numbers = reconciliation_rules.numeric_evidence(event, current)
                 quantity_ok = (numeric(source["quantity"]) == numeric(current["quantity"])
@@ -827,9 +829,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 legacy_trade = marker_of(row) in event["legacy"] and event["values"]["type"] != "DIVIDEND"
                 legacy_dividend = (marker_of(row) in event["legacy"] and event["values"]["type"] == "DIVIDEND"
                                    and (event["legacy safe"] or (event_id, row["id"]) in migration_pairs))
-                if (legacy_trade or legacy_dividend) and not same_day:
-                    raise RuntimeError("Different local day requires reviewed date correction before identity migration")
-                if legacy_trade or legacy_dividend:
+                if (legacy_trade or legacy_dividend) and same_day:
                     proposed = {**current, "comment": proposed["comment"]}
                 changes = changed_fields(current, proposed)
                 payload = update_payload(row, proposed)

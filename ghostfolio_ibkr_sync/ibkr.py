@@ -65,6 +65,11 @@ DIVIDEND_FIELD_NAMES = {
 }
 
 FLEX_SUFFIX_PATTERN = re.compile(r"^\d{8};\d{6}\s+[A-Za-z]{2,5}$")
+# A token must follow a recognizable source clock. An invalid unqualified row
+# retains its existing converter rejection; it is not an unknown-zone failure.
+FLEX_QUALIFIED_PATTERN = re.compile(
+    r"^(?:\d{8}(?:;\d{6})?|\d{4}-\d{2}-\d{2}(?:[,;]\s*\d{2}:\d{2}:\d{2})?)"
+    r"(?:\s+\S|[A-Za-z])")
 
 
 class DividendGroup(TypedDict):
@@ -432,9 +437,13 @@ def flex_provenance_failures(xml_text: str) -> dict[str, int]:
                          and row.get("type") in (*DIVIDEND_CASH_TYPES, WITHHOLDING_CASH_TYPE)
                          and row.get("levelOfDetail", "DETAIL").upper() == "DETAIL")
         # Include malformed/unknown suffixes. No source token may be guessed.
-        qualified = bool(re.search(r"[A-Za-z]|\d\s+\S", date_time))
-        if ((required_cash and not FLEX_SUFFIX_PATTERN.fullmatch(date_time))
-                or ((required_cash or qualified) and parse_ibkr_datetime(date_time) is None)):
+        clocks = [date_time]
+        if el.tag == "ChangeInDividendAccrual":
+            clocks.extend(row.get(field, "").strip() for field in ("date", "payDate", "reportDate"))
+        unsupported = any(FLEX_QUALIFIED_PATTERN.match(clock)
+                          and parse_ibkr_datetime(clock) is None for clock in clocks)
+        if (unsupported or (required_cash and (not FLEX_SUFFIX_PATTERN.fullmatch(date_time)
+                                               or parse_ibkr_datetime(date_time) is None))):
             kind = row.get("type", "CashTransaction") if el.tag == "CashTransaction" else el.tag
             failures[kind] = failures.get(kind, 0) + 1
     return failures

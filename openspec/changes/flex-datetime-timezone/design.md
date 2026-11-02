@@ -2,7 +2,7 @@
 
 ## Context
 
-See `proposal.md`. `parse_ibkr_datetime` in `ibkr.py` strips the Flex suffix and labels wall time as UTC. Saved query 1671605 contains 105 qualified rows with EST or EDT. The suffix identifies the query account timezone, not the exchange timezone.
+See `proposal.md`. `parse_ibkr_datetime` in `ibkr.py` strips the Flex suffix and labels wall time as UTC. A saved query contains 105 qualified rows with EST or EDT. The suffix identifies the query account timezone, not the exchange timezone.
 
 ## Goals / Non-Goals
 

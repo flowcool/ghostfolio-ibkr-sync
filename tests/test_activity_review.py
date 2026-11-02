@@ -1531,8 +1531,9 @@ def test_timezone_migration_different_local_day_requires_correction(name):
     proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation=name,
                                            timezone="Europe/Paris")
     item = next(iter(proposals.values()))
-    assert not item["actionable"] and not item["automatic eligible"]
-    assert "Different local day" in item["status"]
+    assert item["actionable"] and item["automatic eligible"] is (name == "permissive")
+    assert item["changed fields"] == ["comment", "date"]
+    assert item["section"] == "activity_corrections"
     assert "date" in item["diagnostic differences"]
 
 
@@ -1578,3 +1579,31 @@ def test_timezone_review_same_utc_day_different_local_days_proposes_date():
     assert item["changed fields"] == ["date"] and not item["automatic eligible"]
     assert item["date context"]["source local date"] == "2026-01-19"
     assert item["date context"]["destination local date"] == "2026-01-20"
+
+
+def test_review_replacement_timezone_different_day_uses_existing_financial_path(tmp_path, monkeypatch):
+    events = source_events(report(trade_xml("T1", date="20260118;190000 EST")))
+    row = destination("IBKR#T1", date="2026-01-20T07:03:00Z", quantity=Decimal("10"))
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+           "activity_review_file": str(path)}
+    try:
+        review.process_review(state, cfg, events, {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert item["changed fields"] == ["comment", "date"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, cfg, events, {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+        assert server.rows[0]["date"] == "2026-01-19T00:00:00+00:00"
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["status"] == "confirmed"
+        assert review.instant(entry["before"]["date"]) == review.instant(row["date"])
+        assert review.row_matches(entry["after"], server.rows[0])
+    finally:
+        review.close_review(state)

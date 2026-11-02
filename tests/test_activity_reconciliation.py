@@ -950,6 +950,9 @@ def test_effective_currency_replay(tmp_path, monkeypatch):
     for index, item in enumerate(references.values()):
         source = deepcopy(item["proposed"])
         source.update({field: difference["source"] for field, difference in item["observed differences"].items()})
+        # This synthetic currency control deliberately satisfies the independent
+        # local-day gate. The Flex timezone replay tests actual source clocks.
+        source["date"] = item["current"]["date"]
         kind = "DIVIDEND" if item["type"] == "DIVIDEND" else "TRADE"
         marker = f"IBKR#v2#synthetic:{kind}:R{index}"
         source["comment"] = marker

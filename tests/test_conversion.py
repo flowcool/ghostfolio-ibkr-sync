@@ -22,7 +22,8 @@ def div(**kw):
     d.update(kw)
     keys = {"accountId": "broker-account", "conid": "1", "currency": d["currency"],
             "actionID": "A1", "exDate": "20260701"}
-    payment = dict(keys, type="Dividends", amount=str(d["amount"]))
+    payment = dict(keys, type="Dividends", amount=str(d["amount"]),
+                   dateTime=d["date"].replace("-", "") + ";120000 EST")
     d["payments"] = [payment]
     d["cash_rows"] = [payment, {"type": "Withholding Tax", "currency": d["currency"],
                                "amount": str(d["tax"])}]

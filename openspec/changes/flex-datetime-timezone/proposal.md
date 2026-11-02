@@ -39,6 +39,6 @@ Affected code is `parse_ibkr_datetime` and all callers in `ibkr.py`, `sync.py`, 
 
 ## Non-goals
 
-This revision includes no historical write, Ghostfolio write, production service access, release, push, or sibling DEGIRO change. It defines a minor release for implementation. The release note must state that new activities get corrected instants and no stored activity is rewritten. The PR flags downstream propagation only if a shared helper changes; `parse_ibkr_datetime` is IBKR-specific.
+This revision includes no historical write, Ghostfolio write, production service access, release, or sibling DEGIRO change. It defines a minor release for implementation. The release note must state that new activities get corrected instants and no stored activity is rewritten. The PR flags downstream propagation only if a shared helper changes; `parse_ibkr_datetime` is IBKR-specific.
 
 Corporate-action Trade readers match the event security by ISIN and contract before parsing dates. CASH/FX rows without an ISIN do not feed these dates. A regression covers a CASH row outside the imported-category G6 bound.

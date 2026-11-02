@@ -2077,12 +2077,15 @@ def test_operator_action_result_early_failure_has_no_invented_zeros(monkeypatch,
     assert "notification=disabled" in caplog.text
 
 
-@pytest.mark.parametrize("tag", ["Trade", "CashTransaction", "ChangeInDividendAccrual", "CorporateAction"])
+@pytest.mark.parametrize("tag,field", [("Trade", "dateTime"), ("CashTransaction", "dateTime"),
+    ("CorporateAction", "dateTime"), ("ChangeInDividendAccrual", "dateTime"),
+    ("ChangeInDividendAccrual", "date"), ("ChangeInDividendAccrual", "payDate"),
+    ("ChangeInDividendAccrual", "reportDate")])
 @pytest.mark.parametrize("suffix", ["JST", "UTC", "EST5EDT1", "E S T", "+05:00"])
-def test_historical_diagnostic_preflight_unknown_token_blocks_every_write(monkeypatch, tag, suffix):
+def test_historical_diagnostic_preflight_unknown_token_blocks_every_write(monkeypatch, tag, field, suffix):
     root = ET.fromstring(report(trades=trade_xml("T1"), divs=div_xml()))
     statement = root.find(".//FlexStatement")
-    row = ET.SubElement(statement, tag, dateTime="20260113;231127 " + suffix)
+    row = ET.SubElement(statement, tag, **{field: "20260113;231127 " + suffix})
     if tag == "CashTransaction":
         row.set("type", "Other Fees")  # No suffix required, but unknown tokens still fail.
     w = World(monkeypatch, ET.tostring(root, encoding="unicode"))
@@ -2099,4 +2102,10 @@ def test_historical_diagnostic_preflight_unknown_token_blocks_every_write(monkey
 @pytest.mark.parametrize("raw", ["20260113;231127 EST", "20260713;231127 EDT", "20260113;231127", "2026-01-13, 23:11:27"])
 def test_historical_diagnostic_preflight_supported_tokens_and_legacy_forms(tag, raw):
     xml = f'<FlexQueryResponse><{tag} dateTime="{raw}"/></FlexQueryResponse>'
+    assert ibkr.flex_provenance_failures(xml) == {}
+
+
+@pytest.mark.parametrize("tag", ["Trade", "CashTransaction", "ChangeInDividendAccrual", "CorporateAction"])
+def test_historical_diagnostic_preflight_invalid_unqualified_row_keeps_existing_rejection(tag):
+    xml = f'<FlexQueryResponse><{tag} dateTime="garbage"/></FlexQueryResponse>'
     assert ibkr.flex_provenance_failures(xml) == {}

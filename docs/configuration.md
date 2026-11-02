@@ -93,7 +93,7 @@ All configuration is done via environment variables:
 | `ACTIVITY_REVIEW_FILE` | No | Persistent activity review YAML path. | `/review/activities.yaml` | Empty; review disabled |
 | `ACTIVITY_RECONCILIATION` | No | Correction profile: `off`, `conservative`, `balanced`, or `permissive`. Requires a persistent review file when enabled. | `balanced` | `off` |
 | `CRON` | No | Five-field Docker schedule. | `0 6 * * *` | Empty; one immediate run |
-| `TZ` | For writes | Valid IANA timezone for dividend dates and scheduling. | `Europe/Paris` | Empty; writes force simulation |
+| `TZ` | For writes | Valid IANA timezone for local business dates, review and scheduling. | `Europe/Paris` | Empty; writes force simulation |
 | `LOG_LEVEL` | No | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. | `INFO` | `INFO` |
 | `APPRISE_URLS` | No | JSON list of Apprise notification URLs. | `[]` | Empty; notifications disabled |
 | `APPRISE_TIMEOUT` | No | Notification timeout in seconds, from 1 to 30. | `10` | `10` |
@@ -364,12 +364,23 @@ in simulation. A deliberate clean simulation alone sends no notification. Failed
 configured Failure notification. After review, set `DRY_RUN=false` and retain
 valid `TZ` to permit writes.
 
+Flex timezone tokens describe the query account clock, not the exchange clock.
+The connector accepts only `EST` (UTC-05:00) and `EDT` (UTC-04:00).
+It applies these fixed offsets even on US clock-change days.
+For example, `20260113;231127 EST` becomes `2026-01-14T04:11:27+00:00`.
+The configured `TZ` controls local-day comparison and scheduling.
+It does not interpret a source token.
+
 Every DETAIL dividend, payment-in-lieu and withholding cash row must have
-`dateTime` in `YYYYMMDD;HHmmss TimeZone` form, for example
-`20260115;120000 EST` or `20260715;120000 EDT`. A missing or invalid suffix
-fails the affected account before any import, cash or platform write. It does
-not enable `DRY_RUN`; other accounts retain their configured mode. Other cash
-types are outside this check. Follow the [staged activation and rollback
+`dateTime` in `YYYYMMDD;HHmmss TimeZone` form.
+A missing or invalid suffix fails the affected account before any import,
+cash or platform write. An unknown qualified token on Trade, CashTransaction,
+ChangeInDividendAccrual or CorporateAction also fails the account.
+This failure does not enable `DRY_RUN`; other accounts retain their configured mode.
+Other cash types and SUMMARY rows do not require a suffix.
+Supported unqualified legacy timestamps keep their UTC interpretation.
+Date-only accrual evidence retains its source day for association with payments.
+Follow the [staged activation and rollback
 procedure](ibkr-setup.md#activate-timezone-aware-dividend-diagnostics).
 
 Every dry run also compares historical dividends in the target account before deduplication.
