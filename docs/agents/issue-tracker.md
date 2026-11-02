@@ -2,6 +2,16 @@
 
 Issues and specs for this repository live in the shared Beads database. Scope every query and mutation to `project=ghostfolio-ibkr-sync`.
 
+## Ownership routing
+
+Follow [Project boundaries](../../AGENTS.md#project-boundaries-florent-2026-10-30).
+Keep connector code, spec, lab tests, PRs, releases and approved Ghostfolio
+financial operations here. Route managed deployment, image pins, schedules,
+host files, production secrets and shared lab-runner defects to `project=infra`.
+Search the owner's open issues first. Reuse an existing owner or create a
+self-contained issue with evidence and acceptance. Link it as `related`.
+Do not edit another project's runtime or tooling to complete connector work.
+
 ## Conventions
 
 - **List open work**: `bd list --status=open --metadata-field project=ghostfolio-ibkr-sync`

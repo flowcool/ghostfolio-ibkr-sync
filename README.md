@@ -150,6 +150,9 @@ release history and artifacts. [Changelog](CHANGELOG.md) links there too.
 
 See [Contributing](CONTRIBUTING.md) for development, architecture and releases.
 Docker is the supported runtime.
+The connector project owns code, specifications, lab tests, PRs and qualified
+releases. Infra owns managed production deployment, image pins and schedules.
+See the [contribution boundaries and lab gates](CONTRIBUTING.md#scope-and-lab-gates).
 Local development requires Python 3.14+ with the pinned packages
 (CI and the container use Python 3.14).
 

@@ -11,10 +11,28 @@ Plain-language checklist for cutting a release. Why these choices:
    previously working setup fail or behave differently (stricter validation,
    new file format, changed limit, new required setting).
 2. CI is green on `main`.
-3. Record the installed image digest as the rollback target, using the running
-   container's image ID and its matching repository digest. Follow the
-   [Docker image guide](../README.md#docker-image); inspecting a mutable tag does
-   not prove which artifact is installed. Preserve the existing ENV and mounts.
+3. For a managed production upgrade, obtain the installed rollback digest from
+   Infra. Infra owns production inspection, pins, deployment and schedules.
+   Record the qualified release digest and evidence for the handoff. Infra
+   preserves ENV and mounts. A mutable tag does not prove the installed artifact.
+
+## Lab gates and ownership
+
+Before merge, test the PR image in both empty and golden labs for changes to
+financial logic, deduplication or activity identity, Ghostfolio authentication,
+transport or writes, state or journal formats, or a major dependency or base
+image. Other PRs need CI only for this gate. See [contribution rules](../CONTRIBUTING.md#scope-and-lab-gates).
+
+Every release passes both scenarios on its exact digest before production use
+or stable promotion. Promote that digest without a rebuild. Reuse pre-merge
+proof only when the digest is identical. Use the RC path below for every
+release, including patches, to qualify before stable promotion. Stable
+publication needs the operator's GO.
+
+Infra owns the shared runner and canonical `docs/runbooks/ghostfolio-lab.md` in
+`flowcool/mylittlemess`. This project owns connector tests and release evidence.
+Reserve labs, use separate credentials, retain proof, then stop and verify both
+owned instances. Route runner defects and production work to Infra.
 
 ## Stable-channel cutover
 
@@ -93,10 +111,10 @@ release advances `:latest`. Check that the release notes show the head text and
 generated list. Fill in "Published artifacts" with the workflow link, version
 and verified manifest digest from its `release-manifest` artifact.
 
-## Release candidate (optional)
+## Release candidate
 
-A release candidate (RC) lets a maintainer validate an image before the stable
-tag exists. Use it for risky changes; normal patch releases may skip it.
+A release candidate (RC) supplies the immutable image for the release lab gate.
+Qualify it before stable promotion, including for patch releases.
 
 Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
 
@@ -207,8 +225,9 @@ What the workflow refuses:
 - Any prerelease tag that is not an exact `vX.Y.Z-rc.N` (for example `-beta.1`,
   `-rc.0`, `-rc.01`), a stable tag flagged prerelease, drafts and tag pushes.
 - A stable `vX.Y.Z` when a `vX.Y.Z-rc.N` tag exists and the stable tag is not on
-  the commit of the highest `N`. The error names both tags. With no RC, stable
-  publication is unchanged.
+  the commit of the highest `N`. The error names both tags. The workflow still
+  permits a native build with no RC. That path does not prove the required lab
+  acceptance before stable promotion; use the qualified RC path above.
 
 An RC never creates or moves `:latest`, `:X.Y.Z` or `:X.Y`. The workflow skips
 `latest` promotion for RC tags.
@@ -297,11 +316,10 @@ code against that history. Reader rollback retains rows and can still refuse
 partial dividend coverage. Comment reversal restores only unchanged journal-owned
 comments; it retains new v2 imports. See [guarded rollback](cleanup.md#guarded-comment-rollback-and-resume-inspection).
 
-Select the previously recorded installed digest and recreate the connector with
-its original ENV and mounts. This restores the runtime only: financial records
-and cash updates remain. It does not restore financial data or undo imports.
-Use a separately authorized Ghostfolio recovery procedure if data recovery is
-needed.
+For managed production rollback, hand the recorded installed digest to Infra.
+Infra recreates the connector with its original ENV and mounts. Runtime rollback
+keeps financial records and cash updates. Use a separately authorized Ghostfolio
+recovery procedure if data recovery is needed.
 
 ## V2 writer qualification and release order
 
