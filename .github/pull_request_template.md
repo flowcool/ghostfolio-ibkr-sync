@@ -16,6 +16,20 @@ plain words, when the PR is labeled breaking-change or compat. -->
 
 Use synthetic inputs and isolated state. Do not attach secrets or private data.
 
+## Scope and lab gate
+
+- Scope: <!-- Connector code/spec/lab/release, or docs only. Route managed
+  production deployment, pins, schedules, host files and lab-runner defects to Infra. -->
+- Pre-merge lab trigger: <!-- Financial logic; deduplication/activity identity;
+  Ghostfolio authentication/transport/writes; state/journal format; major
+  dependency/base image. Otherwise write "None" and explain why. -->
+- Lab proof: <!-- For a trigger: tested PR image identity and source commit,
+  empty + golden results, retained evidence and final stopped verification.
+  Every release also needs both scenarios on its exact digest. Reuse this proof
+  only if the digest is identical. -->
+
+See [scope and lab gates](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/CONTRIBUTING.md#scope-and-lab-gates).
+
 ## AI assistance
 
 State whether AI assisted this change and what the author verified.
