@@ -16,6 +16,8 @@ Private state records confirmed delivery. Full event detail stays in private log
 Approved work deferred only by qualification or the run budget does not notify.
 Failed runs keep their immediate consolidated notification.
 
+Dividend coverage and representation limits now use informational blocks and counts. They request no manual correction or required-action reminder.
+
 Qualified Flex timestamps now use fixed EST (UTC-05:00) and EDT (UTC-04:00)
 offsets. New activities get corrected UTC instants. No stored activity is rewritten.
 Unknown qualified tokens fail the account before all financial writes.

@@ -694,8 +694,11 @@ that require intervention join the same `dividend_check` reminder. Inspect the
 named activity and both sides of the comparison. Current agreement or documented
 manual resolution proves resolution. Information, accepted rounding and noise
 alone send no reminder. Named representation or coverage limits remain visible
-as evidence limitations without requesting an impossible correction. No diagnostic
-changes financial selection, grants cleanup authority or writes a correction.
+as evidence limitations without requesting an impossible correction.
+Missing source coverage is informational. It does not request a manual correction.
+The report counts these items as informational, and their action says `No action needed.`
+They do not enter the `to check` count or the `dividend_check` reminder.
+No diagnostic changes financial selection, grants cleanup authority or writes a correction.
 
 
 Corporate-action holds and concrete historical discrepancies repeat in the same

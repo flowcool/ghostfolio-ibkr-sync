@@ -483,7 +483,9 @@ The classes SHALL remain coherent, information, noise, outside window and to che
 
 A complete single legacy activity with equal quantity and fee SHALL be `legacy declared-rate rounding` information when its Ghostfolio gross equals quantity × the matched payment `Re` `grossRate` and the paid cash gross differs by exactly one minor unit. Its reason SHALL state that the legacy row uses the declared rate and IBKR paid a rounded cash amount. Its sole action SHALL read `No action: IBKR rounding accepted.` The block SHALL stay visible at INFO as audit information. It SHALL NOT suggest that IBKR revised the amount after import. A one-minor-unit fee difference, or any one-minor-unit gross difference outside this proven pattern, SHALL remain to check as `minimal difference, cause unknown`. No finding SHALL automatically correct an activity.
 
-After informational findings, one INFO line SHALL read `N to check, N informational, N noise`, followed by each item to check at WARNING or above. Findings SHALL NOT change exits. Items to check SHALL join the required-action notification. Information and noise alone SHALL not trigger it.
+After informational findings, one INFO line SHALL read `N to check, N informational, N noise`, followed by each item to check at WARNING or above. Findings SHALL NOT change exits. Items to check SHALL join the required-action notification. Information and noise alone SHALL not trigger it. Named diagnostic evidence limitations
+SHALL be informational and SHALL state that no correction is requested. Explicit
+outside-window findings SHALL retain debug visibility without a correction request.
 
 #### Scenario: Plain, quantized, single-action report
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'coherent_dividend_format or check_dividend_report'` formats decimals, unavailable values, empty/nonempty summaries and blocks with match proposals
@@ -491,7 +493,7 @@ After informational findings, one INFO line SHALL read `N to check, N informatio
 
 #### Scenario: Classes from synthetic inputs
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k 'dividend_readable_classes or dividend_readable_pairs or coherent_dividend_one_jpy'` runs noise, one-unit, larger, quantity, legacy, split, absent and unsupported cases
-- **THEN** existing classes stay stable except the complete declared-rate one-unit pattern, which becomes information with its known reason and no-action audit result.
+- **THEN** existing classes stay stable except the complete declared-rate one-unit pattern and named diagnostic evidence limitations. These become information with their known reasons and no-action results.
 
 #### Scenario: Plain report
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'dividend_readable_report or coherent_dividend_format or coherent_dividend_action'` formats source, destination, identity, summary and match text
@@ -919,3 +921,50 @@ independent cash updates retain their existing behavior.
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k http_double_rejects_invalid_currency` submits a null, empty or non-ISO currency
 - **THEN** the mock Ghostfolio endpoint rejects it before applying any row
   change, matching the deployed DTO contract.
+
+### Requirement: Consistent dividend coverage messages
+
+An activity outside proven IBKR source coverage SHALL remain visible as an
+informational diagnostic. Its block SHALL use the `information` class and one
+`No action needed.` line. It SHALL NOT enter the `to check` count or the
+`dividend_check` required-action notification. The same rule SHALL apply to all
+existing named diagnostic evidence limitations. An explicit outside-window
+finding SHALL retain its debug visibility and SHALL request no correction.
+A concrete source/destination discrepancy SHALL remain a required manual action with its existing evidence
+and resolution instruction. The detailed report, summary and required-action
+notification SHALL use the same classification for the same input.
+
+Baseline: the saved 4.1.0 preview emitted 15 `destination outside proven source
+coverage` blocks as `Dividend to check` with a manual fix action, while the
+companion evidence message said that no user correction was requested. The
+triage file contains 12 dividend candidate pairs: six manual assignments and
+six rejected crossed pairs across three groups. Those review pairs are not
+historical coverage findings.
+
+#### Scenario: Outside coverage is informational
+
+- **WHEN** `python -m pytest -q tests/test_dividend_diagnostics.py -k dividend_coverage_message_consistency` runs the synthetic 15-row case
+- **THEN** the report has 0 to-check and 15 informational findings, each block
+  says `Dividend information: evidence limitation` and `Action: No action needed`,
+  and the outcome has no `dividend_check` action or notification. A mixed case
+  with one concrete discrepancy has one warning, one to-check item and one
+  `dividend_check` action in one notification. Active and inactive rows use
+  the same rule.
+
+#### Scenario: Concrete discrepancy remains required
+
+- **WHEN** `python -m pytest -q tests/test_dividend_diagnostics.py -k operator_action_diagnostic_warning_and_summary` runs the existing amount-difference case
+- **THEN** the finding remains `to_check`, emits a warning and records one
+  `dividend_check` action.
+
+#### Scenario: Other named limitations remain consistent
+
+- **WHEN** `python -m pytest -q tests/test_dividend_diagnostics.py -k dividend_evidence_limitation_message_consistency` runs all existing limitation reasons
+- **THEN** each limitation has an informational or outside-window block, one
+  `No action needed.` line, no to-check count and no required-action notification.
+
+#### Scenario: Operator reads the coverage rule
+
+- **WHEN** `rg -n -A 5 'Missing source coverage' docs/configuration.md` runs
+- **THEN** the guide states the informational count, no-correction action and
+  notification rule.

@@ -827,16 +827,19 @@ def test_dividend_readable_pairs_legacy_row_of_another_day_is_not_duplicate(monk
     assert legacy["readable"]["label"] == "uncertain" and legacy["readable"]["class"] == "to_check"
 
 
-@pytest.mark.parametrize("prices,klass", [((0.125, 0.125), "information"), ((0.125, 0.126), "to_check")])
-def test_dividend_readable_pairs_equal_total_split(monkeypatch, prices, klass):
+@pytest.mark.parametrize("prices,equal", [((0.125, 0.125), True), ((0.125, 0.126), False)])
+def test_dividend_readable_pairs_equal_total_split(monkeypatch, prices, equal):
     rows = [destination(id=f"dividend-{i}", quantity=100, unitPrice=price)
             for i, price in enumerate(prices, 1)]
     finding = readable(monkeypatch, rows)[0]
     assert finding["category"] == "uncertain"
-    assert finding["readable"]["class"] == klass
-    if klass == "information":
+    assert finding["readable"]["class"] == "information"
+    if equal:
         assert finding["readable"]["label"] == "total equal to IBKR, split over 2 rows"
         assert "proven" not in finding["readable"]["label"]
+    else:
+        assert finding["readable"]["label"] == "evidence limitation"
+        assert finding["reason"] == "component partition identity not proven"
 
 
 def test_coherent_dividend_legacy_identity_equal_row_is_not_an_absent_outside_pair(monkeypatch):
@@ -860,6 +863,101 @@ def test_dividend_readable_pairs_unpaired_absent_is_to_check(monkeypatch):
     assert finding["category"] == "absent"
     assert finding["readable"]["class"] == "to_check"
     assert finding["readable"]["label"] == "possibly missing in Ghostfolio"
+
+
+@pytest.mark.parametrize("actionable", [False, True])
+@pytest.mark.parametrize("active", [False, True])
+def test_dividend_coverage_message_consistency(monkeypatch, caplog, actionable, active):
+    """Coverage limits stay informational in the report and notification state."""
+    from ghostfolio_ibkr_sync import app
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    caplog.set_level(logging.INFO)
+    rows = [destination(
+        id=f"outside-{index}",
+        comment=f"dividend#outside-{index}#2026-07-15",
+        isDraft=not active,
+    ) for index in range(15)]
+    if actionable:
+        rows.append(destination(unitPrice=0.26))
+    _, _, positions = read(monkeypatch, rows)
+    source = ibkr.parse_cash_dividends(report(divs=div_xml())) if actionable else []
+    findings = diagnostics.historical_dividend_comparison(source, ACC, {}, positions)
+
+    out = new_run_outcome()
+    counts = diagnostics.log_historical_dividend_comparison(findings, ACC, outcome=out)
+    assert counts == {"to_check": int(actionable), "informational": 15, "noise": 0}
+    limitations = [finding for finding in findings if finding["source"] is None]
+    assert len(limitations) == 15
+    assert all(finding["category"] == "uncertain" for finding in limitations)
+    for finding in limitations:
+        assert finding["readable"]["class"] == "information"
+        block = diagnostics.format_historical_dividend_finding(finding, ACC)
+        assert "Dividend information: evidence limitation" in block
+        assert "Action: No action needed." in block
+        assert block.count("Action:") == 1 and "fix it by hand" not in block
+    assert caplog.text.count("Dividend information: evidence limitation") == 15
+    assert f"Dividend report: {int(actionable)} to check, 15 informational, 0 noise" in caplog.text
+    assert caplog.text.count("no user correction is requested") == 15
+    warnings = [record.message for record in caplog.records if "Dividend to check:" in record.message]
+    assert len(warnings) == int(actionable)
+    assert len(out["actions"].get("dividend_check", set())) == int(actionable)
+
+    sent = []
+    monkeypatch.setattr(app, "load_notification_delivery", lambda: ({}, "configured"))
+    monkeypatch.setattr(app, "send_notification", lambda settings, title, body: sent.append(body) or "sent")
+    app.finalize_run(out, 0)
+    assert len(sent) == int(actionable)
+    if actionable:
+        assert "dividend_check (1)" in sent[0]
+        assert not any(row["id"] in sent[0] for row in rows)
+    else:
+        assert "Cycle result: success;" in caplog.text
+
+
+@pytest.mark.parametrize("reason", [
+    "component partition identity not proven", "incomplete or conflicting component coverage",
+    "original JSON numeric evidence unavailable", "unsupported decimal range", "unsupported currency",
+    "destination outside proven source coverage",
+    "destination UTC date outside explicit report window; source evidence unavailable",
+    "inactive destination outside proven source coverage",
+])
+def test_dividend_evidence_limitation_message_consistency(monkeypatch, caplog, reason):
+    """A proposed match must not turn a named evidence limit into a fix request."""
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    caplog.set_level(logging.INFO)
+    _, _, positions = read(monkeypatch, [destination()])
+    source = ibkr.parse_cash_dividends(report(divs=div_xml()))
+    findings = diagnostics.historical_dividend_findings(source, ACC, {}, positions)
+    findings[0].update(category="uncertain", reason=reason)
+    diagnostics.classify_dividend_findings(findings)
+    assert findings[0]["match"]["confidence"] == "strong"
+    out = new_run_outcome()
+    counts = diagnostics.log_historical_dividend_comparison(findings, ACC, outcome=out)
+    assert counts == {"to_check": 0, "informational": 1, "noise": 0}
+    block = diagnostics.format_historical_dividend_finding(findings[0], ACC)
+    assert "Action: No action needed." in block and block.count("Action:") == 1
+    assert "Dividend to check:" not in caplog.text
+    assert "no user correction is requested" in caplog.text
+    assert out["actions"] == {}
+
+
+def test_dividend_evidence_limitation_message_consistency_outside_window(monkeypatch, caplog):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    caplog.set_level(logging.DEBUG)
+    _, _, positions = read(monkeypatch, [destination(date="2025-07-15T00:00:00Z")])
+    findings = diagnostics.historical_dividend_comparison(
+        [], ACC, {}, positions, ("2026-07-01", "2026-07-31"))
+    out = new_run_outcome()
+    counts = diagnostics.log_historical_dividend_comparison(findings, ACC, outcome=out)
+    assert counts == {"to_check": 0, "informational": 0, "noise": 0}
+    blocks = [record for record in caplog.records if "Dividend outside report window:" in record.message]
+    assert len(blocks) == 1 and blocks[0].levelno == logging.DEBUG
+    assert "Action: No action needed." in blocks[0].message
+    assert "no user correction is requested" in caplog.text
+    assert out["actions"] == {}
 
 
 def test_dividend_readable_pairs_other_classes_and_catch_all(monkeypatch):
