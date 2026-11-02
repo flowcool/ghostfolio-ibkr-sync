@@ -29,6 +29,7 @@ from ghostfolio_ibkr_sync.ghostfolio import (
     activity_date_is_current,
     activity_is_active,
     dividend_context,
+    effective_currency,
     format_versioned_activity_identity,
     ghost_get_existing_orders,
     ghost_update_reviewed_activity,
@@ -603,6 +604,11 @@ def changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
             return numeric(before[key]) == numeric(after[key])
         if key == "date":
             return instant(before[key]) == instant(after[key])
+        if key == "currency":
+            left, right = effective_currency(before), effective_currency(after)
+            if left["reason"] or right["reason"]:
+                raise RuntimeError(left["reason"] or right["reason"])
+            return left["effective"] == right["effective"]
         return bool(before[key] == after[key])
     return sorted(key for key in REPLACED if not equal(key))
 
@@ -792,6 +798,9 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             diagnostics: dict[str, Any] = {}
             try:
                 current = values_of(row)
+                currency = effective_currency(row)
+                if currency["reason"]:
+                    raise RuntimeError(currency["reason"])
                 proposed = {**current, **proposed}
                 proposed["comment"] = replacement_comment(row, event)
                 diagnostics = {field: {"current": current[field], "source": proposed[field]}
@@ -834,6 +843,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     raise RuntimeError("legacy aggregate cannot identify one action")
                 changes = changed_fields(current, proposed)
                 if not changes and marker_of(row) == event_id:
+                    if (event_id, event["destination account"], row["id"]) in (journal_bindings or set()):
+                        raise RuntimeError("Pending journal requires exact recovery")
                     if event_id in (held_events or set()):
                         raise RuntimeError("Relevant corporate-action evidence holds this activity")
                     satisfied.add(event_id)

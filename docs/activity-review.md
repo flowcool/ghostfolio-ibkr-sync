@@ -379,3 +379,18 @@ They are estimates. Future source, destination or profile changes can alter them
 Automatic success and ordinary budget deferral need no intervention notice.
 Required actions join the existing single notification. External text contains
 fixed result names and counts. Financial values, paths and keys stay private.
+
+### Activity currency evidence
+
+Ghostfolio can store a null activity currency when it equals the security profile
+currency. Review keeps that raw value. It compares the effective currency: the
+explicit activity currency, or the proven profile currency when the activity
+field is explicitly null. A missing field, invalid code or missing profile proof
+holds the activity. Review never infers currency from an account or a symbol.
+
+A proven representation difference alone needs no correction. A valid explicit
+override stays in effect, even when it differs from the profile currency. Real
+currency differences remain visible. GBP and GBp remain distinct denominations.
+Legacy reference migration changes only the comment and preserves raw currency.
+Currency proof does not prove source completeness, identity, dates or amounts.
+The profile limits and the shared budget of one correction per run stay fixed.

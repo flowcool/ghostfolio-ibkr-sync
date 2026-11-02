@@ -1287,3 +1287,51 @@ def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, ca
             assert str(state["path"]) in caplog.text
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("raw,profile_code,source_code", [(None, "USD", "USD"), ("KRW", "USD", "KRW"), ("KRW", "KRW", "KRW")])
+def test_effective_currency_comparison_conformity_and_fee(raw, profile_code, source_code):
+    events = source_events(report(trade_xml("T1", currency=source_code)))
+    marker = next(iter(events))
+    row = destination(marker, quantity=Decimal(10), currency=raw)
+    row["assetProfile"]["currency"] = profile_code
+    original = deepcopy(row)
+    assert review.refresh_proposals({}, events, [row], {"U1": "acc"}) == ({}, set())
+    row["fee"] = Decimal(2)
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    assert next(iter(proposals.values()))["changed fields"] == ["fee"]
+    assert row["currency"] == original["currency"]
+
+
+def test_effective_currency_comparison_legacy_preserves_raw_and_other_fields():
+    events = source_events()
+    row = destination("IBKR#T1", currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    item = next(iter(proposals.values()))
+    assert item["changed fields"] == ["comment"]
+    assert item["proposed values"]["currency"] is None
+    assert item["proposed values"]["quantity"] == "1"
+    assert review.update_payload(row, item["proposed values"])["currency"] is None
+
+
+@pytest.mark.parametrize("blocked", ["unknown", "journal", "corporate"])
+def test_effective_currency_comparison_conformity_retains_fences(blocked):
+    events = source_events()
+    marker = next(iter(events))
+    row = destination(marker, currency=None, quantity=Decimal(10))
+    row["assetProfile"]["currency"] = None if blocked == "unknown" else "USD"
+    proposals, held = review.refresh_proposals({}, events, [row], {"U1": "acc"},
+        {(marker, "acc", row["id"])} if blocked == "journal" else set(),
+        held_events={marker} if blocked == "corporate" else set())
+    assert marker in held
+    assert not next(iter(proposals.values()))["actionable"]
+
+
+@pytest.mark.parametrize("source_code,target_code", [("USD", "KRW"), ("GBP", "GBp")])
+def test_effective_currency_comparison_retains_real_difference(source_code, target_code):
+    events = source_events(report(trade_xml("T1", currency=source_code)))
+    row = destination(next(iter(events)), currency=target_code, quantity=Decimal(10))
+    row["assetProfile"]["currency"] = "USD"
+    item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"})[0].values()))
+    assert "currency" in item["changed fields"]
