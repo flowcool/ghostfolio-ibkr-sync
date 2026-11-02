@@ -52,10 +52,13 @@ Rollback: stop writers, preserve review/state/journals, force simulation and
 restore the qualified previous image. An unresolved new-policy journal requires
 a compatible reader. Reverting code does not reverse financial writes.
 
-## Open Decisions for Claude
+## Approved compatibility decision
 
-4. Recommend recording the new comparison contract in the existing v2 journal
-`eligibility.policy version` and evidence maps. Keep v1/v2 legacy semantics.
-G1 must prove old/new readers fail closed. If that cannot be proved, use a new
-explicit journal version and revise compatibility and semver before apply.
-Replay decisions 1–3 remain in the reconciliation delta. No operator pass here.
+Record the new comparison contract in the existing v2 journal policy and evidence
+maps only if G1 proves that the real code at tag `v4.0.0` fails closed on a pending
+new-policy journal. A mocked rollback reader is insufficient. Preserve legacy
+v1/v2 semantics. If fail-closed behavior cannot be proved, use a new explicit
+journal version and classify the release as minor. No operator pass is required.
+
+G2 stays synthetic and conditional. The saved review state has no profile-currency
+evidence. Real-data eligibility requires G5 production observation.

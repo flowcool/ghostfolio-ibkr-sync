@@ -29,7 +29,7 @@ entries counted in `input-summary.json` therefore describe a representation
 difference. The complete proof references are in the connector-runtime delta.
 
 #### Scenario: Conformity and retained real differences
-- **WHEN** `python -m pytest -q tests/test_activity_review.py tests/test_activity_reconciliation.py -k effective_currency_comparison` covers equal v2 rows, a fee discrepancy, legacy comments, KRW/USD overrides, GBP/GBp changes, unknown profiles and unresolved journals
+- **WHEN** `python -m pytest -q tests/test_activity_review.py tests/test_activity_reconciliation.py -k effective_currency_comparison` covers equal v2 rows, a fee discrepancy, legacy comments, KRW/USD overrides, explicit KRW equal to its KRW profile, GBP/GBp changes, unknown profiles and unresolved journals
 - **THEN** proven representation-only proposals disappear without requests, other differences remain visible, legacy migrations change only comments and uncertainty never becomes automatic action.
 
 ### Requirement: Currency evidence survives refresh and exact recovery
@@ -79,5 +79,5 @@ immutable uncertain requests. `row_matches` currently uses raw field equality.
 - **THEN** only complete exact expected-after evidence confirms a new-policy intent, actual raw readback is retained and each uncertain logical request sends at most one PUT.
 
 #### Scenario: Upgrade and downgrade evidence
-- **WHEN** `python -m pytest -q tests/test_activity_review.py -k effective_currency_persistence` loads old review generations, v1/v2 pending journals, new-policy entries, edited evidence, rejected pairs and a rollback reader
+- **WHEN** `python -m pytest -q tests/test_activity_review.py -k effective_currency_persistence` loads old review generations, v1/v2 pending journals, new-policy entries, edited evidence, rejected pairs and the real rollback reader from tag `v4.0.0`
 - **THEN** original journals and aliases stay intact, changed operations lose stale consent, unsupported recovery remains held and no downgrade or state rebuild causes a resend or financial conversion.

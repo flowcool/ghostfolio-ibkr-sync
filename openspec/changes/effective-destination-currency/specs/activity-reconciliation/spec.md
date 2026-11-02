@@ -117,22 +117,12 @@ remains stricter than runtime profile migration and SHALL NOT be substituted.
 
 **Review decisions and HORS CHEMIN**
 
-Claude SHALL critically review these points before an apply request. No operator
-pass is requested in this proposal delivery.
+Claude approved the following decisions:
 
-1. **Residual count conflict.** The requested eight gross holds plus 4543.T
-   cannot be an unconditional acceptance result under the current spec. Six
-   one-JPY differences pass balanced limits. One PAF.L is already eligible.
-   The second has unproven profile context. Recommend retaining current limits
-   and accepting only evidence-derived residual counts. Missing source or profile
-   proof can change each row's result. New mandatory holds would change policy
-   and are HORS CHEMIN for this currency fix.
-2. **Quantity representation conflict.** Recommend keeping 4543.T and 7272.T
-   eligible for comment-only migration when complete source and uniqueness proof
-   passes. Their different quantities alone do not create a runtime migration
-   hold. A request to force such a hold needs a separately explicit spec decision.
-3. **Real replay prerequisite.** The private source/profile/state bindings needed
-   to turn G2's controlled counts into actual eligibility remain unproven here.
-   Recommend keeping that acceptance conditional. Do not infer them from prices,
-   market suffixes or the compact review. Claude must identify any available
-   saved proof before declaring the real-data count resolved.
+1. Retain current balanced limits. Derive residual counts from evidence only.
+   No fixed set of eight residual holds is required.
+2. Keep 4543.T and 7272.T eligible for comment-only migration when source and
+   uniqueness proof passes. Preserve the stored quantity during migration.
+3. The saved review state has no profile-currency evidence. G2 cannot prove
+   real-data eligibility offline. Keep its synthetic counts conditional and
+   require G5 production observation after deployment.

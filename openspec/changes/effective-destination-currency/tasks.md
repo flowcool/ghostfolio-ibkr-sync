@@ -1,9 +1,8 @@
 # Tasks
 
-This delivery is proposal-only. All tasks below remain unchecked. Claude reviews
-decisions 1–4 before an apply request. These tasks retain current profile limits
-and dividend representation rules. New mandatory residual holds need an explicit
-scope decision; they are not hidden implementation work.
+Claude approved decisions 1–4 with the amendments below. Implement these tasks
+in order. Retain current profile limits and dividend representation rules.
+Residual counts require evidence. No fixed residual hold count is required.
 
 All spec paths below are relative to this change. Runtime checks use Python 3.14
 from the development environment, synthetic inputs and mocked HTTP. The private
@@ -22,7 +21,7 @@ replay input stays read-only. No production or broker access is needed.
 ## 3. Confirm exact writes and retain recovery contracts
 
 - [ ] 3.1 Add new-policy currency comparison and bound actual raw readback evidence to the existing exact request/recovery path. Keep all other financial and preserved-field checks exact. Files: `ghostfolio_ibkr_sync/activity_review.py`, `ghostfolio_ibkr_sync/activity_preservation.py` only if a currency-specific comparison adapter is needed, `tests/test_activity_review.py`. Requirement: `specs/activity-correction-review/spec.md` — Currency evidence survives refresh and exact recovery. Scenario: positive readback with exact preservation. Verify: `python -m pytest -q tests/test_activity_review.py -k effective_currency_readback`.
-- [ ] 3.2 Implement the reviewed comparison-policy compatibility choice. Retain legacy pending contracts, immutable journal evidence, consent invalidation, rejection bindings and safe downgrade behavior. Update `docs/activity-review.md` with the reader limit and recovery steps. Files: `ghostfolio_ibkr_sync/activity_review.py`, `tests/test_activity_review.py`, `docs/activity-review.md`. Same requirement. Scenario: upgrade and downgrade evidence. Verify: `python -m pytest -q tests/test_activity_review.py -k effective_currency_persistence`; inspect the updated downgrade guidance with `rg -n 'journal|downgrade|rollback' docs/activity-review.md`.
+- [ ] 3.2 Implement the reviewed comparison-policy compatibility choice. Run the real code at tag `v4.0.0` against a pending new-policy journal and prove it fails closed. If that proof fails, use a new explicit journal version and classify the release as minor. Retain legacy pending contracts, immutable journal evidence, consent invalidation, rejection bindings and safe downgrade behavior. Update `docs/activity-review.md` with the reader limit and recovery steps. Files: `ghostfolio_ibkr_sync/activity_review.py`, `tests/test_activity_review.py`, `docs/activity-review.md`. Same requirement. Scenario: upgrade and downgrade evidence. Verify: `python -m pytest -q tests/test_activity_review.py -k effective_currency_persistence`; inspect the updated downgrade guidance with `rg -n 'journal|downgrade|rollback' docs/activity-review.md`.
 
 ## 4. Keep historical identity tools consistent and stricter
 

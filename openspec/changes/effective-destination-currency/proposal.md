@@ -55,7 +55,7 @@ notice under ADR 0007. DEGIRO remains pinned; adoption needs its own change.
 
 ## Non-goals
 
-This delivery contains proposal artifacts only. Runtime code, service access,
-financial writes, release and publication are excluded. New financial limits,
-new mandatory quantity holds and date conversion are excluded. Claude reviews
-the proposal, including the replay-count conflicts recorded in the delta specs.
+The approved delivery includes specification, offline implementation and one PR.
+Release, deployment, service access, financial writes, new financial limits,
+mandatory quantity holds and date conversion are excluded from this execution.
+G3/G4 qualification and G5 production observation remain separate operations.

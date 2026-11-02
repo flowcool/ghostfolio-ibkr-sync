@@ -40,7 +40,7 @@ Existing tests include `test_current_profile_takes_precedence_over_legacy`
 and the `coherent_dividend_currency` cases. New commands below are future gates.
 
 #### Scenario: Explicit override and proven null fallback
-- **WHEN** `python -m pytest -q tests/test_ghostfolio.py tests/test_dividend_diagnostics.py -k effective_currency_resolution` covers explicit KRW on a USD profile, null/KRW, null/JPY, null/GBp, null/SEK, legacy-only profiles, both profile keys and absent or malformed evidence
+- **WHEN** `python -m pytest -q tests/test_ghostfolio.py tests/test_dividend_diagnostics.py -k effective_currency_resolution` covers explicit KRW on a USD profile, explicit KRW on a KRW profile, null/KRW, null/JPY, null/GBp, null/SEK, legacy-only profiles, both profile keys and absent or malformed evidence
 - **THEN** explicit values win, only proven null fallback resolves, raw inputs stay unchanged and every unresolved case remains non-actionable.
 
 #### Scenario: Exact denomination and scaling
@@ -91,6 +91,10 @@ inputs, comparison policy, connector digest and destination image/version.
    HTTP. Require explicit/null/missing/invalid/profile-drift cases, all supported
    denominations, exact GBP/GBp scaling, readback failures and old pending journals.
    Numeric tolerances SHALL NOT enter acceptance or preserved-field checks.
+   Run the real previous release code at tag `v4.0.0` against a pending
+   new-policy journal. Require fail-closed behavior before using the existing
+   journal version. A mock does not satisfy this gate. If this cannot be proved,
+   use a new explicit journal version and classify the release as minor.
 2. **G2 — Saved review simulation.** Run
    `python -m pytest -q -s tests/test_activity_reconciliation.py -k effective_currency_replay`
    with `EFFECTIVE_CURRENCY_REPLAY_INPUT` naming the read-only private `r.yaml`.
@@ -121,6 +125,16 @@ inputs, comparison policy, connector digest and destination image/version.
    profile readback; require a retained unresolved intent and no resend. Promote
    only the digest that passed both labs, without rebuilding it. Failed or
    incomplete evidence requires a new qualified candidate.
+
+5. **G5 — Production observation.** After qualified deployment, observe the first
+   scheduled run with the balanced profile unchanged. Require logged evidence
+   that currency-only proposals fall from 108 to zero, held review events fall
+   below 164, `automatically corrected` is at most one, and failed readback is
+   zero. Real-data eligibility cannot be proved from the saved review state,
+   which has no profile-currency evidence. Stop on any readback mismatch, any
+   correction beyond the budget or any unexpected financial request. Force
+   simulation (`DRY_RUN`) and restore the previous qualified digest. Preserve
+   journals and proof. Execute this gate under the production operation authority.
 
 For G3, the existing command is
 `python3 ghostfolio/scripts/lab.py qualification-profiles --qualification-image "$QUALIFICATION_IMAGE" --product-checkout "$PRODUCT_CHECKOUT" --product-python "$PRODUCT_PYTHON" --operation-ref "$OPERATION_REF" --output "$LAB_PROOF"`.
