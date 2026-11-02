@@ -10,4 +10,4 @@
 
 ## 3. Integration
 
-- [ ] 3.1 Run bash scripts/check.sh with the full offline suite. Validate and archive this change with both spec deltas synchronized. Review the complete semantic diff. PR publication and merge proof remain acceptance in the owning work item.
+- [x] 3.1 Run bash scripts/check.sh with the full offline suite. Validate and archive this change with both spec deltas synchronized. Review the complete semantic diff. PR publication and merge proof remain acceptance in the owning work item.
