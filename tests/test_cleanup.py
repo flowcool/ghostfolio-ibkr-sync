@@ -96,6 +96,14 @@ def test_comment_payload_uses_resolved_profile(tool, monkeypatch, profile_key):
     assert captured[0]["dataSource"] == "YAHOO"
 
 
+@pytest.mark.parametrize("currency", [None, "", "AAA", "usd", 123])
+def test_comment_update_rejects_invalid_currency_without_http(tool, currency):
+    row = activity(tool, "manual")
+    row["currency"] = currency
+    with pytest.raises(RuntimeError, match="currency"):
+        tool.put_comment({"ghost_host": "http://synthetic", "ghost_token": "fake"}, row, "tag", False)
+
+
 def test_comment_update_rejects_missing_source_without_http(tool):
     a = activity(tool, "manual")
     del a["assetProfile"]["dataSource"]

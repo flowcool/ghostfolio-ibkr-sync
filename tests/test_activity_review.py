@@ -9,6 +9,7 @@ import requests
 import pytest
 
 from ghostfolio_ibkr_sync import activity_review as review
+from ghostfolio_ibkr_sync.ghostfolio import DESTINATION_CURRENCIES
 
 
 def write_review(path, document):
@@ -241,12 +242,16 @@ class ReviewServer:
     def put(self, url, **kwargs):
         assert kwargs["allow_redirects"] is False and kwargs["timeout"]
         payload = kwargs["json"]
+        assert isinstance(payload.get("currency"), str)
+        assert payload["currency"] in DESTINATION_CURRENCIES
         self.writes.append(deepcopy(payload))
         if self.outcome != "unchanged":
             row = next(row for row in self.rows if row["id"] == payload["id"])
             row.update({key: Decimal(str(value)) if key in review.NUMBERS else value
                         for key, value in payload.items() if key in review.REPLACED and key != "symbol"})
             row["assetProfile"]["symbol"] = payload["symbol"]
+            if payload["currency"] == row["assetProfile"].get("currency"):
+                row["currency"] = None
             row["updatedAt"] = "2026-08-02T00:00:00Z"
             row["value"] = row["quantity"] * row["unitPrice"]
             row["valueInBaseCurrency"] = row["value"] * Decimal("0.91")
@@ -258,6 +263,28 @@ class ReviewServer:
         response = requests.Response()
         response.status_code = 200
         return response
+
+
+@pytest.mark.parametrize("currency", [None, "", "AAA", "usd", 123])
+def test_review_http_double_rejects_invalid_currency(monkeypatch, currency):
+    server = ReviewServer(monkeypatch)
+    row = server.rows[0]
+    payload = review.update_payload(row, review.values_of(row))
+    payload["currency"] = currency
+    with pytest.raises(AssertionError):
+        server.put("http://ghost/api/v1/activities/id", json=payload, allow_redirects=False, timeout=30)
+    assert not server.writes
+
+
+@pytest.mark.parametrize("currency", [None, "", "AAA", "usd", 123])
+def test_review_dispatch_refuses_invalid_currency_before_http(monkeypatch, currency):
+    server = ReviewServer(monkeypatch)
+    row = server.rows[0]
+    payload = review.update_payload(row, review.values_of(row))
+    payload["currency"] = currency
+    with pytest.raises(RuntimeError, match="valid effective currency"):
+        review.ghost_update_reviewed_activity({"ghost_host": "http://ghost", "ghost_token": "synthetic"}, payload)
+    assert not server.writes
 
 
 def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_run=False, rows=None, run_outcome=None):
@@ -1315,7 +1342,63 @@ def test_effective_currency_comparison_legacy_preserves_raw_and_other_fields():
     assert item["changed fields"] == ["comment"]
     assert item["proposed values"]["currency"] is None
     assert item["proposed values"]["quantity"] == "1"
-    assert review.update_payload(row, item["proposed values"])["currency"] is None
+    assert review.update_payload(row, item["proposed values"])["currency"] == "USD"
+
+
+def test_legacy_comment_migration_null_currency_puts_effective_and_stops_on_second_run(
+    tmp_path, monkeypatch,
+):
+    row = destination("IBKR#T1", quantity=Decimal(10), currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+              "activity_review_file": str(path)}
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    try:
+        review.process_review(state, config, source_events(), {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert item["changed fields"] == ["comment"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held
+        assert len(server.writes) == 1 and server.writes[0]["currency"] == "USD"
+        # Ghostfolio may return NULL for a redundant stored override. Effective
+        # readback still proves the correction and the next run is quiet.
+        server.rows[0]["currency"] = None
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+        assert state["document"]["proposals"] == {}
+    finally:
+        review.close_review(state)
+
+
+def test_fee_correction_null_currency_puts_effective_currency(tmp_path, monkeypatch):
+    row = destination("IBKR#v2#U1:TRADE:T1", quantity=Decimal(10), fee=Decimal(2), currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+              "activity_review_file": str(path)}
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    try:
+        review.process_review(state, config, source_events(), {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert item["changed fields"] == ["fee"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held
+        assert len(server.writes) == 1
+        assert server.writes[0]["currency"] == "USD"
+        assert server.writes[0]["fee"] == 1
+    finally:
+        review.close_review(state)
 
 
 @pytest.mark.parametrize("blocked", ["unknown", "journal", "corporate"])
@@ -1388,10 +1471,51 @@ def test_effective_currency_readback_retains_raw_and_no_resend(tmp_path, monkeyp
             assert entry["eligibility"]["currency comparison"] == review.currency_contract(entry)
     finally:
         review.close_review(state)
+
     state = review.open_review(str(path), [])
     try:
         review.process_review(state, config, source_events(), {"U1": "acc"})
         assert len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("outcome", ["unchanged", "applied", "missing", "drift", "invalid request"])
+def test_pending_null_currency_journal_recovery_never_resends(tmp_path, monkeypatch, outcome):
+    row = destination("IBKR#T1", quantity=Decimal(10), currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, rows=[row], outcome="unchanged")
+    path = state["path"]
+    entry = next(iter(state["journal"]["entries"].values()))
+    assert state["journal"]["version"] == 3
+    # Reconstruct the RC2 intent: both request and after evidence kept raw NULL.
+    entry["request"]["currency"] = None
+    entry["after"]["currency"] = None
+    if outcome == "applied":
+        server.rows[0]["comment"] = entry["after"]["comment"]
+    elif outcome == "missing":
+        entry["after"]["assetProfile"].pop("currency")
+    elif outcome == "drift":
+        server.rows[0]["assetProfile"]["currency"] = "EUR"
+    elif outcome == "invalid request":
+        entry["request"]["currency"] = ""
+    entry["eligibility"]["currency comparison"] = review.currency_contract(entry)
+    review.publish_journal(state)
+    saved = deepcopy(entry)
+    writes = len(server.writes)
+    review.close_review(state)
+    state = review.open_review(str(path), [])
+    try:
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        recovered = next(iter(state["journal"]["entries"].values()))
+        assert len(server.writes) == writes
+        assert recovered["request"] == saved["request"]
+        assert recovered["eligibility"] == saved["eligibility"]
+        assert recovered["status"] == ("confirmed" if outcome == "applied" else "pending")
+        assert bool(blocked) is (outcome != "applied")
+        assert bool(held) is (outcome != "applied")
+        if outcome == "applied":
+            assert recovered["verified result"]["currency"] is None
     finally:
         review.close_review(state)
 

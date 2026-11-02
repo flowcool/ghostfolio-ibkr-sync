@@ -628,7 +628,14 @@ def update_payload(row: dict[str, Any], proposed: dict[str, Any]) -> dict[str, A
             or not isinstance(tag.get("id"), str) or not tag["id"] for tag in tags)
             or len({tag["id"] for tag in tags}) != len(tags)):
         raise RuntimeError("Unproven update tag identities")
+    currency = effective_currency(proposed)
+    if currency["reason"]:
+        raise RuntimeError(currency["reason"])
     payload = {key: proposed[key] for key in REPLACED}
+    # Ghostfolio stores a redundant activity currency as NULL when it equals
+    # the profile currency. UpdateOrderDto still requires the effective ISO
+    # currency on every PUT, including comment-only migrations.
+    payload["currency"] = currency["effective"]
     payload.update(id=row["id"], accountId=row["accountId"], dataSource="YAHOO",
                    tags=[tag["id"] for tag in tags])
     for field in NUMBERS:
@@ -1080,6 +1087,17 @@ def row_matches(row: dict[str, Any], evidence: dict[str, Any], policy: str | Non
 
 
 def recovery_read(config: dict[str, Any], entry: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+    request = entry.get("request")
+    after_currency = effective_currency(entry["after"])
+    request_currency = request.get("currency") if isinstance(request, dict) else None
+    if (after_currency["reason"]
+            or (request_currency is not None and request_currency != after_currency["effective"])):
+        log.error("Review account %s activity %s remains blocked; journal currency is not proven effective",
+                  entry["destination account"], entry["activity id"])
+        return False, None
+    # A legacy v3 journal can contain a NULL request currency. It is safe to
+    # inspect and confirm an already-applied update, but it must never be sent
+    # again. The effective value above is the only accepted recovery evidence.
     observed = None
     policy = entry.get("eligibility", {}).get("policy version")
     for wait in RECOVERY_WAITS:
