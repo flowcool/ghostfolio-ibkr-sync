@@ -11,7 +11,7 @@ Flex can return `YYYYMMDD;HHmmss ZONE`, for example `20260113;231127 EST`. The c
 - Apply one parser policy to trades, cash dividends, dividend days, corporate-action dates, deduplication, activity review and identity migration.
 - Keep source text, parsed instant and source calendar day available for review evidence.
 - Keep `IBKR#v2` identity event-only. Compare source and stored dates by local calendar day under configured `TZ`. The same local day produces no date proposal and remains eligible for comment-only migration when other checks pass.
-- Add offline parser, US switch-day, caller and lab validation after approval. Add G6: every saved Trade must have a converted UTC date within one day of `tradeDate`. A violation fails the gate and invalidates the token assumption. No runtime change is part of this proposal.
+- Add offline parser, US switch-day, caller and lab validation after approval. Add G6: every saved imported Trade (an `assetCategory` outside `SKIP_ASSET_CATEGORIES`) must have a converted UTC date within one day of `tradeDate`. `CASH` and `OPT` Trade rows are skipped in the import and review paths before any date use; FX `tradeDate` is a value date and can move across a weekend. A violation in a non-skipped category fails the gate and invalidates the token assumption. No runtime change is part of this proposal.
 
 ## Capabilities
 

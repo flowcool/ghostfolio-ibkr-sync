@@ -19,7 +19,7 @@ See `proposal.md`. `parse_ibkr_datetime` in `ibkr.py` strips the Flex suffix and
 
 ## Risks / Trade-offs
 
-- **[Risk]** The account-token assumption is wrong. → G6 checks every saved Trade: its converted UTC date must be within one day of `tradeDate`. Any violation fails the gate and invalidates the assumption.
+- **[Risk]** The account-token assumption is wrong. → G6 checks every saved imported Trade (`assetCategory` outside `SKIP_ASSET_CATEGORIES`): its converted UTC date must be within one day of `tradeDate`. `CASH` and `OPT` rows are excluded from import before date use. FX `tradeDate` is a value date that can move across a weekend. Any violation in a non-skipped category blocks G6 and invalidates the assumption.
 - **[Risk]** Corrected dates affect matching. → Run G1–G6. Include intraday legacy compatibility and US switch days 2026-03-08 and 2026-11-01 with both explicit tokens.
 
 ## Migration Plan
