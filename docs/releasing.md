@@ -359,13 +359,15 @@ explained.
 
 ## Activity review qualification
 
-Review is opt-in. `activity_review.QUALIFIED_EXECUTION` binds the initial
-execution budget to Ghostfolio image
+Review is opt-in. `activity_review.QUALIFIED_EXECUTION` binds the RC execution
+permit to Ghostfolio image
 `sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`:
-the candidate is five corrections per complete connector run, across all
-configured accounts, with a 15-second minimum delay between confirmed requests.
+five corrections per complete connector run, across all configured accounts,
+with a 15-second minimum delay between confirmed requests. The RC activates
+this permit for the lab burst scenario. Stable promotion requires a PASS from
+the empty and golden burst gate on this exact digest.
 Remaining approvals and import holds stay pending for the next run. No ENV
-setting bypasses the qualified ceiling. Operators must verify the destination
+setting can raise the count or lower the delay. Operators must verify the destination
 image; the connector cannot discover a server's Docker image through its activity
 API. Image drift requires renewed qualification.
 
@@ -380,15 +382,15 @@ the final case and restored the original financial state. These observations
 qualify isolated corrections; they do not qualify a burst of corrections.
 
 The previous proof qualified isolated corrections only. It did not qualify a
-burst. The candidate limit is therefore five and the candidate delay is 15
-seconds. The exact image must pass a new empty and golden lab burst before
-activation. The lab must measure request-bound market-data and portfolio-cache
-completion and record the accepted limit and delay with the image digest. The
-connector cannot poll this completion through the activity API. A failed or
-uncertain correction stops the whole financial run. No resend is allowed.
-Observed background chains of 6.708-9.839 seconds are samples. They are not a
-qualification. Do not activate or use the candidate to drain approvals before
-the burst gate passes.
+burst. The exact RC image must pass a new empty and golden lab burst before
+stable promotion. The lab must measure request-bound market-data and
+portfolio-cache completion and record the accepted limit and delay with the
+image digest. The connector cannot poll this completion through the activity
+API. A failed or uncertain correction stops the whole financial run. No resend
+is allowed. Observed background chains of 6.708-9.839 seconds are samples, not
+a qualification. If the lab shows a longer background chain, revise the
+permit in a new RC. Until the burst gate passes, stable promotion and production
+use remain unqualified.
 The installed RC also passed network-denied normal-run budget/deferred-approval,
 interruption/restart, no-resend, duplicate-reference and notes-compatible-reader
 replays. Those tests prove connector behavior, not live background timing.

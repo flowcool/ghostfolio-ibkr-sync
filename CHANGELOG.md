@@ -23,12 +23,13 @@ null stored activity currency uses the proven profile currency. Unresolved
 currency evidence holds the correction and sends no PUT. Pending review journals
 never resend a null currency.
 
-Activity review now carries a candidate budget of five corrections per run with
-a candidate 15-second inter-correction delay. The exact Ghostfolio image must
-pass the burst qualification gate before activation. Exact readback remains the
-gate between PUTs. The first failed or uncertain correction stops the whole
-financial run, retains journal v3 and defers later approvals. No ENV setting can
-raise the qualified ceiling.
+The RC now activates a permit for five activity corrections per run with a
+15-second inter-correction delay on the exact Ghostfolio image. Stable promotion
+requires the burst qualification gate to PASS in the empty and golden labs on
+that exact digest. Exact readback remains the gate between PUTs. The first failed
+or uncertain correction stops the whole financial run, retains journal v3 and
+defers later approvals. No ENV setting can raise the count or lower the delay.
+If the lab shows a longer background chain, revise the values in a new RC.
 
 ## Deployment example migration
 

@@ -721,8 +721,7 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         assert review.QUALIFIED_EXECUTION is not None
         image, limit, delay = review.QUALIFIED_EXECUTION
         assert image == "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078"
-        assert (limit, delay) == (1, 0.0)
-        assert review.CANDIDATE_EXECUTION == (image, 5, 15.0)
+        assert (limit, delay) == (5, 15.0)
     else:
         # Synthetic larger budgets exercise the generic deferral and pacing logic.
         monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))

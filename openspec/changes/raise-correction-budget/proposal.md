@@ -9,12 +9,12 @@ asynchronously after an activity PUT.
 
 ## What changes
 
-- Raise the image-bound candidate budget to five corrections per run.
+- Activate an image-bound RC budget of five corrections per run.
 - Keep corrections sequential. Read the exact activity after every PUT before
   dispatching the next request.
-- Use a 15-second minimum inter-correction delay as the candidate value. The
-  value is a release qualification input. It is not a claim that the current
-  Ghostfolio image has passed the burst gate.
+- Use a 15-second minimum inter-correction delay in the RC. Stable promotion
+  still requires the exact-digest burst gate. If the lab observes a longer
+  background chain, revise the values in a new RC.
 - Stop the whole financial run after the first failed or uncertain correction.
   Keep the journal, account fence, approvals and later deferred proposals.
 - Keep journal version 3, no resend, shared multi-account budget, and the single
@@ -35,13 +35,14 @@ need a new destination integration and is outside this change.
 
 ## Qualification gate
 
-The exact candidate image must pass the versioned empty and golden lab burst
-scenario before activation. The scenario measures the maximum request-bound
-market-data and portfolio-cache completion time, adds a documented margin, and
-records the accepted `N` and `D` in the digest-bound qualification evidence.
-It must dispatch `N` consecutive corrections, prove exact readback before each
-next PUT, stop on the first failure or uncertainty, and send no resend. Until
-that evidence exists, the candidate must not be activated in production.
+The exact RC image must pass the versioned empty and golden lab burst scenario
+before stable promotion. The RC activates the permit for this lab validation.
+The scenario measures the maximum request-bound market-data and portfolio-cache
+completion time, adds a documented margin, and records the accepted `N` and `D`
+in the digest-bound qualification evidence. It must dispatch `N` consecutive
+corrections, prove exact readback before each next PUT, stop on the first failure
+or uncertainty, and send no resend. Until that evidence exists, stable
+promotion and production use remain unqualified.
 
 ## Non-goals
 

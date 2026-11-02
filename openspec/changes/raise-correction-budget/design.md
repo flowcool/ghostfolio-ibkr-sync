@@ -2,12 +2,12 @@
 
 ## Runtime contract
 
-Keep `activity_review.QUALIFIED_EXECUTION` as the active image-bound permit:
-`(destination_image, limit, delay_seconds)`. Keep the proposed five-correction,
-fifteen-second permit in `CANDIDATE_EXECUTION` until the lab qualification
-record authorizes activation. Do not read a budget from ENV; a future
-lower-only setting may reduce the count, but it must never increase the count or
-reduce the qualified delay.
+Keep `activity_review.QUALIFIED_EXECUTION` as the active image-bound RC permit:
+`(destination_image, limit, delay_seconds)`, currently `(image, 5, 15.0)`. Do
+not read a budget from ENV. A future lower-only setting may reduce the count,
+but it must never increase the count or reduce the qualified delay. Stable
+promotion requires the empty and golden burst gate PASS on the exact RC digest.
+If that gate measures a longer background chain, revise the permit in a new RC.
 
 The existing `recovery_read` remains the request completion gate. It performs
 bounded exact reads and records the raw observed result in the v3 journal. The

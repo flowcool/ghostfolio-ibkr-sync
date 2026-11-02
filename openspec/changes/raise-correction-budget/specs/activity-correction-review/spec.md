@@ -13,16 +13,17 @@ that run. A later run SHALL inspect the unresolved journal before any financial
 write. No resend is allowed.
 
 Manual, automatic and comment-only correction PUTs SHALL share one digest-bound
-finite budget across all configured accounts. The shipped candidate is five
-corrections per run with a fifteen-second minimum inter-correction delay. These
-values SHALL remain activation candidates until the exact image passes the burst
+finite budget across all configured accounts. The RC activates five corrections
+per run with a fifteen-second minimum inter-correction delay. Stable promotion
+SHALL require the exact RC image to pass the versioned empty and golden burst
 qualification gate. The qualified lab record SHALL bind the accepted ceiling
 and delay to the destination digest. There SHALL be no ENV bypass above that
-ceiling. A future lower-only setting MAY reduce the dispatch count; it SHALL
-never increase the count or reduce the qualified delay. Each request SHALL
-complete bounded exact readback before the next PUT. The connector SHALL stop at
-the qualified limit and retain unchanged approvals and related import holds
-without requesting another approval.
+ceiling or below that delay. A future lower-only setting MAY reduce the dispatch
+count; it SHALL never increase the count or reduce the qualified delay. If the
+lab observes a longer background chain, a new RC SHALL revise the values. Each
+request SHALL complete bounded exact readback before the next PUT. The connector
+SHALL stop at the qualified limit and retain unchanged approvals and related
+import holds without requesting another approval.
 
 The exact image qualification SHALL measure request-bound market-data and
 portfolio-cache completion. It SHALL use the versioned empty and golden lab
@@ -55,7 +56,7 @@ resend. Synthetic HTTP mocks SHALL not qualify the image.
 
 #### Scenario: Qualified correction execution budget
 
-- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_execution_budget` mocks the candidate limit and delay with more approved proposals than the run can dispatch
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_execution_budget` mocks the qualified limit and delay with more approved proposals than the run can dispatch
 - **THEN** PUTs remain sequential, each is verified before the next, the finite
   shared limit and delay are obeyed, and deferred approvals remain unchanged.
 
