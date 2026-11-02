@@ -726,7 +726,7 @@ def test_effective_currency_acceptance_unknown_outcome_never_resends(monkeypatch
     row = created(import_candidate())
     row["currency"] = None
     monkeypatch.setattr(requests, "post", lambda *a, **k: calls.append(k) or Resp({"activities": [row]}, 201))
-    cfg = {**CFG}
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
     assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
     assert cfg["_uncertain_import_accounts"] == {"synthetic"}
     assert len(calls) == 1
@@ -741,7 +741,7 @@ def test_effective_currency_acceptance_outside_reconciliation_allowlist(monkeypa
     row["assetProfile"]["currency"] = code if nullable else "USD"
     row["currency"] = None if nullable else code
     monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
-    cfg = {**CFG}
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
     assert ghostfolio.ghost_import_activities(cfg, [candidate]) == ([candidate], True)
     assert not cfg.get("_uncertain_import_accounts")
     assert ghostfolio._existing_dividend_amounts(row, row["assetProfile"]) == (
