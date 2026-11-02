@@ -43,18 +43,20 @@ Exact journal recovery still compares the full instant, including intraday drift
 
 ## Safety limits
 
-The RC activates a review permit for Ghostfolio image
-`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`.
+The RC activates a review permit for the connector behavior.
 The permit allows **five corrections per connector run**, across all configured
 accounts, with a **15-second minimum delay** between confirmed corrections.
 Stable promotion requires a PASS from the empty and golden burst lab gate on
 this exact RC digest. Until that PASS, stable promotion and production use are
 not qualified. Other approved proposals remain unchanged for later runs and
 keep their import holds. Each PUT needs exact readback before the next PUT.
-Ghostfolio 3.96.0 exposes no completion signal through the activity API.
-Verify the destination image before enabling review. A different image requires
-renewed qualification. No ENV setting can raise the count or reduce the delay.
-If the lab observes a longer background chain, revise the values in a new RC.
+The activity API exposes no background completion signal.
+No ENV setting can raise the count or reduce the delay.
+Qualification covers connector behavior. Each release records the Ghostfolio
+version observed in its labs as information. A Ghostfolio version or image change
+does not invalidate qualification. If a future background chain exceeds the delay,
+exact readback and stop-on-uncertainty still protect the data. Raise the delay in
+a new connector release.
 Production activation retains its separate approval. See [qualification evidence
 and limits](releasing.md#activity-review-qualification).
 
@@ -372,10 +374,10 @@ A threshold match is a profile match, not exact identity proof.
 Qualify the exact connector image in isolated empty and golden labs before real
 activation. Cover full updates, comments, tags, background effects, duplicate
 references, restart recovery, private-state recovery and no repeated writes.
-Offline tests and the existing destination budget do not qualify a new image.
+Offline tests and the existing correction budget do not qualify a new image.
 A failed preservation case keeps affected corrections unavailable.
 
-Profiles and manual consent share the digest-bound qualified limit. The RC permit
+Profiles and manual consent share the qualified execution limit. The RC permit
 allows five PUTs per run with a 15-second minimum delay. A reference
 migration consumes that same limit. The next financial correction
 uses a fresh revision after confirmed migration. Oldest first-eligible revisions
@@ -420,7 +422,7 @@ override stays in effect, even when it differs from the profile currency. Real
 currency differences remain visible. GBP and GBp remain distinct denominations.
 Legacy reference migration changes only the comment and preserves raw currency.
 Currency proof does not prove source completeness, identity, dates or amounts.
-The profile limits and the shared digest-bound budget stay fixed. A failed or
+The profile limits and the shared correction budget stay fixed. A failed or
 uncertain correction stops the whole financial run. Preserve the v3 journal and
 resolve it with exact expected-after evidence before another write.
 

@@ -24,12 +24,15 @@ currency evidence holds the correction and sends no PUT. Pending review journals
 never resend a null currency.
 
 The RC now activates a permit for five activity corrections per run with a
-15-second inter-correction delay on the exact Ghostfolio image. Stable promotion
-requires the burst qualification gate to PASS in the empty and golden labs on
+15-second inter-correction delay. Stable promotion requires the burst qualification gate to PASS in the empty and golden labs on
 that exact digest. Exact readback remains the gate between PUTs. The first failed
 or uncertain correction stops the whole financial run, retains journal v3 and
 defers later approvals. No ENV setting can raise the count or lower the delay.
-If the lab shows a longer background chain, revise the values in a new RC.
+Qualification covers connector behavior. Each release records the Ghostfolio
+version observed in its labs as information. A Ghostfolio version or image change
+does not invalidate qualification. If a future background chain exceeds the delay,
+exact readback and stop-on-uncertainty still protect the data. Raise the delay in
+a new connector release.
 
 ## Deployment example migration
 

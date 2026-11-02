@@ -359,20 +359,22 @@ explained.
 
 ## Activity review qualification
 
-Review is opt-in. `activity_review.QUALIFIED_EXECUTION` binds the RC execution
-permit to Ghostfolio image
-`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`:
+Review is opt-in. `activity_review.QUALIFIED_EXECUTION` permits
 five corrections per complete connector run, across all configured accounts,
 with a 15-second minimum delay between confirmed requests. The RC activates
 this permit for the lab burst scenario. Stable promotion requires a PASS from
 the empty and golden burst gate on this exact digest.
 Remaining approvals and import holds stay pending for the next run. No ENV
-setting can raise the count or lower the delay. Operators must verify the destination
-image; the connector cannot discover a server's Docker image through its activity
-API. Image drift requires renewed qualification.
+setting can raise the count or lower the delay.
+Qualification covers connector behavior. Each release records the Ghostfolio
+version observed in its labs as information. A Ghostfolio version or image change
+does not invalidate qualification. If a future background chain exceeds the delay,
+exact readback and stop-on-uncertainty still protect the data. Raise the delay in
+a new connector release.
 
-The 2026-10-23 isolated proof used the published v3.1.0-rc.1 package against that
-Ghostfolio image. Six TRADE/DIVIDEND full-update/reverse cases covered exact
+The 2026-10-23 isolated proof used the published v3.1.0-rc.1 package against the
+Ghostfolio version recorded in that proof. Six TRADE/DIVIDEND full-update/reverse
+cases covered exact
 numeric values, UTC dates, tags, ownership, unchanged profiles and Unicode notes
 at 1999/2000 UTF-16 units. Thirteen observed PUTs each had exact financial
 readback and independently attributed new market-data and later portfolio-cache
@@ -385,8 +387,8 @@ The previous proof qualified isolated corrections only. It did not qualify a
 burst. The exact RC image must pass a new empty and golden lab burst before
 stable promotion. The lab must measure request-bound market-data and
 portfolio-cache completion and record the accepted limit and delay with the
-image digest. The connector cannot poll this completion through the activity
-API. A failed or uncertain correction stops the whole financial run. No resend
+connector image digest and informational Ghostfolio version. The connector cannot
+poll this completion through the activity API. A failed or uncertain correction stops the whole financial run. No resend
 is allowed. Observed background chains of 6.708-9.839 seconds are samples, not
 a qualification. If the lab shows a longer background chain, revise the
 permit in a new RC. Until the burst gate passes, stable promotion and production

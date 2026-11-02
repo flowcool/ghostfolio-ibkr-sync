@@ -2,8 +2,11 @@
 
 ## Runtime contract
 
-Keep `activity_review.QUALIFIED_EXECUTION` as the active image-bound RC permit:
-`(destination_image, limit, delay_seconds)`, currently `(image, 5, 15.0)`. Do
+Keep `activity_review.QUALIFIED_EXECUTION` as the active connector RC permit:
+`(limit, delay_seconds)`, currently `(5, 15.0)`.
+Ghostfolio version and image are not qualification dimensions. Record the observed
+lab version as information. Exact readback and stop-on-uncertainty protect data
+if a future background chain exceeds D. Raise D in a new connector release. Do
 not read a budget from ENV. A future lower-only setting may reduce the count,
 but it must never increase the count or reduce the qualified delay. Stable
 promotion requires the empty and golden burst gate PASS on the exact RC digest.

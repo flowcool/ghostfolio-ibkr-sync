@@ -550,7 +550,7 @@ def test_profile_execution_shared_budget_and_oldest_manual_work_first(tmp_path, 
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False, "activity_reconciliation": "balanced", "activity_review_file": str(state["path"])}
     try:
-        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 5, 0.0))
+        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (5, 0.0))
         events = matching_events(report(trade_xml("T1") + trade_xml("T2")))
         blocked, held = review.process_review(state, config, events, {"U1": "acc"})
         assert not blocked and [write["id"] for write in server.writes] == ["row1", "second"]

@@ -9,7 +9,7 @@ asynchronously after an activity PUT.
 
 ## What changes
 
-- Activate an image-bound RC budget of five corrections per run.
+- Activate a connector RC budget of five corrections per run.
 - Keep corrections sequential. Read the exact activity after every PUT before
   dispatching the next request.
 - Use a 15-second minimum inter-correction delay in the RC. Stable promotion
@@ -51,3 +51,7 @@ does not add an ENV override above the qualified ceiling. An ENV setting may
 only lower the qualified budget or delay after a future separately approved
 configuration change; this implementation exposes no bypass setting. Such a
 setting may lower the count only. It must not reduce the qualified delay.
+
+Ghostfolio image and version are not qualification dimensions. Each release records
+the lab version as information. Exact readback and stop-on-uncertainty protect
+data if a future chain exceeds D. Raise D in a new connector release.
