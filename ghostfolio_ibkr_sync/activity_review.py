@@ -1024,13 +1024,14 @@ def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
     return [item for item in selected if item["destination account"] not in blocked], blocked
 
 
-# Isolated full-update/readback/background proof covers one correction at a time.
-# No intra-run spacing applies with a limit of one. This is not a cross-run
-# background-completion guarantee; see docs/releasing.md. ENV cannot override it.
+# The candidate permit is bound to the exact destination image. The five-request
+# budget and 15-second spacing remain unavailable until the new burst qualification
+# passes on that image; the release gate records the measured values.
+# The connector cannot observe Ghostfolio's internal Bull jobs through its API.
 QUALIFIED_EXECUTION: tuple[str, int, float] | None = (
     "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078",
-    1,
-    0.0,
+    5,
+    15.0,
 )
 RECOVERY_WAITS = (0, 2, 5, 10)
 
@@ -1180,6 +1181,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     """Recover, refresh and dispatch sequentially before any ordinary writes."""
     assert_unchanged(state)
     validate_journal(state, config)
+    config["_review_stop_run"] = False
     original = state["document"]["proposals"]
     from ghostfolio_ibkr_sync.config import timezone_preview_reason
     from ghostfolio_ibkr_sync.outcome import RECONCILIATION_COUNTS
@@ -1358,7 +1360,11 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         matched, observed = recovery_read(config, entry)
         if not matched:
             blocked.add(account)
-            continue
+            config["_review_stop_run"] = True
+            log.error("Review correction failure for account %s activity %s; stopping the correction run; "
+                      "later approved corrections remain deferred and the account fence is retained",
+                      account, item["activity id"])
+            break
         entry["status"] = "confirmed"
         entry["verified result"] = plain(observed) if observed is not None else None
         publish_journal(state)

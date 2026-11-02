@@ -23,6 +23,13 @@ null stored activity currency uses the proven profile currency. Unresolved
 currency evidence holds the correction and sends no PUT. Pending review journals
 never resend a null currency.
 
+Activity review now carries a candidate budget of five corrections per run with
+a candidate 15-second inter-correction delay. The exact Ghostfolio image must
+pass the burst qualification gate before activation. Exact readback remains the
+gate between PUTs. The first failed or uncertain correction stops the whole
+financial run, retains journal v3 and defers later approvals. No ENV setting can
+raise the qualified ceiling.
+
 ## Deployment example migration
 
 The current checkout defaults to one account. Existing two-service installations

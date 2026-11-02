@@ -537,7 +537,7 @@ def test_profile_execution_fresh_authority_and_exact_journal(tmp_path, monkeypat
         review.close_review(state)
 
 
-def test_profile_execution_single_budget_and_oldest_manual_work_first(tmp_path, monkeypatch):
+def test_profile_execution_shared_budget_and_oldest_manual_work_first(tmp_path, monkeypatch):
     from _sync_helpers import report, trade_xml
     from test_activity_review import ReviewServer, write_review
     from ghostfolio_ibkr_sync import activity_review as review
@@ -552,8 +552,8 @@ def test_profile_execution_single_budget_and_oldest_manual_work_first(tmp_path, 
     try:
         events = matching_events(report(trade_xml("T1") + trade_xml("T2")))
         blocked, held = review.process_review(state, config, events, {"U1": "acc"})
-        assert not blocked and len(server.writes) == 1 and server.writes[0]["id"] == "row1"
-        assert held == {"IBKR#v2#U1:TRADE:T2"}
+        assert not blocked and [write["id"] for write in server.writes] == ["row1", "second"]
+        assert held == set()
         assert next(iter(state["journal"]["entries"].values()))["authority"] == "manual"
     finally:
         review.close_review(state)
