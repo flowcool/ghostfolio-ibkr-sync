@@ -7,6 +7,7 @@ and log why; additive-only imports and DRY_RUN guards live in `ghostfolio`.
 
 import logging
 import os
+import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -194,9 +195,9 @@ def dividend_action_quantities(dividend: DividendGroup, quiet: bool = False,
         if any(not all(row.get(field) for field in keys) for row in associated):
             return reject("missing accrual association keys")
         reversals = [row for row in associated if row.get("code") == "Re"
-                     and _dividend_day(row.get("payDate")) == dividend["date"]
-                     and dividend["date"] in (_dividend_day(row.get("date")),
-                                               _dividend_day(row.get("reportDate")))]
+                     and _accrual_payment_day_matches(row.get("payDate"), payments, dividend["date"])
+                     and any(_accrual_payment_day_matches(row.get(field), payments, dividend["date"])
+                             for field in ("date", "reportDate"))]
         if len(reversals) != 1:
             return reject("missing or contradictory payment reversal evidence")
         quantities = [_dividend_decimal(row.get("quantity")) for row in associated]
@@ -239,6 +240,18 @@ def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False,
 def _dividend_day(value: str | None) -> str | None:
     parsed = parse_ibkr_datetime(value or "")
     return parsed[:10] if parsed else None
+
+
+def _accrual_payment_day_matches(value: str | None, payments: Sequence[dict[str, str]],
+                                 utc_day: str) -> bool:
+    """Date-only accruals describe the source day, not an invented UTC clock."""
+    day = _dividend_day(value)
+    if not day:
+        return False
+    if value and re.fullmatch(r"\d{8}|\d{4}-\d{2}-\d{2}", value.strip()):
+        source_days = {_dividend_day(row.get("dateTime", "")[:8]) for row in payments}
+        return source_days == {day}
+    return day == utc_day
 
 
 # Exchanges where IBKR reports the major currency unit but the YAHOO data

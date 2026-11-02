@@ -211,8 +211,8 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
     # Flex provenance is a prerequisite: fail before any import, cash or platform write
     provenance = flex_provenance_failures(xml_text)
     if provenance:
-        log.error("Flex Query %s: cash rows without a valid 'YYYYMMDD;HHmmss TimeZone' dateTime "
-                  "(%s); account failed before any write. Add Date/Time with time zone to the "
+        log.error("Flex Query %s: rows without supported Flex timezone evidence; required cash dateTime form: 'YYYYMMDD;HHmmss TimeZone' "
+                  "(%s); account failed before any write. Use EST/EDT; add Date/Time with time zone to the "
                   "query, see README", query_id,
                   ", ".join(f"{kind}: {count}" for kind, count in sorted(provenance.items())))
         return {}, False

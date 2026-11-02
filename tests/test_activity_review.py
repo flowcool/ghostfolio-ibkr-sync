@@ -416,6 +416,9 @@ def test_review_replacement_exact_numeric_and_date_equivalence():
     assert proposals == {} and held == set()
     row["date"] = "2026-08-01T10:00:01Z"
     proposals, _ = review.refresh_proposals({}, source_events(), [row], {"U1": "acc"})
+    assert proposals == {}  # Same configured local day preserves the stored instant.
+    row["date"] = "2026-08-02T10:00:01Z"
+    proposals, _ = review.refresh_proposals({}, source_events(), [row], {"U1": "acc"})
     assert next(iter(proposals.values()))["changed fields"] == ["date"]
 
 
@@ -1493,5 +1496,114 @@ def test_effective_currency_persistence_changed_contract_fails_closed(tmp_path, 
         with pytest.raises(RuntimeError, match="policy|evidence"):
             review.validate_journal(state, config)
         assert len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("name", ["off", "conservative", "balanced", "permissive"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_timezone_review_same_local_day_preserves_intraday_date(name, legacy):
+    events = source_events(report(trade_xml("T1", date="20260118;190000 EST")))
+    marker = "IBKR#v2#U1:TRADE:T1"
+    stored = "2026-01-19T07:03:00Z"
+    row = destination("IBKR#T1" if legacy else marker, date=stored, quantity=Decimal("10"))
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation=name,
+                                           timezone="Europe/Paris")
+    assert row["date"] == stored
+    if not legacy:
+        assert proposals == {}
+        return
+    item = next(iter(proposals.values()))
+    assert item["changed fields"] == ["comment"] and item["actionable"]
+    assert item["automatic eligible"] is (name != "off")
+    assert review.instant(item["proposed values"]["date"]) == review.instant(stored)
+    context = item["date context"]
+    assert context["source text"] == "20260118;190000 EST"
+    assert context["source calendar day"] == "2026-01-18" and context["source zone"] == "EST"
+    assert context["source instant"] == "2026-01-19T00:00:00+00:00"
+    assert context["source local date"] == context["destination local date"] == "2026-01-19"
+
+
+@pytest.mark.parametrize("name", ["off", "conservative", "balanced", "permissive"])
+def test_timezone_migration_different_local_day_requires_correction(name):
+    events = source_events(report(trade_xml("T1", date="20260118;190000 EST")))
+    row = destination("IBKR#T1", date="2026-01-20T07:03:00Z", quantity=Decimal("10"))
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation=name,
+                                           timezone="Europe/Paris")
+    item = next(iter(proposals.values()))
+    assert item["actionable"] and item["automatic eligible"] is (name == "permissive")
+    assert item["changed fields"] == ["comment", "date"]
+    assert item["section"] == "activity_corrections"
+    assert "date" in item["diagnostic differences"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_review_replacement_timezone_readback_keeps_stored_instant(tmp_path, monkeypatch, legacy):
+    events = source_events(report(trade_xml("T1", date="20260118;190000 EST")))
+    row = destination("IBKR#T1" if legacy else "IBKR#v2#U1:TRADE:T1",
+                      date="2026-01-19T07:03:00Z", quantity=Decimal("10"), fee=Decimal("1" if legacy else "2"))
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+           "activity_review_file": str(path), "timezone": "Europe/Paris"}
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    try:
+        review.process_review(state, cfg, events, {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert "date" not in item["changed fields"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, cfg, events, {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+        assert review.instant(server.writes[0]["date"]) == review.instant(row["date"])
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["status"] == "confirmed" and state["journal"]["version"] == 3
+        assert entry["before"]["date"] == entry["after"]["date"]
+        assert review.row_matches(entry["after"], server.rows[0])
+        drift = deepcopy(server.rows[0])
+        drift["date"] = "2026-01-19T00:00:00Z"
+        assert not review.row_matches(entry["after"], drift)  # Exact recovery remains exact.
+    finally:
+        review.close_review(state)
+
+
+def test_timezone_review_same_utc_day_different_local_days_proposes_date():
+    events = source_events(report(trade_xml("T1", date="20260119;170000 EST")))
+    row = destination("IBKR#v2#U1:TRADE:T1", quantity=Decimal("10"), date="2026-01-19T23:30:00Z")
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"},
+                                            reconciliation="balanced", timezone="Europe/Paris")
+    item = next(iter(proposals.values()))
+    assert item["changed fields"] == ["date"] and not item["automatic eligible"]
+    assert item["date context"]["source local date"] == "2026-01-19"
+    assert item["date context"]["destination local date"] == "2026-01-20"
+
+
+def test_review_replacement_timezone_different_day_uses_existing_financial_path(tmp_path, monkeypatch):
+    events = source_events(report(trade_xml("T1", date="20260118;190000 EST")))
+    row = destination("IBKR#T1", date="2026-01-20T07:03:00Z", quantity=Decimal("10"))
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    monkeypatch.setenv("TZ", "Europe/Paris")
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+           "activity_review_file": str(path)}
+    try:
+        review.process_review(state, cfg, events, {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert item["changed fields"] == ["comment", "date"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, cfg, events, {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+        assert server.rows[0]["date"] == "2026-01-19T00:00:00+00:00"
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert entry["status"] == "confirmed"
+        assert review.instant(entry["before"]["date"]) == review.instant(row["date"])
+        assert review.row_matches(entry["after"], server.rows[0])
     finally:
         review.close_review(state)

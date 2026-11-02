@@ -12,7 +12,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal, DecimalException, localcontext
 from typing import Any, TypedDict
 from urllib.parse import quote, quote_plus
@@ -65,6 +65,11 @@ DIVIDEND_FIELD_NAMES = {
 }
 
 FLEX_SUFFIX_PATTERN = re.compile(r"^\d{8};\d{6}\s+[A-Za-z]{2,5}$")
+# A token must follow a recognizable source clock. An invalid unqualified row
+# retains its existing converter rejection; it is not an unknown-zone failure.
+FLEX_QUALIFIED_PATTERN = re.compile(
+    r"^(?:\d{8}(?:;\d{6})?|\d{4}-\d{2}-\d{2}(?:[,;]\s*\d{2}:\d{2}:\d{2})?)"
+    r"(?:\s+\S|[A-Za-z])")
 
 
 class DividendGroup(TypedDict):
@@ -217,13 +222,23 @@ def fetch_flex_report(token: str, query_id: str, max_retries: int = 60, retry_de
 # ---------------------------------------------------------------------------
 
 def parse_ibkr_datetime(dt_str: str | None) -> str | None:
-    """Parse IBKR datetime string to ISO 8601 format."""
+    """Convert EST/EDT Flex clocks to UTC; retain unqualified legacy UTC forms."""
     if not dt_str:
         return None
 
-    # Flex may append a timezone name ("20260801;143000 EST"); the wall time
-    # keeps the existing UTC labelling, the suffix is not converted.
-    dt_str = re.sub(r"(?<=\d)\s+[A-Za-z]{2,5}$", "", dt_str.strip())
+    dt_str = dt_str.strip()
+    qualified = FLEX_SUFFIX_PATTERN.fullmatch(dt_str)
+    if qualified:
+        wall_time, token = dt_str.rsplit(None, 1)
+        # These are fixed query-account offsets, including on US switch days.
+        offsets = {"EST": -5, "EDT": -4}
+        if token not in offsets:
+            return None
+        try:
+            parsed = datetime.strptime(wall_time, "%Y%m%d;%H%M%S")
+            return parsed.replace(tzinfo=timezone(timedelta(hours=offsets[token]))).astimezone(UTC).isoformat()
+        except (ValueError, OverflowError):
+            return None
 
     # Try common IBKR formats
     for fmt in ("%Y%m%d;%H%M%S", "%Y-%m-%d, %H:%M:%S", "%Y-%m-%d;%H:%M:%S",
@@ -405,23 +420,32 @@ def parse_cash_dividends(xml_text: str, outcome: RunOutcome | None = None) -> li
 # ---------------------------------------------------------------------------
 
 def flex_provenance_failures(xml_text: str) -> dict[str, int]:
-    """Count DETAIL dividend, payment-in-lieu and withholding rows whose dateTime
-    lacks the Flex form "YYYYMMDD;HHmmss TimeZone", keyed by cash type.
+    """Count unsupported qualified timestamps and missing required cash suffixes.
 
-    Other cash types and SUMMARY rows are outside the check.
+    Other cash types and SUMMARY rows do not require a suffix. A qualified
+    timestamp on any of the four consumed record types must still be supported.
+    Keys retain cash types for existing diagnostics; other rows use their tag.
     """
     root = ET.fromstring(xml_text)
     failures: dict[str, int] = {}
-    for el in root.iter("CashTransaction"):
+    for el in root.iter():
+        if el.tag not in ("Trade", "CashTransaction", "ChangeInDividendAccrual", "CorporateAction"):
+            continue
         row = el.attrib
-        tx_type = row.get("type", "")
-        if tx_type not in DIVIDEND_CASH_TYPES and tx_type != WITHHOLDING_CASH_TYPE:
-            continue
-        if row.get("levelOfDetail", "DETAIL").upper() != "DETAIL":
-            continue
         date_time = row.get("dateTime", "").strip()
-        if not FLEX_SUFFIX_PATTERN.match(date_time) or not parse_ibkr_datetime(date_time):
-            failures[tx_type] = failures.get(tx_type, 0) + 1
+        required_cash = (el.tag == "CashTransaction"
+                         and row.get("type") in (*DIVIDEND_CASH_TYPES, WITHHOLDING_CASH_TYPE)
+                         and row.get("levelOfDetail", "DETAIL").upper() == "DETAIL")
+        # Include malformed/unknown suffixes. No source token may be guessed.
+        clocks = [date_time]
+        if el.tag == "ChangeInDividendAccrual":
+            clocks.extend(row.get(field, "").strip() for field in ("date", "payDate", "reportDate"))
+        unsupported = any(FLEX_QUALIFIED_PATTERN.match(clock)
+                          and parse_ibkr_datetime(clock) is None for clock in clocks)
+        if (unsupported or (required_cash and (not FLEX_SUFFIX_PATTERN.fullmatch(date_time)
+                                               or parse_ibkr_datetime(date_time) is None))):
+            kind = row.get("type", "CashTransaction") if el.tag == "CashTransaction" else el.tag
+            failures[kind] = failures.get(kind, 0) + 1
     return failures
 
 

@@ -189,7 +189,8 @@ def source_events(reports: dict[str, tuple[str, str]], config: dict[str, Any]) -
             reference = f"{name}:trade:{index}"
             expected = None
             reason = None
-            day = (parse_ibkr_datetime(trade.get("dateTime")) or "")[:10] or None
+            stamp = parse_ibkr_datetime(trade.get("dateTime"))
+            day = instant(stamp).astimezone(ZoneInfo(config["timezone"])).date().isoformat() if stamp else None
             payload = convert_trade_to_activity(trade, destination, mapping, {})
             try:
                 require(payload and trade.get("accountId") == account, "Unproven trade")
@@ -294,7 +295,8 @@ def source_events(reports: dict[str, tuple[str, str]], config: dict[str, Any]) -
                 # A proven zero-net action contributes tax to the historical
                 # clamp, but claims no historical payment row of its own.
                 aliases = [] if actions and (account, action) not in actions else old
-                add(account, "DIVIDEND", action, reference, evidence, aliases, group["date"],
+                add(account, "DIVIDEND", action, reference, evidence, aliases,
+                    instant(group["date"] + "T00:00:00+00:00").astimezone(ZoneInfo(config["timezone"])).date().isoformat(),
                     expected, reason, group_key, coverage)
     for event in events.values():
         event["source_refs"].sort()

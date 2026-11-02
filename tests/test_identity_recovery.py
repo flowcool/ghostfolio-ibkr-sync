@@ -22,10 +22,10 @@ def source_xml():
         keys = f'accountId="U1" conid="1001" currency="USD" actionID="{action}" exDate="20260101"'
         cash.append(f'<CashTransaction {keys} isin="US0000000001" symbol="TEST" '
                     f'type="Dividends" levelOfDetail="DETAIL" amount="{gross}" '
-                    'dateTime="20260110;120000 UTC"/>')
+                    'dateTime="20260110;070000 EST"/>')
         cash.append(f'<CashTransaction {keys} isin="US0000000001" symbol="TEST" '
                     f'type="Withholding Tax" levelOfDetail="DETAIL" amount="{tax}" '
-                    'dateTime="20260110;120000 UTC"/>')
+                    'dateTime="20260110;070000 EST"/>')
         accruals.append(f'<ChangeInDividendAccrual {keys} quantity="{quantity}" code="Re" '
                         'payDate="20260110" date="20260110" reportDate="20260110"/>')
     return ('<FlexQueryResponse><FlexStatements><FlexStatement fromDate="20260101" '
@@ -313,7 +313,7 @@ def submission(case, monkeypatch, request):
         case["source"] = case["source"].replace(b'</CashTransactions>',
             b'<CashTransaction accountId="U1" conid="1001" currency="USD" actionID="third" '
             b'exDate="20260101" isin="US0000000001" symbol="TEST" type="Dividends" '
-            b'amount="10" dateTime="20260110;120000 UTC"/></CashTransactions>')
+            b'amount="10" dateTime="20260110;070000 EST"/></CashTransactions>')
         case["source"] = case["source"].replace(b'</ChangeInDividendAccruals>',
             b'<ChangeInDividendAccrual accountId="U1" conid="1001" currency="USD" actionID="third" '
             b'exDate="20260101" quantity="20" code="Re" payDate="20260110" date="20260110" '

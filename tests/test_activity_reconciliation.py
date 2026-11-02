@@ -196,7 +196,7 @@ def test_legacy_migration_preserves_all_other_values_and_separates_correction():
     from ghostfolio_ibkr_sync import activity_review as review
     from test_activity_review import destination
     events = matching_events()
-    row = destination("IBKR#T1", quantity=D("2"), fee=D("999"), date="2020-01-01T00:00:00Z")
+    row = destination("IBKR#T1", quantity=D("2"), fee=D("999"), date="2026-08-01T07:03:00Z")
     proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="conservative")
     item = next(iter(proposals.values()))
     assert item["changed fields"] == ["comment"]
@@ -205,7 +205,7 @@ def test_legacy_migration_preserves_all_other_values_and_separates_correction():
     row["comment"] = item["proposed values"]["comment"]
     later, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="conservative")
     correction = next(iter(later.values()))
-    assert correction["changed fields"] == ["date", "fee", "quantity"]
+    assert correction["changed fields"] == ["fee", "quantity"]
     assert not correction["automatic eligible"]
 
 
@@ -950,6 +950,9 @@ def test_effective_currency_replay(tmp_path, monkeypatch):
     for index, item in enumerate(references.values()):
         source = deepcopy(item["proposed"])
         source.update({field: difference["source"] for field, difference in item["observed differences"].items()})
+        # This synthetic currency control deliberately satisfies the independent
+        # local-day gate. The Flex timezone replay tests actual source clocks.
+        source["date"] = item["current"]["date"]
         kind = "DIVIDEND" if item["type"] == "DIVIDEND" else "TRADE"
         marker = f"IBKR#v2#synthetic:{kind}:R{index}"
         source["comment"] = marker
@@ -1036,3 +1039,13 @@ def test_effective_currency_diagnosis_names_independent_holds(failure, reason):
     item = next(iter(proposals.values()))
     assert not item["automatic eligible"]
     assert any(message.startswith(reason) for message in item["numeric evidence"]["eligibility reasons"])
+
+
+@pytest.mark.parametrize("kind,days,allowed", [("BUY", 2, True), ("SELL", 2, True), ("BUY", 3, False),
+                                               ("DIVIDEND", 3, True), ("DIVIDEND", 4, False)])
+def test_timezone_permissive_local_day_limits(kind, days, allowed):
+    from datetime import datetime, timedelta
+    source = "2026-01-19T00:00:00Z"
+    target = (datetime.fromisoformat(source) + timedelta(days=days, hours=7)).isoformat()
+    assert reconciliation.date_eligible("permissive", source, target, kind, "Europe/Paris")[0] is allowed
+    assert not reconciliation.date_eligible("balanced", source, target, kind, "Europe/Paris")[0]

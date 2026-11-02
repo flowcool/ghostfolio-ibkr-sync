@@ -42,6 +42,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     dividend_input_compatible,
     flex_provenance_failures,
     parse_cash_dividends,
+    parse_ibkr_datetime,
     parse_source_account_ids,
     parse_trades,
 )
@@ -695,8 +696,13 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
                 if reference in event["legacy"] and source["type"] != "DIVIDEND":
                     # Mapping authorizes identity only. No financial tolerance
                     # can be used to fold a later correction into migration.
-                    edges[event_id, row["id"]] = {"numeric evidence": {}, "profile date context": {"timezone": timezone}}
-                    continue
+                    same_day, context = reconciliation_rules.date_eligible(
+                        "conservative", source["date"], current["date"], source["type"], timezone)
+                    if same_day:
+                        edges[event_id, row["id"]] = {"numeric evidence": {}, "profile date context": context}
+                        continue
+                    # A different day needs the complete financial correction
+                    # checks below, never comment-only mapping authority.
                 date_ok, date_context = reconciliation_rules.date_eligible(name, source["date"], current["date"], source["type"], timezone)
                 numbers = reconciliation_rules.numeric_evidence(event, current)
                 quantity_ok = (numeric(source["quantity"]) == numeric(current["quantity"])
@@ -796,6 +802,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             status, actionable = "pending", True
             changes: list[str] = []
             diagnostics: dict[str, Any] = {}
+            date_context: dict[str, str] = {}
             try:
                 current = values_of(row)
                 currency = effective_currency(row)
@@ -803,12 +810,26 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     raise RuntimeError(currency["reason"])
                 proposed = {**current, **proposed}
                 proposed["comment"] = replacement_comment(row, event)
+                same_day, date_context = reconciliation_rules.date_eligible(
+                    "conservative", proposed["date"], current["date"], proposed["type"], timezone)
+                raw = event["source evidence"]
+                clocks = ([raw.get("dateTime", "")] if "dateTime" in raw
+                          else [payment.get("dateTime", "") for payment in raw.get("payments", [])])
+                date_context.update({"source text": "; ".join(clocks),
+                                     "source calendar day": ", ".join(sorted({
+                                         (parse_ibkr_datetime(clock.split(";")[0].split(",")[0]) or "")[:10]
+                                         for clock in clocks})),
+                                     "source zone": ", ".join(sorted({clock.rsplit(None, 1)[-1]
+                                         if re.fullmatch(r"\d{8};\d{6}\s+(EST|EDT)", clock.strip())
+                                         else "unqualified legacy UTC" for clock in clocks}))})
+                if same_day:
+                    proposed["date"] = current["date"]
                 diagnostics = {field: {"current": current[field], "source": proposed[field]}
                                for field in changed_fields(current, proposed)}
                 legacy_trade = marker_of(row) in event["legacy"] and event["values"]["type"] != "DIVIDEND"
                 legacy_dividend = (marker_of(row) in event["legacy"] and event["values"]["type"] == "DIVIDEND"
                                    and (event["legacy safe"] or (event_id, row["id"]) in migration_pairs))
-                if legacy_trade or legacy_dividend:
+                if (legacy_trade or legacy_dividend) and same_day:
                     proposed = {**current, "comment": proposed["comment"]}
                 changes = changed_fields(current, proposed)
                 payload = update_payload(row, proposed)
@@ -860,7 +881,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     "actionable": actionable, "binding": binding, "review revision": uuid4().hex,
                     "source evidence": plain({**event, "payload": wire_values(event["payload"])}),
                     "diagnostic differences": diagnostics,
-                    "date context": "Full instants; proximity uses local calendar dates"}
+                    "date context": date_context}
             item.update(section="reference_updates" if changes == ["comment"] else "activity_corrections",
                         **{"evidence level": ("blocked" if not actionable else
                                              "exact" if reason == "exact reference" else "probable"),
@@ -901,7 +922,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     numbers["eligibility reasons"] = reasons
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
                          "numeric evidence": numbers,
-                         "profile date context": auto["profile date context"] if auto else {}})
+                         "profile date context": {**(auto["profile date context"] if auto else {}), **date_context}})
             association = association_binding(event, current, occupied, marker_of(row)) if current else None
             item.update({"rejection binding": association, "rejected": False, "rejection cooldown": 0,
                          "recognized claim": marker_of(row) == event_id or marker_of(row) in event["legacy"]})
