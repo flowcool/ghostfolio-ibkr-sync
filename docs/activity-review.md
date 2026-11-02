@@ -43,20 +43,20 @@ Exact journal recovery still compares the full instant, including intraday drift
 
 ## Safety limits
 
-Review dispatch is qualified for Ghostfolio image
-`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`
-with a **candidate limit of five corrections per connector run**, across all
-configured accounts, and a **candidate minimum delay of 15 seconds** between
-confirmed corrections. These values are not qualified until the exact image
-passes the burst lab gate. Other approved proposals remain unchanged for later
-runs and keep their import holds. Each PUT needs exact readback before the next
-PUT. Ghostfolio 3.96.0 exposes no completion signal through the activity API.
-The delay is the connector's qualified pacing gate. Verify the destination image
-before enabling review. A different image requires renewed qualification. No ENV
-setting changes the qualified ceiling. A lower-only setting may be added only by
-a later approved change. Production activation and stable publication retain
-their separate approval. See
-[qualification evidence and limits](releasing.md#activity-review-qualification).
+The RC activates a review permit for Ghostfolio image
+`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`.
+The permit allows **five corrections per connector run**, across all configured
+accounts, with a **15-second minimum delay** between confirmed corrections.
+Stable promotion requires a PASS from the empty and golden burst lab gate on
+this exact RC digest. Until that PASS, stable promotion and production use are
+not qualified. Other approved proposals remain unchanged for later runs and
+keep their import holds. Each PUT needs exact readback before the next PUT.
+Ghostfolio 3.96.0 exposes no completion signal through the activity API.
+Verify the destination image before enabling review. A different image requires
+renewed qualification. No ENV setting can raise the count or reduce the delay.
+If the lab observes a longer background chain, revise the values in a new RC.
+Production activation retains its separate approval. See [qualification evidence
+and limits](releasing.md#activity-review-qualification).
 
 ## Configure persistent review
 
