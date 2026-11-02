@@ -626,7 +626,8 @@ def test_effective_currency_recovery_acceptance(case, raw, profile_code):
 @pytest.mark.parametrize("change", [{"currency": None, "assetProfile": None}, {"currency": ""}, {"currency": "AAA"}, {"currency": "EUR"}, {"quantity": 999}, {"fee": 999}])
 def test_effective_currency_recovery_keeps_independent_guards(case, change):
     case["snapshot"]["activities"][0].update(change)
-    with pytest.raises(RuntimeError): run(case)
+    with pytest.raises(RuntimeError):
+        run(case)
 
 
 @pytest.mark.parametrize("raw,profile_code", [(None, "USD"), ("USD", "EUR")])
@@ -639,5 +640,6 @@ def test_effective_currency_recovery_positive_readback_and_existing_rows(case, s
     dispatch_recovery(s)
     assert journal_state(s)["status"] == "complete"
     assert s["post"].call_count == 1
-    with pytest.raises(RuntimeError, match="already exists"): dispatch_recovery(s)
+    with pytest.raises(RuntimeError, match="already exists"):
+        dispatch_recovery(s)
     assert s["post"].call_count == 1

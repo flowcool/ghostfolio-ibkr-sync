@@ -886,9 +886,17 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 reasons = []
                 if not actionable:
                     reasons.append(status)
-                if "source gross" in numbers and not reconciliation_rules.gross_within_limits(reconciliation,
-                        Decimal(numbers["source gross"]), Decimal(numbers["destination gross"]), numbers["currency"]):
-                    reasons.append("Gross difference exceeds profile limits")
+                asset = current.get("assetProfile", {})
+                if asset.get("isin") and event["isin"] and asset["isin"] != event["isin"]:
+                    reasons.append("Conflicting source and destination security identity")
+                if reconciliation in reconciliation_rules.LIMITS:
+                    if ("source gross" in numbers and not reconciliation_rules.gross_within_limits(reconciliation,
+                            Decimal(numbers["source gross"]), Decimal(numbers["destination gross"]), numbers["currency"])
+                            and not numbers.get("calculation residue")):
+                        reasons.append("Gross difference exceeds profile limits")
+                    if current and not reconciliation_rules.date_eligible(reconciliation, event["values"]["date"],
+                            current["date"], event["values"]["type"], timezone)[0]:
+                        reasons.append("Business date exceeds profile limits")
                 if reasons:
                     numbers["eligibility reasons"] = reasons
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
@@ -1201,7 +1209,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         matched, observed = recovery_read(config, entry)
         if matched and not simulated:
             entry["status"] = "confirmed"
-            entry["verified result"] = values_of(observed) if observed is not None else None
+            entry["verified result"] = plain(observed) if observed is not None else None
             publish_journal(state)
             recovered_events.add(entry["source event"])
             journal_bindings.discard((entry["source event"], entry["destination account"], entry["activity id"]))
@@ -1313,7 +1321,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             blocked.add(account)
             continue
         entry["status"] = "confirmed"
-        entry["verified result"] = values_of(observed) if observed is not None else None
+        entry["verified result"] = plain(observed) if observed is not None else None
         publish_journal(state)
         completed(entry)
         refreshed = {key: candidate for key, candidate in refreshed.items()

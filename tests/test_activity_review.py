@@ -1343,13 +1343,20 @@ def test_effective_currency_readback_exact_preservation(drift):
     row["assetProfile"]["currency"] = "KRW"
     expected = review.values_of(row)
     row["currency"] = None
-    if drift in ("quantity", "fee"): row[drift] += Decimal(1)
-    elif drift == "date": row["date"] = "2020-01-01T00:00:00Z"
-    elif drift == "comment": row["comment"] = "changed"
-    elif drift == "tags": row["tags"] = []
-    elif drift == "userId": row["userId"] = "other"
-    elif drift == "profile": row["assetProfile"]["currency"] = "USD"
-    elif drift == "currency": row["currency"] = "USD"
+    if drift in ("quantity", "fee"):
+        row[drift] += Decimal(1)
+    elif drift == "date":
+        row["date"] = "2020-01-01T00:00:00Z"
+    elif drift == "comment":
+        row["comment"] = "changed"
+    elif drift == "tags":
+        row["tags"] = []
+    elif drift == "userId":
+        row["userId"] = "other"
+    elif drift == "profile":
+        row["assetProfile"]["currency"] = "USD"
+    elif drift == "currency":
+        row["currency"] = "USD"
     assert review.row_matches(row, expected, review.CURRENCY_POLICY) is (drift is None)
     assert not review.row_matches(row, expected)
 
@@ -1361,7 +1368,8 @@ def test_effective_currency_readback_retains_raw_and_no_resend(tmp_path, monkeyp
         try:
             return original(self, url, **kwargs)
         finally:
-            if self.outcome != "unchanged": self.rows[0]["currency"] = None
+            if self.outcome != "unchanged":
+                self.rows[0]["currency"] = None
     monkeypatch.setattr(ReviewServer, "put", nullable)
     row = destination(currency=None)
     row["assetProfile"]["currency"] = "USD"
@@ -1372,14 +1380,17 @@ def test_effective_currency_readback_retains_raw_and_no_resend(tmp_path, monkeyp
         assert bool(blocked) is (outcome == "unchanged")
         if not blocked:
             assert entry["verified result"]["currency"] is None
+            assert entry["verified result"] == review.plain(server.rows[0])
             assert entry["after"]["currency"] == "USD"
             assert entry["eligibility"]["currency comparison"] == review.currency_contract(entry)
-    finally: review.close_review(state)
+    finally:
+        review.close_review(state)
     state = review.open_review(str(path), [])
     try:
         review.process_review(state, config, source_events(), {"U1": "acc"})
         assert len(server.writes) == 1
-    finally: review.close_review(state)
+    finally:
+        review.close_review(state)
 
 
 def test_effective_currency_readback_does_not_scale_gbp():
@@ -1404,7 +1415,9 @@ def test_effective_currency_persistence_real_v400_reader(tmp_path, monkeypatch):
     review.close_review(state)
     old = tmp_path / "previous-release"
     old.mkdir()
-    archive = subprocess.run(["git", "archive", "v4.0.0", "ghostfolio_ibkr_sync"], check=True, capture_output=True).stdout
+    revision = subprocess.run(["git", "rev-parse", "v4.0.0^{commit}"], check=True, capture_output=True, text=True).stdout.strip()
+    assert revision == "72fb74a0c0cd4183fb62f7bb8219422795dee6ed"
+    archive = subprocess.run(["git", "archive", revision, "ghostfolio_ibkr_sync"], check=True, capture_output=True).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
         bundle.extractall(old, filter="data")
     # A schema-1 empty view avoids coupling this proof to derived generations.
@@ -1412,6 +1425,8 @@ def test_effective_currency_persistence_real_v400_reader(tmp_path, monkeypatch):
     path.write_bytes(review.atomic_yaml(path, {"version": 1, "proposals": {}}))
     script = """
 import json, sys
+sys.addaudithook(lambda event, args: (_ for _ in ()).throw(RuntimeError("Network denied"))
+                if event in ("socket.connect", "socket.getaddrinfo") else None)
 from ghostfolio_ibkr_sync import activity_review as r
 try:
     state = r.open_review(sys.argv[1], [])
@@ -1453,24 +1468,30 @@ def test_effective_currency_persistence_legacy_contract_is_immutable(tmp_path, m
     before = state["journal_path"].read_bytes()
     try:
         server.rows[0] = deepcopy(entry["after"])
-        for field in review.NUMBERS: server.rows[0][field] = Decimal(server.rows[0][field])
+        for field in review.NUMBERS:
+            server.rows[0][field] = Decimal(server.rows[0][field])
         server.rows[0]["assetProfile"]["currency"] = "USD"
         server.rows[0]["currency"] = None
         blocked, _ = review.process_review(state, config, source_events(), {"U1": "acc"})
         assert blocked == {"acc"} and len(server.writes) == 1
         assert state["journal_path"].read_bytes() == before
-    finally: review.close_review(state)
+    finally:
+        review.close_review(state)
 
 
 @pytest.mark.parametrize("edit", ["policy", "profile", "request"])
 def test_effective_currency_persistence_changed_contract_fails_closed(tmp_path, monkeypatch, edit):
     server, state, config, _, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
     entry = next(iter(state["journal"]["entries"].values()))
-    if edit == "policy": entry["eligibility"]["policy version"] = "unknown"
-    elif edit == "profile": entry["after"]["assetProfile"]["currency"] = "JPY"
-    else: entry["request"]["fee"] = "999"
+    if edit == "policy":
+        entry["eligibility"]["policy version"] = "unknown"
+    elif edit == "profile":
+        entry["after"]["assetProfile"]["currency"] = "JPY"
+    else:
+        entry["request"]["fee"] = "999"
     try:
         with pytest.raises(RuntimeError, match="policy|evidence"):
             review.validate_journal(state, config)
         assert len(server.writes) == 1
-    finally: review.close_review(state)
+    finally:
+        review.close_review(state)

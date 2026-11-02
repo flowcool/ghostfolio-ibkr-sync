@@ -290,9 +290,9 @@ Historical maintenance retains its separate saved-evidence and operation GO.
 Back up the operator YAML, its `.state.yaml` companion and its journal together.
 Keep them private in the same persistent directory. Stop all writers first.
 Readers accept review schemas 1 and 2. The first schema-3 publication clears
-legacy approvals once. New journal entries use version 2. Version-1 unresolved
-requests remain readable with their original keys and revisions.
-Old images refuse the new review and journal schemas.
+legacy approvals once. New journal entries use version 3. Version-1 and version-2
+unresolved requests remain readable with their original keys and revisions.
+Version 4.0.0 refuses version-3 journals before recovery.
 
 A missing or corrupt private state stops correction. Do not delete a journal,
 reset a pending request, or resend a request to recover.
