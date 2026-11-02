@@ -1287,3 +1287,211 @@ def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, ca
             assert str(state["path"]) in caplog.text
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("raw,profile_code,source_code", [(None, "USD", "USD"), ("KRW", "USD", "KRW"), ("KRW", "KRW", "KRW")])
+def test_effective_currency_comparison_conformity_and_fee(raw, profile_code, source_code):
+    events = source_events(report(trade_xml("T1", currency=source_code)))
+    marker = next(iter(events))
+    row = destination(marker, quantity=Decimal(10), currency=raw)
+    row["assetProfile"]["currency"] = profile_code
+    original = deepcopy(row)
+    assert review.refresh_proposals({}, events, [row], {"U1": "acc"}) == ({}, set())
+    row["fee"] = Decimal(2)
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    assert next(iter(proposals.values()))["changed fields"] == ["fee"]
+    assert row["currency"] == original["currency"]
+
+
+def test_effective_currency_comparison_legacy_preserves_raw_and_other_fields():
+    events = source_events()
+    row = destination("IBKR#T1", currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    item = next(iter(proposals.values()))
+    assert item["changed fields"] == ["comment"]
+    assert item["proposed values"]["currency"] is None
+    assert item["proposed values"]["quantity"] == "1"
+    assert review.update_payload(row, item["proposed values"])["currency"] is None
+
+
+@pytest.mark.parametrize("blocked", ["unknown", "journal", "corporate"])
+def test_effective_currency_comparison_conformity_retains_fences(blocked):
+    events = source_events()
+    marker = next(iter(events))
+    row = destination(marker, currency=None, quantity=Decimal(10))
+    row["assetProfile"]["currency"] = None if blocked == "unknown" else "USD"
+    proposals, held = review.refresh_proposals({}, events, [row], {"U1": "acc"},
+        {(marker, "acc", row["id"])} if blocked == "journal" else set(),
+        held_events={marker} if blocked == "corporate" else set())
+    assert marker in held
+    assert not next(iter(proposals.values()))["actionable"]
+
+
+@pytest.mark.parametrize("source_code,target_code", [("USD", "KRW"), ("GBP", "GBp")])
+def test_effective_currency_comparison_retains_real_difference(source_code, target_code):
+    events = source_events(report(trade_xml("T1", currency=source_code)))
+    row = destination(next(iter(events)), currency=target_code, quantity=Decimal(10))
+    row["assetProfile"]["currency"] = "USD"
+    item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"})[0].values()))
+    assert "currency" in item["changed fields"]
+
+
+@pytest.mark.parametrize("drift", [None, "quantity", "fee", "date", "comment", "tags", "userId", "profile", "currency"])
+def test_effective_currency_readback_exact_preservation(drift):
+    row = destination(currency="KRW")
+    row["assetProfile"]["currency"] = "KRW"
+    expected = review.values_of(row)
+    row["currency"] = None
+    if drift in ("quantity", "fee"):
+        row[drift] += Decimal(1)
+    elif drift == "date":
+        row["date"] = "2020-01-01T00:00:00Z"
+    elif drift == "comment":
+        row["comment"] = "changed"
+    elif drift == "tags":
+        row["tags"] = []
+    elif drift == "userId":
+        row["userId"] = "other"
+    elif drift == "profile":
+        row["assetProfile"]["currency"] = "USD"
+    elif drift == "currency":
+        row["currency"] = "USD"
+    assert review.row_matches(row, expected, review.CURRENCY_POLICY) is (drift is None)
+    assert not review.row_matches(row, expected)
+
+
+@pytest.mark.parametrize("outcome", ["success", "timeout", "unchanged"])
+def test_effective_currency_readback_retains_raw_and_no_resend(tmp_path, monkeypatch, outcome):
+    original = ReviewServer.put
+    def nullable(self, url, **kwargs):
+        try:
+            return original(self, url, **kwargs)
+        finally:
+            if self.outcome != "unchanged":
+                self.rows[0]["currency"] = None
+    monkeypatch.setattr(ReviewServer, "put", nullable)
+    row = destination(currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server, state, config, blocked, held = run_review(tmp_path, monkeypatch, rows=[row], outcome=outcome)
+    path = state["path"]
+    try:
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert bool(blocked) is (outcome == "unchanged")
+        if not blocked:
+            assert entry["verified result"]["currency"] is None
+            assert entry["verified result"] == review.plain(server.rows[0])
+            assert entry["after"]["currency"] == "USD"
+            assert entry["eligibility"]["currency comparison"] == review.currency_contract(entry)
+    finally:
+        review.close_review(state)
+    state = review.open_review(str(path), [])
+    try:
+        review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+def test_effective_currency_readback_does_not_scale_gbp():
+    row = destination(currency="GBp")
+    row["assetProfile"]["currency"] = "GBP"
+    expected = review.values_of(row)
+    row["currency"] = None
+    assert not review.row_matches(row, expected, review.CURRENCY_POLICY)
+
+
+def test_effective_currency_persistence_real_v400_reader(tmp_path, monkeypatch):
+    """Run the actual tagged reader, never an imitation of its policy checks."""
+    import io
+    import subprocess
+    import sys
+    import tarfile
+    from pathlib import Path
+    row = destination()
+    row["assetProfile"]["currency"] = "USD"
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, rows=[row], outcome="unchanged")
+    journal = deepcopy(state["journal"])
+    review.close_review(state)
+    old = tmp_path / "previous-release"
+    old.mkdir()
+    revision = subprocess.run(["git", "rev-parse", "v4.0.0^{commit}"], check=True, capture_output=True, text=True).stdout.strip()
+    assert revision == "72fb74a0c0cd4183fb62f7bb8219422795dee6ed"
+    archive = subprocess.run(["git", "archive", revision, "ghostfolio_ibkr_sync"], check=True, capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
+        bundle.extractall(old, filter="data")
+    # A schema-1 empty view avoids coupling this proof to derived generations.
+    path = tmp_path / "rollback.yaml"
+    path.write_bytes(review.atomic_yaml(path, {"version": 1, "proposals": {}}))
+    script = """
+import json, sys
+sys.addaudithook(lambda event, args: (_ for _ in ()).throw(RuntimeError("Network denied"))
+                if event in ("socket.connect", "socket.getaddrinfo") else None)
+from ghostfolio_ibkr_sync import activity_review as r
+try:
+    state = r.open_review(sys.argv[1], [])
+    try:
+        r.validate_journal(state, {"ghost_host": "http://ghost"})
+        print("ACCEPTED_UNKNOWN_POLICY")
+    finally: r.close_review(state)
+except RuntimeError as exc:
+    print(str(exc))
+    sys.exit(3)
+"""
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("GHOST_", "IBKR_"))}
+    environment["PYTHONPATH"] = str(old)
+    results = []
+    for version in (2, 3):
+        journal["version"] = version
+        target = Path(str(path) + ".journal.yaml")
+        target.write_bytes(review.atomic_yaml(target, journal))
+        before = target.read_bytes()
+        result = subprocess.run([sys.executable, "-c", script, str(path)], cwd=old,
+                                env=environment, capture_output=True, text=True, timeout=30)
+        assert target.read_bytes() == before
+        results.append(result)
+    # v4.0.0 ignores a new policy inside v2. An explicit format is required.
+    assert results[0].returncode == 0 and "ACCEPTED_UNKNOWN_POLICY" in results[0].stdout
+    assert results[1].returncode == 3 and "Invalid review journal version" in results[1].stdout
+    assert len(server.writes) == 1
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_effective_currency_persistence_legacy_contract_is_immutable(tmp_path, monkeypatch, version):
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
+    entry = next(iter(state["journal"]["entries"].values()))
+    entry.pop("eligibility")
+    entry.pop("authority")
+    state["journal"]["version"] = version
+    review.publish_journal(state)
+    before = state["journal_path"].read_bytes()
+    try:
+        server.rows[0] = deepcopy(entry["after"])
+        for field in review.NUMBERS:
+            server.rows[0][field] = Decimal(server.rows[0][field])
+        server.rows[0]["assetProfile"]["currency"] = "USD"
+        server.rows[0]["currency"] = None
+        blocked, _ = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert blocked == {"acc"} and len(server.writes) == 1
+        assert state["journal_path"].read_bytes() == before
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("edit", ["policy", "profile", "request"])
+def test_effective_currency_persistence_changed_contract_fails_closed(tmp_path, monkeypatch, edit):
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, outcome="unchanged")
+    entry = next(iter(state["journal"]["entries"].values()))
+    if edit == "policy":
+        entry["eligibility"]["policy version"] = "unknown"
+    elif edit == "profile":
+        entry["after"]["assetProfile"]["currency"] = "JPY"
+    else:
+        entry["request"]["fee"] = "999"
+    try:
+        with pytest.raises(RuntimeError, match="policy|evidence"):
+            review.validate_journal(state, config)
+        assert len(server.writes) == 1
+    finally:
+        review.close_review(state)

@@ -29,6 +29,7 @@ from ghostfolio_ibkr_sync.app import (
 )
 from ghostfolio_ibkr_sync.ghostfolio import (
     activity_is_active,
+    effective_currency,
     format_versioned_activity_identity,
     index_existing_activities,
     parse_versioned_activity_identity,
@@ -311,7 +312,7 @@ def exact_differences(row: dict[str, Any], event: dict[str, Any], timezone: str)
     profile = row.get("assetProfile") if "assetProfile" in row else row.get("SymbolProfile")
     profile = profile or {}
     observed = {"accountId": row.get("accountId"), "symbol": profile.get("symbol"),
-                "currency": row.get("currency"), "type": row.get("type"),
+                "currency": effective_currency(row)["effective"], "type": row.get("type"),
                 "quantity": row["quantity"], "unitPrice": str(Fraction(row["unitPrice"])),
                 "gross": str(Fraction(row["quantity"]) * Fraction(row["unitPrice"])),
                 "fee": str(Fraction(row["fee"]))}
@@ -323,8 +324,6 @@ def exact_differences(row: dict[str, Any], event: dict[str, Any], timezone: str)
         comparisons["isin"] = expected["isin"], profile["isin"]
     if "historical_fee" in expected:
         comparisons["historical_fee"] = expected["historical_fee"], observed["fee"]
-    if profile.get("currency"):
-        comparisons["profile_currency"] = expected["currency"], profile["currency"]
     if row.get("dataSource") is not None:
         comparisons["row_dataSource"] = "YAHOO", row["dataSource"]
     if row.get("symbol") is not None:

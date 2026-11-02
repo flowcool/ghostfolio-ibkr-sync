@@ -670,3 +670,79 @@ def test_v2_identity_writer_shared_format_is_account_scoped(kind):
 def test_v2_identity_writer_rejects_unknown_kind(kind):
     with pytest.raises(ghostfolio.InvalidActivityIdentityError):
         ghostfolio.format_versioned_activity_identity("U1", kind, "ID")
+
+
+@pytest.mark.parametrize("code", ["USD", "JPY", "GBp", "KRW", "SEK", "ZAc", "ILA"])
+@pytest.mark.parametrize("key", ["assetProfile", "SymbolProfile"])
+def test_effective_currency_resolution_null_and_override(code, key):
+    from copy import deepcopy
+    from decimal import Decimal
+    row = activity(profile_key=key, currency=None, quantity="2", unitPrice="10", fee="1")
+    row[key]["currency"] = code
+    original = deepcopy(row)
+    proof = ghostfolio.effective_currency(row)
+    assert proof["effective"] == code and proof["provenance"] == key
+    assert row == original
+    assert ghostfolio._existing_dividend_amounts(row, row[key]) == (Decimal(20), code, Decimal(1))
+    row["currency"] = "KRW"
+    assert ghostfolio.effective_currency(row)["effective"] == "KRW"
+
+
+@pytest.mark.parametrize("patch", [
+    {"currency": ""}, {"currency": "AAA"}, {"currency": False}, {"currency": 1},
+    {"assetProfile": None}, {"assetProfile": {"currency": "USD"}},
+    {"assetProfile": {"symbol": "KO", "dataSource": "YAHOO", "currency": "AAA"}},
+])
+def test_effective_currency_resolution_invalid_never_hidden(patch):
+    row = activity(currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    row["SymbolProfile"] = dict(row["assetProfile"])
+    row.update(patch)
+    assert ghostfolio.effective_currency(row)["effective"] is None
+    assert ghostfolio.effective_currency(row)["reason"]
+
+
+def test_effective_currency_resolution_missing_is_not_null():
+    row = activity()
+    row["assetProfile"]["currency"] = "USD"
+    assert ghostfolio.effective_currency(row)["effective"] is None
+
+
+@pytest.mark.parametrize("raw,profile_code,accepted", [(None, "KRW", True), ("KRW", "USD", True), ("KRW", "KRW", True), (None, None, False), (None, "USD", False), ("GBp", "KRW", False)])
+def test_effective_currency_acceptance_exact_created_evidence(raw, profile_code, accepted):
+    candidate = {**import_candidate(), "currency": "KRW"}
+    row = created(candidate)
+    row["currency"] = raw
+    row["assetProfile"]["currency"] = profile_code
+    if accepted:
+        assert ghostfolio.accepted_import_subset([candidate], {"activities": [row]}) == [candidate]
+    else:
+        with pytest.raises(RuntimeError, match="currency evidence"):
+            ghostfolio.accepted_import_subset([candidate], {"activities": [row]})
+
+
+def test_effective_currency_acceptance_unknown_outcome_never_resends(monkeypatch):
+    calls = []
+    row = created(import_candidate())
+    row["currency"] = None
+    monkeypatch.setattr(requests, "post", lambda *a, **k: calls.append(k) or Resp({"activities": [row]}, 201))
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert ghostfolio.ghost_import_activities(cfg, [import_candidate()]) == ([], False)
+    assert cfg["_uncertain_import_accounts"] == {"synthetic"}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("code", ["MXN", "TRY", "TWD", "CNY"])
+@pytest.mark.parametrize("nullable", [False, True])
+def test_effective_currency_acceptance_outside_reconciliation_allowlist(monkeypatch, code, nullable):
+    from decimal import Decimal
+    candidate = {**import_candidate(), "currency": code}
+    row = created(candidate)
+    row["assetProfile"]["currency"] = code if nullable else "USD"
+    row["currency"] = None if nullable else code
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp({"activities": [row]}, 201))
+    cfg = {**CFG, "_uncertain_import_accounts": set()}
+    assert ghostfolio.ghost_import_activities(cfg, [candidate]) == ([candidate], True)
+    assert not cfg.get("_uncertain_import_accounts")
+    assert ghostfolio._existing_dividend_amounts(row, row["assetProfile"]) == (
+        Decimal(str(row["quantity"])) * Decimal(str(row["unitPrice"])), code, Decimal(str(row["fee"])))

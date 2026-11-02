@@ -1315,3 +1315,13 @@ def test_operator_action_diagnostic_limitation_has_no_impossible_reminder(monkey
     diagnostics.log_historical_dividend_comparison(findings, ACC, outcome=out)
     assert out["actions"] == {}
     assert "Evidence limitation" in caplog.text
+
+
+@pytest.mark.parametrize("raw,profile_code,source_code", [(None, "USD", "USD"), ("KRW", "USD", "KRW"), ("KRW", "KRW", "KRW")])
+def test_effective_currency_resolution_diagnostics(monkeypatch, raw, profile_code, source_code):
+    row = destination(currency=raw)
+    row["assetProfile"]["currency"] = profile_code
+    xml = report(divs=div_xml().replace('currency="USD"', f'currency="{source_code}"'))
+    finding = currency_finding(monkeypatch, [row], xml=xml)
+    assert finding["category"] == "coherent_single"
+    assert finding["denomination"] == source_code

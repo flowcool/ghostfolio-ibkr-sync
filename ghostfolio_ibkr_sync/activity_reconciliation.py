@@ -85,11 +85,22 @@ def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -
     Endpoints must equal either the source mathematical total or the reproduced
     converter total. A nearby arbitrary number never establishes this cause.
     """
+    # Config imports this module before the transport helpers are initialized.
+    from ghostfolio_ibkr_sync.ghostfolio import effective_currency
+
     values, evidence = event["values"], event["source evidence"]
     major, factor = denomination(values["currency"])
-    other_major, other_factor = denomination(destination["currency"])
-    if major not in PRECISION or major != other_major:
-        raise RuntimeError("Unsupported automatic denomination")
+    currency = effective_currency(destination)
+    if currency["reason"]:
+        raise RuntimeError(currency["reason"])
+    other_major, other_factor = denomination(str(currency["effective"]))
+    if major != other_major:
+        raise RuntimeError("Conflicting source and destination denominations")
+    if major not in PRECISION:
+        raise RuntimeError("Unsupported automatic financial currency")
+    required = ("quantity", "tradePrice", "currency") if values["type"] in ("BUY", "SELL") else ("accruals", "payments")
+    if any(key not in evidence or evidence[key] in (None, [], "") for key in required):
+        raise RuntimeError("Missing exact source evidence")
     with localcontext() as context:
         context.prec = arithmetic_precision(event, destination, Decimal.from_float(ulp(0.0)))
         quantity = Decimal(values["quantity"])
@@ -120,7 +131,7 @@ def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -
                    and destination_gross in (source_gross, projected_gross)
                    and abs(projected_gross - source_gross) <= bound)
         precision = Decimal(1).scaleb(-PRECISION[major])
-        return {"currency": major, "precision": PRECISION[major],
+        return {"currency": major, "currency evidence": currency, "precision": PRECISION[major],
                 "source gross": decimal_text(source_gross),
                 "payload gross": decimal_text(projected_gross),
                 "destination gross": decimal_text(destination_gross),
@@ -140,6 +151,8 @@ def group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> 
 
 
 def _group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
+    from ghostfolio_ibkr_sync.ghostfolio import effective_currency
+
     pending = set(proposals)
     groups = {}
     while pending:
@@ -158,11 +171,16 @@ def _group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) ->
         source_records = {event: events[event]["values"] for event in sorted(sources) if event in events}
         target_records = {proposals[key]["activity id"]: proposals[key]["current values"] for key in sorted(members)}
 
-        def totals(records: Mapping[str, Any], source: bool) -> dict[str, Any]:
+        unavailable: list[dict[str, str]] = []
+
+        def totals(records: Mapping[str, Any], source: bool, unavailable: list[dict[str, str]]) -> dict[str, Any]:
             sums: dict[str, dict[str, Decimal]] = {}
             for key, values in records.items():
                 try:
-                    currency, factor = denomination(values["currency"])
+                    proof = effective_currency(values)
+                    if proof["reason"]:
+                        raise RuntimeError(proof["reason"])
+                    currency, factor = denomination(str(proof["effective"]))
                     with localcontext() as context:
                         context.prec = arithmetic_precision(records, events)
                         quantity = Decimal(values["quantity"])
@@ -173,12 +191,12 @@ def _group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) ->
                         aggregate = sums.setdefault(currency, {"quantity": Decimal(0), "gross": Decimal(0), "fee": Decimal(0)})
                         for field, amount in (("quantity", quantity), ("gross", gross), ("fee", fee)):
                             aggregate[field] += amount
-                except (KeyError, ValueError, ArithmeticError, RuntimeError):
-                    continue
+                except (KeyError, ValueError, ArithmeticError, RuntimeError) as exc:
+                    unavailable.append({"side": "source" if source else "destination", "id": key, "reason": str(exc)})
             return {currency: {field: decimal_text(amount) for field, amount in sums.items()}
                     for currency, sums in sorted(sums.items())}
 
-        source_totals, target_totals = totals(source_records, True), totals(target_records, False)
+        source_totals, target_totals = totals(source_records, True, unavailable), totals(target_records, False, unavailable)
         differences = {currency: {field: decimal_text(Decimal(target_totals[currency][field]) - Decimal(source_totals[currency][field]))
                                   for field in ("quantity", "gross", "fee")}
                        for currency in source_totals.keys() & target_totals.keys()}
@@ -186,7 +204,7 @@ def _group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) ->
         independent = len(eligible) == len(sources) == len(targets)
         groups[min(members)] = {"members": sorted(members), "source events": sorted(sources),
             "destination activities": sorted(targets), "source count": len(sources), "destination count": len(targets),
-            "source totals": source_totals, "destination totals": target_totals, "differences": differences,
+            "unavailable totals": unavailable, "source totals": source_totals, "destination totals": target_totals, "differences": differences,
             "gross display differences": {currency: format(Decimal(values["gross"]).quantize(
                 Decimal(1).scaleb(-PRECISION[currency]), rounding=ROUND_HALF_EVEN), "f")
                 if currency in PRECISION else values["gross"] for currency, values in differences.items()},
