@@ -18,6 +18,11 @@ on the same day. Historical date repair needs the existing reviewed operation.
 Keep unresolved journals intact before rollback. Qualify the exact release digest
 in empty and golden labs before activation or stable promotion.
 
+Activity correction PUTs now carry the resolved effective ISO4217 currency. A
+null stored activity currency uses the proven profile currency. Unresolved
+currency evidence holds the correction and sends no PUT. Pending review journals
+never resend a null currency.
+
 ## Deployment example migration
 
 The current checkout defaults to one account. Existing two-service installations

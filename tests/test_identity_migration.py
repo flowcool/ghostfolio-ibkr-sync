@@ -794,7 +794,7 @@ def test_v2_migration_selection_configuration_invalidates_manifest(case, change)
 
 
 @pytest.fixture
-def apply_case(case, monkeypatch):
+def apply_case(case, monkeypatch, request):
     """A complete synthetic review, approval and stateful HTTP double."""
     from copy import deepcopy
     from types import SimpleNamespace
@@ -802,6 +802,8 @@ def apply_case(case, monkeypatch):
     root, config, save, inputs, source, snapshot = case
     rows = [migration_row(userId="owner", tags=[{"id": "tag-1", "name": "Keep"}]),
             migration_row(id="row-2", comment="IBKR#456", userId="owner")]
+    for row in rows:
+        row["currency"] = getattr(request, "param", "USD")
     migration_run(case, rows=rows, trades=[migration_trade(), migration_trade(tradeID="456")])
     from ghostfolio_ibkr_sync import activity_review as review
     review_file = root / "activities.yaml"
@@ -828,7 +830,7 @@ def apply_case(case, monkeypatch):
     approval = root / "approval.json"
     journal = root / "apply.yaml"
     state = SimpleNamespace(rows=deepcopy(rows), calls=[], puts=[], delays=[], gets=0,
-                            before_get=None, put_effect=None, status=200)
+                            before_get=None, put_effect=None, status=200, normalize_currency=False)
 
     def get(url, **kwargs):
         assert url == permit["host"] + "/api/v1/activities"
@@ -846,6 +848,9 @@ def apply_case(case, monkeypatch):
 
     def put(url, **kwargs):
         payload = kwargs["json"]
+        from ghostfolio_ibkr_sync.ghostfolio import DESTINATION_CURRENCIES
+        assert isinstance(payload.get("currency"), str)
+        assert payload["currency"] in DESTINATION_CURRENCIES
         assert url == permit["host"] + "/api/v1/activities/" + payload["id"]
         assert kwargs["timeout"] == 60 and kwargs["allow_redirects"] is False
         durable = yaml.safe_load(journal.read_bytes())
@@ -859,7 +864,10 @@ def apply_case(case, monkeypatch):
         if state.put_effect:
             state.put_effect(payload)
         else:
-            next(r for r in state.rows if r["id"] == payload["id"])["comment"] = payload["comment"]
+            target = next(r for r in state.rows if r["id"] == payload["id"])
+            target["comment"] = payload["comment"]
+            if state.normalize_currency and payload["currency"] == target["assetProfile"].get("currency"):
+                target["currency"] = None
         return SimpleNamespace(status_code=state.status)
 
     monkeypatch.setattr(requests, "get", get)
@@ -902,6 +910,34 @@ def test_v2_migration_apply_rollback_exact_preservation(apply_case):
     with pytest.raises(RuntimeError, match="Existing migration journal"):
         run()
     assert len(state.puts) == 2
+
+
+@pytest.mark.parametrize("apply_case", [None, "USD"], indirect=True)
+def test_v2_migration_null_currency_apply_and_reverse(rollback_case):
+    state, run, reverse, inspect_saved, journal, original = rollback_case
+    state.normalize_currency = True
+    run()
+    assert set(inspect_saved().values()) == {"converted"}
+    reverse()
+    assert state.rows == [{**row, "currency": None} for row in original]
+    assert len(state.puts) == 4
+    assert all(payload["currency"] == "USD" for payload in state.puts)
+    assert set(inspect_saved().values()) == {"original"}
+
+
+@pytest.mark.parametrize("change", [{}, {"currency": "EUR"}, {"assetProfile": {"symbol": "TEST", "dataSource": "YAHOO"}}, {"fee": 1}])
+def test_v2_migration_effective_readback_keeps_other_guards(change):
+    before = migration_row()
+    actual = {**before, "currency": None, **change}
+    assert migration.migration_equal(actual, before) is (not change)
+
+
+def test_v2_migration_comment_payload_uses_effective_currency_for_null_row():
+    row = migration_row(currency=None)
+    row.update(quantity=Decimal("1"), unitPrice=Decimal("2.3"), fee=Decimal("0.01"))
+    row["assetProfile"]["currency"] = "USD"
+    payload = migration.comment_payload(row, "IBKR#v2#U1:TRADE:123")
+    assert payload["currency"] == "USD"
 
 
 @pytest.mark.parametrize("key,value", [

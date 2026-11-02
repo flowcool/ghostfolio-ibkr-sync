@@ -31,7 +31,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
-from ghostfolio_ibkr_sync.ghostfolio import activity_is_active
+from ghostfolio_ibkr_sync.ghostfolio import activity_is_active, effective_currency
 from cleanup_recovery import process_pairs, resume_cleanup
 
 logging.basicConfig(
@@ -179,6 +179,9 @@ def snapshot_matches(fresh, planned):
 def put_comment(config, activity, new_comment, dry_run):
     profile = profile_of(activity)
     identity_of(activity)
+    currency = effective_currency(activity)
+    if currency["reason"]:
+        raise RuntimeError(currency["reason"])
     source = profile["dataSource"]
     activity_id = activity["id"]
     url = f"{config['ghost_host']}/api/v1/activities/{activity_id}"
@@ -189,7 +192,7 @@ def put_comment(config, activity, new_comment, dry_run):
         "id": activity_id,
         "accountId": activity["accountId"],
         "comment": new_comment,
-        "currency": activity["currency"],
+        "currency": currency["effective"],
         "date": activity["date"],
         "fee": activity["fee"],
         "quantity": activity["quantity"],

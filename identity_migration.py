@@ -855,12 +855,26 @@ def migration_snapshot(host: str, headers: dict[str, str], metadata: dict[str, A
     return snapshot
 
 
+def migration_equal(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Accept only a proven currency representation change; keep all other gates."""
+    left, right = effective_currency(actual), effective_currency(expected)
+    if not left["reason"] and not right["reason"]:
+        return preserved_equal({**actual, "currency": left["effective"]},
+                               {**expected, "currency": right["effective"]})
+    # Unrelated rows can have unsupported context. They must remain exactly
+    # unchanged; comment_payload separately refuses them as update targets.
+    return preserved_equal(actual, expected)
+
+
 def comment_payload(row: dict[str, Any], comment: str) -> dict[str, Any]:
     """Explicit UpdateOrderDto whitelist; never echo a GET object into PUT."""
     profile = row.get("assetProfile") or row.get("SymbolProfile")
     require(isinstance(profile, dict) and profile.get("dataSource") == "YAHOO"
             and text(profile.get("symbol")), "Unsupported update profile")
-    payload = {key: row[key] for key in ("id", "accountId", "currency", "date", "type")}
+    currency = effective_currency(row)
+    require(currency["reason"] is None, "Unproven effective update currency")
+    payload = {key: row[key] for key in ("id", "accountId", "date", "type")}
+    payload["currency"] = currency["effective"]
     payload.update(comment=comment, symbol=profile["symbol"], dataSource=profile["dataSource"])
     for field in ("quantity", "unitPrice", "fee"):
         number = row[field]
@@ -983,7 +997,7 @@ def _apply(inputs: Path, manifest: Path, manifest_sha256: str, approval: Path,
             fresh = migration_snapshot(host, headers, config["snapshot"])
             actual = {row["id"]: row for row in fresh["activities"]}
             require(actual.keys() == expected.keys() and all(
-                preserved_equal(actual[key], value)
+                migration_equal(actual[key], value)
                 for key, value in expected.items()), "Destination ownership, occupancy or context changed")
             for source, data in captured.items():
                 require(safe_path(source).read_bytes() == data, "Reviewed input changed")
@@ -1046,8 +1060,8 @@ def inspect_rows(record: dict[str, Any], snapshot: Any, metadata: dict[str, Any]
         before = entry["preimage"]
         after = {**before, "comment": entry["new_comment"]}
         state = ("absent" if row is None else
-                 "converted" if preserved_equal(row, after) else
-                 "original" if preserved_equal(row, before) else "drift")
+                 "converted" if migration_equal(row, after) else
+                 "original" if migration_equal(row, before) else "drift")
         pending = (entry.get("rollback_status") == "pending" or
                    entry.get("rollback_status") is None and entry["status"] == "pending")
         result[row_id] = "uncertain:" + state if pending else state
@@ -1141,7 +1155,7 @@ def rollback(journal: Path, manifest: Path, manifest_sha256: str, approval: Path
         def check() -> None:
             current = {r["id"]: r for r in fresh()["activities"]}
             require(current.keys() == expected.keys() and all(
-                preserved_equal(current[k], v) for k, v in expected.items()),
+                migration_equal(current[k], v) for k, v in expected.items()),
                 "Rollback ownership, occupancy or context changed")
 
         check()
