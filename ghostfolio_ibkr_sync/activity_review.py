@@ -1025,10 +1025,21 @@ def expected_row(row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
     return values_of(dict(after))
 
 
-def row_matches(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
+CURRENCY_POLICY = "effective-destination-currency-v1"
+
+
+def row_matches(row: dict[str, Any], evidence: dict[str, Any], policy: str | None = None) -> bool:
     """Compare stable pre/post evidence with exact numbers and UTC instants."""
     try:
         actual, expected = values_of(row), values_of(evidence)
+        if policy == CURRENCY_POLICY:
+            left, right = effective_currency(row), effective_currency(evidence)
+            if left["reason"] or right["reason"] or left["effective"] != right["effective"]:
+                return False
+            actual["currency"] = left["effective"]
+            expected["currency"] = right["effective"]
+        elif policy not in (None, reconciliation_rules.POLICY_VERSION):
+            return False
         # Already-issued journals retain their original comparison contract.
         # New intents include strict additional stored-field evidence.
         if "preserved fields" not in evidence and "account" not in evidence:
@@ -1041,16 +1052,17 @@ def row_matches(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
 
 def recovery_read(config: dict[str, Any], entry: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
     observed = None
+    policy = entry.get("eligibility", {}).get("policy version")
     for wait in RECOVERY_WAITS:
         if wait:
             time.sleep(wait)
         try:
             rows = snapshot_rows(config)
             observed = next((row for row in rows if row["id"] == entry["activity id"]), None)
-            if observed is not None and row_matches(observed, entry["after"]):
+            if observed is not None and row_matches(observed, entry["after"], policy):
                 return True, observed
             # Drift is a conclusive refusal, not a reason to keep polling.
-            if observed is not None and not row_matches(observed, entry["before"]):
+            if observed is not None and not row_matches(observed, entry["before"], policy):
                 break
         except Exception:
             observed = None
@@ -1073,6 +1085,12 @@ JOURNAL_FIELDS = {"source event", "destination account", "activity id", "host", 
                   "after", "request", "status", "verified result", "proposal key", "review revision"}
 
 
+def currency_contract(entry: dict[str, Any]) -> dict[str, Any]:
+    """Bind the raw request, preimage, expected result and profile context."""
+    return {"before": effective_currency(entry["before"]), "after": effective_currency(entry["after"]),
+            "fingerprints": {key: fingerprint(entry[key]) for key in ("before", "after", "request")}}
+
+
 def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
     for key, entry in state["journal"]["entries"].items():
         if (set(entry) not in (JOURNAL_FIELDS, JOURNAL_FIELDS | {"authority", "eligibility"})
@@ -1091,11 +1109,18 @@ def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
                 or re.fullmatch(r"[0-9a-f]{32}", entry["review revision"]) is None
                 or key != fingerprint([entry["proposal key"], entry["review revision"]])):
             raise RuntimeError("Invalid or unbound review journal")
+        policy = entry.get("eligibility", {}).get("policy version")
+        if policy == CURRENCY_POLICY:
+            if entry["eligibility"].get("currency comparison") != currency_contract(entry):
+                raise RuntimeError("Changed currency comparison evidence in review journal")
+        elif policy not in (None, reconciliation_rules.POLICY_VERSION):
+            raise RuntimeError("Unsupported review comparison policy")
 
 
 def inspect_reverse(entry: dict[str, Any], observed: dict[str, Any]) -> dict[str, Any]:
     """Offline guarded reverse evidence only. This function never sends a request."""
-    if entry["status"] != "confirmed" or not row_matches(observed, entry["after"]):
+    policy = entry.get("eligibility", {}).get("policy version")
+    if entry["status"] != "confirmed" or not row_matches(observed, entry["after"], policy):
         raise RuntimeError("Reverse evidence refused: corrected activity changed or unconfirmed")
     before = entry["before"]
     return update_payload(before, values_of(before))
@@ -1171,10 +1196,10 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             log.error("Pending review activity %s has no configured destination account %s; writes blocked",
                       entry["activity id"], entry["destination account"])
             continue
-        matched, _ = recovery_read(config, entry)
+        matched, observed = recovery_read(config, entry)
         if matched and not simulated:
             entry["status"] = "confirmed"
-            entry["verified result"] = entry["after"]
+            entry["verified result"] = values_of(observed) if observed is not None else None
             publish_journal(state)
             recovered_events.add(entry["source event"])
             journal_bindings.discard((entry["source event"], entry["destination account"], entry["activity id"]))
@@ -1266,10 +1291,11 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                  "before": values_of(row), "after": after, "request": plain(wire_values(payload)),
                  "status": "pending", "verified result": None,
                  "authority": "manual" if current["approve"] == "yes" else current["profile"],
-                 "eligibility": {"policy version": reconciliation_rules.POLICY_VERSION,
+                 "eligibility": {"policy version": CURRENCY_POLICY,
                                  "timezone": os.environ.get("TZ", "").strip(),
                                  "dates": current.get("profile date context", {}),
                                  "numeric evidence": current.get("numeric evidence", {})}}
+        entry["eligibility"]["currency comparison"] = currency_contract(entry)
         state["journal"]["version"] = 2
         state["journal"]["entries"][request_key] = entry
         publish_journal(state)
@@ -1280,12 +1306,12 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             # A rejected status is still not proof that the destination is unchanged.
             log.error("Review request for account %s activity %s needs readback", account, row["id"])
         executed += 1
-        matched, _ = recovery_read(config, entry)
+        matched, observed = recovery_read(config, entry)
         if not matched:
             blocked.add(account)
             continue
         entry["status"] = "confirmed"
-        entry["verified result"] = after
+        entry["verified result"] = values_of(observed) if observed is not None else None
         publish_journal(state)
         completed(entry)
         refreshed = {key: candidate for key, candidate in refreshed.items()

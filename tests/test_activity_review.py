@@ -1335,3 +1335,56 @@ def test_effective_currency_comparison_retains_real_difference(source_code, targ
     row["assetProfile"]["currency"] = "USD"
     item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"})[0].values()))
     assert "currency" in item["changed fields"]
+
+
+@pytest.mark.parametrize("drift", [None, "quantity", "fee", "date", "comment", "tags", "userId", "profile", "currency"])
+def test_effective_currency_readback_exact_preservation(drift):
+    row = destination(currency="KRW")
+    row["assetProfile"]["currency"] = "KRW"
+    expected = review.values_of(row)
+    row["currency"] = None
+    if drift in ("quantity", "fee"): row[drift] += Decimal(1)
+    elif drift == "date": row["date"] = "2020-01-01T00:00:00Z"
+    elif drift == "comment": row["comment"] = "changed"
+    elif drift == "tags": row["tags"] = []
+    elif drift == "userId": row["userId"] = "other"
+    elif drift == "profile": row["assetProfile"]["currency"] = "USD"
+    elif drift == "currency": row["currency"] = "USD"
+    assert review.row_matches(row, expected, review.CURRENCY_POLICY) is (drift is None)
+    assert not review.row_matches(row, expected)
+
+
+@pytest.mark.parametrize("outcome", ["success", "timeout", "unchanged"])
+def test_effective_currency_readback_retains_raw_and_no_resend(tmp_path, monkeypatch, outcome):
+    original = ReviewServer.put
+    def nullable(self, url, **kwargs):
+        try:
+            return original(self, url, **kwargs)
+        finally:
+            if self.outcome != "unchanged": self.rows[0]["currency"] = None
+    monkeypatch.setattr(ReviewServer, "put", nullable)
+    row = destination(currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server, state, config, blocked, held = run_review(tmp_path, monkeypatch, rows=[row], outcome=outcome)
+    path = state["path"]
+    try:
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert bool(blocked) is (outcome == "unchanged")
+        if not blocked:
+            assert entry["verified result"]["currency"] is None
+            assert entry["after"]["currency"] == "USD"
+            assert entry["eligibility"]["currency comparison"] == review.currency_contract(entry)
+    finally: review.close_review(state)
+    state = review.open_review(str(path), [])
+    try:
+        review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert len(server.writes) == 1
+    finally: review.close_review(state)
+
+
+def test_effective_currency_readback_does_not_scale_gbp():
+    row = destination(currency="GBp")
+    row["assetProfile"]["currency"] = "GBP"
+    expected = review.values_of(row)
+    row["currency"] = None
+    assert not review.row_matches(row, expected, review.CURRENCY_POLICY)
