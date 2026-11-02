@@ -290,9 +290,9 @@ Historical maintenance retains its separate saved-evidence and operation GO.
 Back up the operator YAML, its `.state.yaml` companion and its journal together.
 Keep them private in the same persistent directory. Stop all writers first.
 Readers accept review schemas 1 and 2. The first schema-3 publication clears
-legacy approvals once. New journal entries use version 2. Version-1 unresolved
-requests remain readable with their original keys and revisions.
-Old images refuse the new review and journal schemas.
+legacy approvals once. New journal entries use version 3. Version-1 and version-2
+unresolved requests remain readable with their original keys and revisions.
+Version 4.0.0 refuses version-3 journals before recovery.
 
 A missing or corrupt private state stops correction. Do not delete a journal,
 reset a pending request, or resend a request to recover.
@@ -379,3 +379,32 @@ They are estimates. Future source, destination or profile changes can alter them
 Automatic success and ordinary budget deferral need no intervention notice.
 Required actions join the existing single notification. External text contains
 fixed result names and counts. Financial values, paths and keys stay private.
+
+### Activity currency evidence
+
+Ghostfolio can store a null activity currency when it equals the security profile
+currency. Review keeps that raw value. It compares the effective currency: the
+explicit activity currency, or the proven profile currency when the activity
+field is explicitly null. A missing field, invalid code or missing profile proof
+holds the activity. Review never infers currency from an account or a symbol.
+
+A proven representation difference alone needs no correction. A valid explicit
+override stays in effect, even when it differs from the profile currency. Real
+currency differences remain visible. GBP and GBp remain distinct denominations.
+Legacy reference migration changes only the comment and preserves raw currency.
+Currency proof does not prove source completeness, identity, dates or amounts.
+The profile limits and the shared budget of one correction per run stay fixed.
+
+### Journal compatibility and rollback
+
+New correction intents use journal version 3. They bind the currency comparison
+policy, raw preimage, request, expected result and profile context. Confirmed
+entries retain the actual raw readback. The reader preserves the original raw
+comparison for legacy v1/v2 pending entries. It does not resend an uncertain request.
+
+This format requires a minor release. Version 4.0.0 cannot read a version 3
+journal. Stop writers and preserve the view, private state and journal before a
+downgrade. Force `DRY_RUN` and restore the previous qualified image when required.
+Keep new-policy journals for a compatible reader to resolve. Do not delete, edit
+or convert them to bypass the reader check. A code rollback does not reverse a
+financial write.

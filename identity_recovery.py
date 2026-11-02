@@ -15,6 +15,7 @@ from typing import Any
 from ghostfolio_ibkr_sync.ghostfolio import (
     activity_is_active,
     dividend_context,
+    effective_currency,
     format_versioned_activity_identity,
     parse_versioned_activity_identity,
 )
@@ -74,10 +75,10 @@ def accepted_payload(row: dict[str, Any]) -> dict[str, Any]:
     account = row.get("accountId") or (row.get("account") or {}).get("id")
     require(not row.get("account") or row["account"].get("id") == account,
             "Conflicting accepted account context")
-    require(not profile.get("currency") or profile["currency"] == row.get("currency"),
-            "Conflicting accepted currency context")
+    currency = effective_currency(row)
+    require(currency["reason"] is None, "Unproven accepted currency context")
     return {**{field: row.get(field) for field in PAYLOAD_FIELDS},
-            "accountId": account, "symbol": profile.get("symbol"),
+            "accountId": account, "currency": currency["effective"], "symbol": profile.get("symbol"),
             "dataSource": profile.get("dataSource"),
             "unitPrice": row.get("unitPrice")}
 

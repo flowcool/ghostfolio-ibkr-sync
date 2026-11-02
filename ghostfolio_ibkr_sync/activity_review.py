@@ -29,6 +29,7 @@ from ghostfolio_ibkr_sync.ghostfolio import (
     activity_date_is_current,
     activity_is_active,
     dividend_context,
+    effective_currency,
     format_versioned_activity_identity,
     ghost_get_existing_orders,
     ghost_update_reviewed_activity,
@@ -309,7 +310,7 @@ def open_review(filename: str, input_files: Sequence[str], *, rebuild: bool = Fa
         journal = (read_yaml(journal_original) if journal_original is not None
                    else {"version": 1, "entries": {}})
         document = decode_review(document, evidence)
-        if journal.get("version") not in (1, 2):
+        if journal.get("version") not in (1, 2, 3):
             raise RuntimeError("Invalid review journal version")
         validate_document({**journal, "version": 1}, "entries")
         if rebuild:
@@ -603,6 +604,11 @@ def changed_fields(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
             return numeric(before[key]) == numeric(after[key])
         if key == "date":
             return instant(before[key]) == instant(after[key])
+        if key == "currency":
+            left, right = effective_currency(before), effective_currency(after)
+            if left["reason"] or right["reason"]:
+                raise RuntimeError(left["reason"] or right["reason"])
+            return left["effective"] == right["effective"]
         return bool(before[key] == after[key])
     return sorted(key for key in REPLACED if not equal(key))
 
@@ -646,7 +652,7 @@ def candidate_reason(row: dict[str, Any], event: dict[str, Any], exact_exists: b
     target = event["values"]
     asset = profile(row)
     if (row.get("accountId") != event["destination account"] or row.get("type") != target["type"]
-            or reconciliation_rules.denomination(row.get("currency", ""))[0] != reconciliation_rules.denomination(target["currency"])[0]
+            or reconciliation_rules.denomination(str(effective_currency(row)["effective"]))[0] != reconciliation_rules.denomination(target["currency"])[0]
             or not activity_is_active(row)
             or asset.get("dataSource") != "YAHOO"
             or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
@@ -680,7 +686,7 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
                         or row.get("type") != source["type"] or not activity_is_active(row)
                         or asset.get("dataSource") != "YAHOO"
                         or asset.get("symbol") != source["symbol"]
-                        or reconciliation_rules.denomination(row.get("currency", ""))[0]
+                        or reconciliation_rules.denomination(str(effective_currency(row)["effective"]))[0]
                            != reconciliation_rules.denomination(source["currency"])[0]
                         or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
                         or (reference and reference.startswith("IBKR#v2#") and reference != event_id)):
@@ -792,6 +798,9 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             diagnostics: dict[str, Any] = {}
             try:
                 current = values_of(row)
+                currency = effective_currency(row)
+                if currency["reason"]:
+                    raise RuntimeError(currency["reason"])
                 proposed = {**current, **proposed}
                 proposed["comment"] = replacement_comment(row, event)
                 diagnostics = {field: {"current": current[field], "source": proposed[field]}
@@ -834,6 +843,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     raise RuntimeError("legacy aggregate cannot identify one action")
                 changes = changed_fields(current, proposed)
                 if not changes and marker_of(row) == event_id:
+                    if (event_id, event["destination account"], row["id"]) in (journal_bindings or set()):
+                        raise RuntimeError("Pending journal requires exact recovery")
                     if event_id in (held_events or set()):
                         raise RuntimeError("Relevant corporate-action evidence holds this activity")
                     satisfied.add(event_id)
@@ -866,8 +877,28 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             auto = automatic.get((event_id, row["id"]))
             try:
                 numbers = reconciliation_rules.numeric_evidence(event, current)
-            except (RuntimeError, KeyError, ArithmeticError, ValueError):
-                numbers = {"cause": "Missing or unsupported exact financial evidence"}
+            except (RuntimeError, KeyError, ArithmeticError, ValueError) as exc:
+                cause = str(exc) if isinstance(exc, RuntimeError) else "Missing or invalid exact source evidence"
+                numbers = {"cause": cause, "currency evidence": effective_currency(row)}
+                if auto and changes == ["comment"]:
+                    numbers["operation"] = "Eligible comment-only migration; financial calculation unavailable"
+            if not auto:
+                reasons = []
+                if not actionable:
+                    reasons.append(status)
+                asset = current.get("assetProfile", {})
+                if asset.get("isin") and event["isin"] and asset["isin"] != event["isin"]:
+                    reasons.append("Conflicting source and destination security identity")
+                if reconciliation in reconciliation_rules.LIMITS:
+                    if ("source gross" in numbers and not reconciliation_rules.gross_within_limits(reconciliation,
+                            Decimal(numbers["source gross"]), Decimal(numbers["destination gross"]), numbers["currency"])
+                            and not numbers.get("calculation residue")):
+                        reasons.append("Gross difference exceeds profile limits")
+                    if current and not reconciliation_rules.date_eligible(reconciliation, event["values"]["date"],
+                            current["date"], event["values"]["type"], timezone)[0]:
+                        reasons.append("Business date exceeds profile limits")
+                if reasons:
+                    numbers["eligibility reasons"] = reasons
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
                          "numeric evidence": numbers,
                          "profile date context": auto["profile date context"] if auto else {}})
@@ -1002,10 +1033,21 @@ def expected_row(row: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]
     return values_of(dict(after))
 
 
-def row_matches(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
+CURRENCY_POLICY = "effective-destination-currency-v1"
+
+
+def row_matches(row: dict[str, Any], evidence: dict[str, Any], policy: str | None = None) -> bool:
     """Compare stable pre/post evidence with exact numbers and UTC instants."""
     try:
         actual, expected = values_of(row), values_of(evidence)
+        if policy == CURRENCY_POLICY:
+            left, right = effective_currency(row), effective_currency(evidence)
+            if left["reason"] or right["reason"] or left["effective"] != right["effective"]:
+                return False
+            actual["currency"] = left["effective"]
+            expected["currency"] = right["effective"]
+        elif policy not in (None, reconciliation_rules.POLICY_VERSION):
+            return False
         # Already-issued journals retain their original comparison contract.
         # New intents include strict additional stored-field evidence.
         if "preserved fields" not in evidence and "account" not in evidence:
@@ -1018,16 +1060,17 @@ def row_matches(row: dict[str, Any], evidence: dict[str, Any]) -> bool:
 
 def recovery_read(config: dict[str, Any], entry: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
     observed = None
+    policy = entry.get("eligibility", {}).get("policy version")
     for wait in RECOVERY_WAITS:
         if wait:
             time.sleep(wait)
         try:
             rows = snapshot_rows(config)
             observed = next((row for row in rows if row["id"] == entry["activity id"]), None)
-            if observed is not None and row_matches(observed, entry["after"]):
+            if observed is not None and row_matches(observed, entry["after"], policy):
                 return True, observed
             # Drift is a conclusive refusal, not a reason to keep polling.
-            if observed is not None and not row_matches(observed, entry["before"]):
+            if observed is not None and not row_matches(observed, entry["before"], policy):
                 break
         except Exception:
             observed = None
@@ -1050,6 +1093,12 @@ JOURNAL_FIELDS = {"source event", "destination account", "activity id", "host", 
                   "after", "request", "status", "verified result", "proposal key", "review revision"}
 
 
+def currency_contract(entry: dict[str, Any]) -> dict[str, Any]:
+    """Bind the raw request, preimage, expected result and profile context."""
+    return {"before": effective_currency(entry["before"]), "after": effective_currency(entry["after"]),
+            "fingerprints": {key: fingerprint(entry[key]) for key in ("before", "after", "request")}}
+
+
 def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
     for key, entry in state["journal"]["entries"].items():
         if (set(entry) not in (JOURNAL_FIELDS, JOURNAL_FIELDS | {"authority", "eligibility"})
@@ -1068,11 +1117,20 @@ def validate_journal(state: ReviewState, config: dict[str, Any]) -> None:
                 or re.fullmatch(r"[0-9a-f]{32}", entry["review revision"]) is None
                 or key != fingerprint([entry["proposal key"], entry["review revision"]])):
             raise RuntimeError("Invalid or unbound review journal")
+        policy = entry.get("eligibility", {}).get("policy version")
+        if policy == CURRENCY_POLICY:
+            if state["journal"]["version"] != 3:
+                raise RuntimeError("Effective currency policy requires review journal version 3")
+            if entry["eligibility"].get("currency comparison") != currency_contract(entry):
+                raise RuntimeError("Changed currency comparison evidence in review journal")
+        elif policy not in (None, reconciliation_rules.POLICY_VERSION):
+            raise RuntimeError("Unsupported review comparison policy")
 
 
 def inspect_reverse(entry: dict[str, Any], observed: dict[str, Any]) -> dict[str, Any]:
     """Offline guarded reverse evidence only. This function never sends a request."""
-    if entry["status"] != "confirmed" or not row_matches(observed, entry["after"]):
+    policy = entry.get("eligibility", {}).get("policy version")
+    if entry["status"] != "confirmed" or not row_matches(observed, entry["after"], policy):
         raise RuntimeError("Reverse evidence refused: corrected activity changed or unconfirmed")
     before = entry["before"]
     return update_payload(before, values_of(before))
@@ -1112,7 +1170,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     # Journal-owned historical proposals may outlive a configured account.
     # This does not permit dispatch without a fresh source and matching target.
     journal_bindings = {(entry["source event"], entry["destination account"], entry["activity id"])
-                        for entry in state["journal"]["entries"].values()}
+                        for entry in state["journal"]["entries"].values() if entry["status"] == "pending"}
 
     def refresh(previous: dict[str, Any], current_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], set[str]]:
         from ghostfolio_ibkr_sync.corporate_actions import candidate_held
@@ -1148,12 +1206,13 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             log.error("Pending review activity %s has no configured destination account %s; writes blocked",
                       entry["activity id"], entry["destination account"])
             continue
-        matched, _ = recovery_read(config, entry)
+        matched, observed = recovery_read(config, entry)
         if matched and not simulated:
             entry["status"] = "confirmed"
-            entry["verified result"] = entry["after"]
+            entry["verified result"] = plain(observed) if observed is not None else None
             publish_journal(state)
             recovered_events.add(entry["source event"])
+            journal_bindings.discard((entry["source event"], entry["destination account"], entry["activity id"]))
             completed(entry)
         else:
             unresolved.add(entry["destination account"])
@@ -1242,11 +1301,12 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
                  "before": values_of(row), "after": after, "request": plain(wire_values(payload)),
                  "status": "pending", "verified result": None,
                  "authority": "manual" if current["approve"] == "yes" else current["profile"],
-                 "eligibility": {"policy version": reconciliation_rules.POLICY_VERSION,
+                 "eligibility": {"policy version": CURRENCY_POLICY,
                                  "timezone": os.environ.get("TZ", "").strip(),
                                  "dates": current.get("profile date context", {}),
                                  "numeric evidence": current.get("numeric evidence", {})}}
-        state["journal"]["version"] = 2
+        entry["eligibility"]["currency comparison"] = currency_contract(entry)
+        state["journal"]["version"] = 3
         state["journal"]["entries"][request_key] = entry
         publish_journal(state)
         assert_unchanged(state)
@@ -1256,12 +1316,12 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             # A rejected status is still not proof that the destination is unchanged.
             log.error("Review request for account %s activity %s needs readback", account, row["id"])
         executed += 1
-        matched, _ = recovery_read(config, entry)
+        matched, observed = recovery_read(config, entry)
         if not matched:
             blocked.add(account)
             continue
         entry["status"] = "confirmed"
-        entry["verified result"] = after
+        entry["verified result"] = plain(observed) if observed is not None else None
         publish_journal(state)
         completed(entry)
         refreshed = {key: candidate for key, candidate in refreshed.items()

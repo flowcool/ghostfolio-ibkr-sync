@@ -610,3 +610,36 @@ def test_v2_partial_recovery_submit_response_evidence_is_exact(submission, fault
         dispatch_recovery(s)
     assert journal_state(s)["status"] == "unknown"
     assert s["post"].call_count == 1 and s["get"].call_count == 1
+
+
+@pytest.mark.parametrize("raw,profile_code", [(None, "USD"), ("USD", "EUR"), ("USD", "USD")])
+def test_effective_currency_recovery_acceptance(case, raw, profile_code):
+    row = case["snapshot"]["activities"][0]
+    row["currency"] = raw
+    row["assetProfile"]["currency"] = profile_code
+    run(case)
+    manifest = exact_json((case["root"] / "preview/manifest.json").read_bytes())
+    assert manifest["missing_payloads"] == case["payloads"][1:]
+    assert row["currency"] == raw
+
+
+@pytest.mark.parametrize("change", [{"currency": None, "assetProfile": None}, {"currency": ""}, {"currency": "AAA"}, {"currency": "EUR"}, {"quantity": 999}, {"fee": 999}])
+def test_effective_currency_recovery_keeps_independent_guards(case, change):
+    case["snapshot"]["activities"][0].update(change)
+    with pytest.raises(RuntimeError):
+        run(case)
+
+
+@pytest.mark.parametrize("raw,profile_code", [(None, "USD"), ("USD", "EUR")])
+def test_effective_currency_recovery_positive_readback_and_existing_rows(case, submission, raw, profile_code):
+    s = submission
+    row = s["after"]["activities"][1]
+    row["currency"] = raw
+    row["assetProfile"]["currency"] = profile_code
+    s["get"].side_effect = [s["response"](case["snapshot"]), s["response"](s["after"]), s["response"](s["after"])]
+    dispatch_recovery(s)
+    assert journal_state(s)["status"] == "complete"
+    assert s["post"].call_count == 1
+    with pytest.raises(RuntimeError, match="already exists"):
+        dispatch_recovery(s)
+    assert s["post"].call_count == 1

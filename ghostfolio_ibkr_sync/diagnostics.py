@@ -15,6 +15,7 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 from ghostfolio_ibkr_sync.config import timezone_preview_reason
+from ghostfolio_ibkr_sync.ghostfolio import effective_currency
 from ghostfolio_ibkr_sync.ibkr import (
     DIVIDEND_PAYMENT_KEYS,
     WITHHOLDING_CASH_TYPE,
@@ -98,13 +99,13 @@ def classify_dividend_deltas(currency: str, quantity_deltas: Sequence[Decimal],
 def _historical_destination_currency(evidence: Evidence) -> tuple[Any, str]:
     """Observed destination currency value and where it was read from."""
     row = evidence["activity"]
-    profile = row["assetProfile"] if "assetProfile" in row else row.get("SymbolProfile", {})
-    currency = row.get("currency")
-    provenance = "activity"
-    if "currency" in row and currency is None:
-        currency = profile.get("currency")
-        provenance = "assetProfile" if "assetProfile" in row else "SymbolProfile"
-    return currency, provenance
+    resolved = effective_currency(row)
+    # Keep unsupported observed codes visible in diagnostic reports.
+    raw = resolved["raw"]
+    if "currency" in row and raw is None and resolved["profile"] is not None:
+        raw = resolved["profile"].get("currency")
+    return resolved["effective"] or raw, resolved["provenance"]
+
 
 
 def _historical_currency_context(dividend: DividendGroup, candidates: Sequence[Evidence]) -> dict[str, Any]:

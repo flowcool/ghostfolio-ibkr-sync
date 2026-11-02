@@ -344,7 +344,6 @@ def test_v2_release_compatibility_migration_keeps_sibling_and_new_v2_rows(case):
     ("assetProfile", {"symbol": "OTHER", "dataSource": "YAHOO"}, "symbol"),
     ("assetProfile", {"symbol": "TEST", "dataSource": "MANUAL"}, "dataSource"),
     ("assetProfile", {"symbol": "TEST", "dataSource": "YAHOO", "isin": "OTHER"}, "isin"),
-    ("assetProfile", {"symbol": "TEST", "dataSource": "YAHOO", "currency": "EUR"}, "profile_currency"),
     ("account", {"id": "other"}, "account_context"),
     ("SymbolProfile", {"symbol": "OTHER"}, "profile_context"),
 ])
@@ -1757,3 +1756,21 @@ def test_v2_migration_preservation_derived_profile_fields_only(profile_key):
     assert preserved_equal(before, after)
     after[profile_key]["unknownStoredField"] = "changed"
     assert not preserved_equal(before, after)
+
+
+@pytest.mark.parametrize("raw,profile_code", [(None, "USD"), ("USD", "EUR"), ("USD", "USD")])
+def test_effective_currency_preview_exact_and_selection(case, raw, profile_code):
+    row = migration_row(currency=raw)
+    row["assetProfile"]["currency"] = profile_code
+    result = migration_run(case, rows=[row])
+    assert result["replacements"]
+    assert result["selection_proof"]["equal"]
+    assert result["rows"][0]["fields"]["currency"] == raw
+
+
+@pytest.mark.parametrize("field,value", [("quantity", 2), ("fee", .02), ("date", "2026-01-11T12:00:00Z")])
+def test_effective_currency_preview_keeps_exact_guards(case, field, value):
+    row = migration_row(currency=None, **{field: value})
+    result = migration_run(case, rows=[row])
+    assert not result["replacements"]
+    assert result["events"][0]["status"] == "conflicting"

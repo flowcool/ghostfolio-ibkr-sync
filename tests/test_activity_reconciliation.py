@@ -815,6 +815,224 @@ def test_profile_execution_reference_outcome_and_policy_version(tmp_path, monkey
         assert outcome["reconciliation"]["reference migrations"] == 1
         assert outcome["reconciliation"]["corrected targets"] == 1
         entry = next(iter(state["journal"]["entries"].values()))
-        assert entry["eligibility"]["policy version"] == reconciliation.POLICY_VERSION
+        assert entry["eligibility"]["policy version"] == review.CURRENCY_POLICY
+        assert state["journal"]["version"] == 3
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("code", ["USD", "JPY", "GBp", "KRW", "SEK"])
+def test_effective_currency_legacy_trade_keeps_identity_authority(code):
+    from _sync_helpers import report, trade_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events(report(trade_xml("T1", currency=code)))
+    row = matching_row(comment="IBKR#T1", currency=None, fee=D(999))
+    row["assetProfile"]["currency"] = code
+    item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="balanced")[0].values()))
+    assert item["automatic eligible"] and item["changed fields"] == ["comment"]
+    assert item["proposed values"]["currency"] is None
+    if code in ("KRW", "SEK"):
+        assert item["numeric evidence"]["operation"].startswith("Eligible comment-only")
+
+
+@pytest.mark.parametrize("failure", ["amount", "source", "identity", "date", None])
+def test_effective_currency_legacy_dividend_independent_gates(failure):
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events(report(divs=div_xml()))
+    event = next(iter(events.values()))
+    row = matching_row(comment=event["legacy"][0], type="DIVIDEND", date=event["values"]["date"],
+                       currency=None, quantity=D(1), unitPrice=D(25), fee=D(0))
+    row["assetProfile"]["currency"] = "USD"
+    if failure == "amount":
+        row["unitPrice"] = D(30)
+    if failure == "source":
+        event["source evidence"]["accruals"] = []
+    if failure == "identity":
+        row["assetProfile"]["isin"] = "OTHER"
+    if failure == "date":
+        row["date"] = "2020-01-01T00:00:00Z"
+    pairs = review.automatic_pairs(events, [row], "balanced", "UTC")
+    assert bool(pairs) is (failure is None)
+    if not failure:
+        item = next(iter(review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="balanced")[0].values()))
+        assert item["proposed values"]["quantity"] == "1"
+        assert item["changed fields"] == ["comment"]
+
+
+@pytest.mark.parametrize("change,reason", [({"currency": None}, "profile currency"), ({"currency": "AAA"}, "activity currency"), ({"currency": "EUR"}, "Conflicting"), ({"currency": "KRW"}, "Unsupported automatic financial")])
+def test_effective_currency_diagnosis_distinct_reasons(change, reason):
+    from copy import deepcopy
+    event = next(iter(matching_events().values()))
+    row = matching_row(**change)
+    if change["currency"] == "KRW":
+        event = deepcopy(event)
+        event["values"]["currency"] = "KRW"
+    with pytest.raises(RuntimeError, match=reason):
+        reconciliation.numeric_evidence(event, row)
+
+
+def test_effective_currency_diagnosis_groups_resolve_and_report_unknown():
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events()
+    one = matching_row(id="one", currency=None, comment=next(iter(events)))
+    one["assetProfile"]["currency"] = "USD"
+    two = matching_row(id="two", currency=None, comment=next(iter(events)))
+    proposals = review.refresh_proposals({}, events, [one, two], {"U1": "acc"}, reconciliation="balanced")[0]
+    group = next(iter(reconciliation.group_diagnosis(events, proposals).values()))
+    assert group["destination totals"]["USD"]["gross"] == "600"
+    assert group["unavailable totals"][0]["id"] == "two"
+
+
+@pytest.mark.parametrize("code,factor,allowed", [("GBp", D(".01"), True), ("ZAc", D(".01"), False), ("ILA", D(".01"), False)])
+def test_effective_currency_scaling_keeps_authority(code, factor, allowed):
+    from _sync_helpers import report, trade_xml
+    event = next(iter(matching_events(report(trade_xml("T1", currency="GBP"))).values()))
+    row = matching_row(currency=None, unitPrice=D(6000), fee=D(100))
+    row["assetProfile"]["currency"] = code
+    if allowed:
+        proof = reconciliation.numeric_evidence(event, row)
+        assert proof["destination gross"] == "600"
+        assert proof["currency evidence"]["effective"] == "GBp"
+    else:
+        with pytest.raises(RuntimeError):
+            reconciliation.numeric_evidence(event, row)
+
+
+def test_effective_currency_replay(tmp_path, monkeypatch):
+    """Hash-bound observations plus labelled synthetic source/profile controls."""
+    import os
+    import socket
+    from copy import deepcopy
+    from hashlib import sha256
+    from pathlib import Path
+    from ghostfolio_ibkr_sync import activity_review as review
+    from ghostfolio_ibkr_sync.ghostfolio import effective_currency
+    from test_activity_review import destination, ReviewServer
+
+    filename = os.environ.get("EFFECTIVE_CURRENCY_REPLAY_INPUT")
+    if not filename:
+        pytest.skip("Set EFFECTIVE_CURRENCY_REPLAY_INPUT for the explicit private replay gate")
+    path = Path(filename)
+    original = path.read_bytes()
+    expected_hash = "13e3e0ecb71deeeca48b251c66262d703442e66b8ea2fdee1e495794be82f314"
+    assert sha256(original).hexdigest() == expected_hash
+    view = review.read_yaml(original)
+    corrections, references = view["activity_corrections"], view["reference_updates"]
+    assert (len(corrections), len(references)) == (148, 26)
+    currency_only = [item for item in corrections.values() if item["operation fields"] == ["currency"]]
+    null_references = [item for item in references.values() if item["current"]["currency"] is None]
+    assert (len(currency_only), len(null_references)) == (108, 25)
+    assert sum(item["type"] in ("BUY", "SELL") for item in null_references) == 16
+    assert all("assetProfile" not in item["current"] for item in [*currency_only, *null_references])
+    # The compact view cannot prove fallback or source cash/accrual completeness.
+    assert all(effective_currency(item["current"])["effective"] is None for item in currency_only)
+
+    def denied(*args, **kwargs):
+        pytest.fail("Network or financial request attempted during offline replay")
+    monkeypatch.setattr(socket, "socket", denied)
+    monkeypatch.setattr(socket, "create_connection", denied)
+    for key in list(os.environ):
+        if key.startswith(("GHOST_", "IBKR_")):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.setenv("DRY_RUN", "true")
+    # Explicitly synthetic profiles isolate the 108 representation differences.
+    for item in currency_only:
+        before = deepcopy(item["current"])
+        before["assetProfile"] = {"symbol": before["symbol"], "dataSource": "YAHOO", "currency": item["proposed"]["currency"]}
+        after = {**before, **item["proposed"]}
+        assert review.changed_fields(before, after) == []
+    assert 174 - len(currency_only) == 66
+
+    events, rows = {}, []
+    named = set()
+    for index, item in enumerate(references.values()):
+        source = deepcopy(item["proposed"])
+        source.update({field: difference["source"] for field, difference in item["observed differences"].items()})
+        kind = "DIVIDEND" if item["type"] == "DIVIDEND" else "TRADE"
+        marker = f"IBKR#v2#synthetic:{kind}:R{index}"
+        source["comment"] = marker
+        raw_code = source["currency"]
+        assert raw_code
+        row = destination(f"IBKR#R{index}", id=f"row{index}", **{
+            field: D(value) if field in review.NUMBERS else value
+            for field, value in item["current"].items() if field not in ("symbol", "comment")})
+        row["assetProfile"].update(symbol=source["symbol"], currency=raw_code)
+        quantity, price = D(source["quantity"]), D(source["unitPrice"])
+        major, scale = reconciliation.denomination(raw_code)
+        if kind == "TRADE":
+            proof = {"quantity": str(quantity), "tradePrice": str(price), "currency": raw_code}
+        else:
+            # Synthetic cash fixture: exact minor-unit payment, not real source proof.
+            gross = (quantity * price * scale).quantize(D(1).scaleb(-reconciliation.PRECISION[major]))
+            proof = {"accruals": [{"quantity": str(quantity)}], "payments": [{"amount": str(gross), "currency": major}]}
+        values = {**source, "quantity": str(quantity), "unitPrice": str(price), "fee": str(source["fee"])}
+        payload = {**values, "accountId": "acc", "dataSource": "YAHOO"}
+        for field in review.NUMBERS:
+            payload[field] = float(payload[field])
+        event = {"event": marker, "source account": "synthetic", "destination account": "acc",
+                 "values": values, "payload": payload, "source evidence": proof,
+                 "legacy": [row["comment"]], "legacy safe": False, "mapping": {}, "isin": row["assetProfile"]["isin"]}
+        events[marker] = event
+        rows.append(row)
+        if source["symbol"] in ("2768.T", "1976.T", "7399.T", "5658.T", "7297.T", "9273.T", "PAF.L", "4543.T", "7272.T"):
+            named.add((source["symbol"], row["date"][:10]))
+        if source["symbol"] in ("4543.T", "7272.T"):
+            assert D(row["quantity"]) == 1 and quantity == 100
+
+    assert {("2768.T", "2026-06-10"), ("1976.T", "2026-06-26"), ("7399.T", "2026-06-29"),
+            ("5658.T", "2026-06-29"), ("7297.T", "2026-06-29"), ("9273.T", "2026-09-28"),
+            ("PAF.L", "2025-12-09"), ("PAF.L", "2026-03-17"), ("4543.T", "2025-12-02"),
+            ("7272.T", "2026-03-26")} <= named
+    pairs = review.automatic_pairs(events, rows, "balanced", "UTC")
+    assert len(pairs) == 26
+    proposals, _ = review.refresh_proposals({}, events, rows, {"synthetic": "acc"}, reconciliation="balanced", timezone="UTC")
+    assert len(proposals) == 26 and all(item["automatic eligible"] for item in proposals.values())
+    assert all(item["changed fields"] == ["comment"] for item in proposals.values())
+    # Remove profile proof: all 25 null reference rows lose eligibility.
+    unknown = deepcopy(rows)
+    for row in unknown:
+        row["assetProfile"].pop("currency")
+    assert len(review.automatic_pairs(events, unknown, "balanced", "UTC")) == 1
+    # Remove exact source evidence: dividends lose their independent gate.
+    missing_source = deepcopy(events)
+    for event in missing_source.values():
+        if event["values"]["type"] == "DIVIDEND":
+            event["source evidence"]["accruals"] = []
+    assert len(review.automatic_pairs(missing_source, rows, "balanced", "UTC")) == 16
+    server = ReviewServer(monkeypatch, rows)
+    state = review.open_review(str(tmp_path / "simulation.yaml"), [])
+    try:
+        cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": True,
+               "activity_reconciliation": "balanced", "activity_review_file": str(state["path"])}
+        review.process_review(state, cfg, events, {"synthetic": "acc"})
+        counts = state["document"]["summary"]["outcomes"]
+        assert counts["would correct"] == 1
+        assert counts["automatically corrected"] == 0
+        assert server.writes == [] and state["journal"]["entries"] == {}
+    finally:
+        review.close_review(state)
+    assert path.read_bytes() == original
+    print("Observed baseline: 174 proposals = 148 corrections + 26 references; 108 currency-only; 25 null references (16 trades, 9 dividends).")
+    print("Real eligibility: unproven; missing bound profile/source evidence; G5 required.")
+    print("Synthetic: currency-only 108 -> 0; existing-set projection 174 -> 66; currency checks 25/25; eligible references 25 + 1 = 26; would correct 1; financial requests 0; confirmed journals 0.")
+    print(f"Input SHA-256 unchanged: {expected_hash}")
+
+
+@pytest.mark.parametrize("failure,reason", [("identity", "Conflicting source"), ("amount", "Gross difference"), ("date", "Business date")])
+def test_effective_currency_diagnosis_names_independent_holds(failure, reason):
+    from ghostfolio_ibkr_sync import activity_review as review
+    events = matching_events()
+    row = matching_row(comment=next(iter(events)), currency=None, fee=D(2))
+    row["assetProfile"]["currency"] = "USD"
+    if failure == "identity":
+        row["assetProfile"]["isin"] = "OTHER"
+    elif failure == "amount":
+        row["unitPrice"] += D(1)
+    else:
+        row["date"] = "2020-01-01T00:00:00Z"
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation="balanced")
+    item = next(iter(proposals.values()))
+    assert not item["automatic eligible"]
+    assert any(message.startswith(reason) for message in item["numeric evidence"]["eligibility reasons"])

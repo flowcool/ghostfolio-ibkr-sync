@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal, DecimalException
 from math import isfinite
-from typing import Any
+from typing import Any, TypedDict
 
 import requests
 
@@ -27,6 +27,58 @@ log = logging.getLogger(__name__)
 # Run configuration as built by `config.load_config`; the import-uncertainty marker
 # is added to it during a run.
 Config = dict[str, Any]
+
+
+# Ghostfolio 3.96.0 validates ISO codes through validator 13.15.35, plus
+# GBp/ILA/ZAc (common/helper.ts:isValidCurrencyCode and config.ts:DERIVED_CURRENCIES).
+# Keep this read/acceptance domain separate from automatic financial authority.
+DESTINATION_CURRENCIES = frozenset((
+    "AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BOV BRL BSD BTN BWP BYN "
+    "BZD CAD CDF CHE CHF CHW CLF CLP CNY COP COU CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP "
+    "GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF "
+    "KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR "
+    "MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK "
+    "SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD USN UYI "
+    "UYU UYW UZS VED VES VND VUV WST XAF XAG XAU XBA XBB XBC XBD XCD XDR XOF XPD XPF XPT XSU XTS XUA XXX "
+    "YER ZAR ZMW ZWL GBp ILA ZAc "
+).split())
+
+
+class CurrencyEvidence(TypedDict):
+    raw: Any
+    effective: str | None
+    provenance: str
+    profile: dict[str, Any] | None
+    reason: str | None
+
+
+def effective_currency(row: Mapping[str, Any]) -> CurrencyEvidence:
+    """Resolve only explicit currency or a profile carried by the same row.
+
+    Callers establish complete unredacted capture or created-response ownership.
+    A present current profile always wins over legacy context, even if invalid.
+    """
+    key = "assetProfile" if "assetProfile" in row else "SymbolProfile"
+    asset = row.get(key)
+    context = ({name: asset[name] for name in ("id", "symbol", "dataSource", "isin", "currency")
+                if name in asset} if isinstance(asset, dict) else None)
+    raw = row.get("currency")
+    value, provenance, reason = raw, "activity", None
+    if "currency" not in row:
+        reason = "Missing activity currency field"
+    elif raw is None:
+        provenance = key
+        if (not isinstance(asset, dict) or not isinstance(asset.get("symbol"), str)
+                or not asset["symbol"].strip() or not isinstance(asset.get("dataSource"), str)
+                or not asset["dataSource"].strip()):
+            reason = "Unproven profile currency"
+        value = asset.get("currency") if isinstance(asset, dict) else None
+        if reason is None and (not isinstance(value, str) or value not in DESTINATION_CURRENCIES):
+            reason = "Missing or unsupported profile currency"
+    elif not isinstance(raw, str) or raw not in DESTINATION_CURRENCIES:
+        reason = "Invalid or unsupported activity currency"
+    return {"raw": raw, "effective": value if reason is None else None,
+            "provenance": provenance, "profile": context, "reason": reason}
 
 
 def ghost_headers(token: str | None) -> dict[str, str]:
@@ -459,9 +511,11 @@ def accepted_import_subset(
                 if (isinstance(value, bool) or not isinstance(value, (int, float))
                         or not isfinite(value) or value < 0):
                     raise RuntimeError("Accepted activity has invalid financial evidence")
-        for field in ("type", "quantity", "unitPrice", "fee", "currency"):
+        for field in ("type", "quantity", "unitPrice", "fee"):
             if row.get(field) != original.get(field):
                 raise RuntimeError("Accepted activity differs from submitted financial evidence")
+        if effective_currency(row)["effective"] != original.get("currency") or not original.get("currency"):
+            raise RuntimeError("Accepted activity lacks matching proven currency evidence")
         seen.add(key)
         created_ids.add(row["id"])
         accepted.append({**original, "symbol": profile["symbol"]})
@@ -682,10 +736,8 @@ def _existing_dividend_amounts(
 
     quantity, price, fee = (decimal(order.get(key)) for key in ("quantity", "unitPrice", "fee"))
     gross = quantity * price if quantity is not None and price is not None else None
-    currency = order.get("currency")
-    if currency is None:
-        currency = profile.get("currency")
-    return gross, currency if isinstance(currency, str) and currency else None, fee
+    row = order if "assetProfile" in order or "SymbolProfile" in order else {**order, "assetProfile": profile}
+    return gross, effective_currency(row)["effective"], fee
 
 
 
