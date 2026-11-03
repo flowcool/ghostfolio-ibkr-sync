@@ -377,13 +377,14 @@ explained.
 
 ## Activity review qualification
 
-Review is opt-in. `activity_review.QUALIFIED_EXECUTION` permits
-five corrections per complete connector run, across all configured accounts,
-with a 28-second minimum delay between confirmed requests. The RC activates
-this permit for the lab burst scenario. Stable promotion requires a PASS from
-the empty and golden burst gate on this exact digest.
-Remaining approvals and import holds stay pending for the next run. No ENV
-setting can raise the count or lower the delay.
+Review is opt-in. Each connector run applies all eligible approved corrections
+across all configured accounts. `activity_review.QUALIFIED_EXECUTION` contains
+the fixed 28-second minimum delay between confirmed requests. There is no count
+cap. No ENV setting can lower the delay or add a count cap. Stable promotion
+requires PASS from the empty and golden long-chain gate on this exact digest.
+The first unresolved correction stops the run and retains later approvals.
+Allow `(corrections - 1) * 28` seconds plus source, request and readback time.
+The connector adds no run duration limit. Keep writers exclusive.
 Qualification covers connector behavior. Each release records the Ghostfolio
 version observed in its labs as information. A Ghostfolio version or image change
 does not invalidate qualification. The 28-second delay comes from the lab measurement: the maximum observed
@@ -405,14 +406,14 @@ qualify isolated corrections; they do not qualify a burst of corrections.
 The previous proof qualified isolated corrections only. It did not qualify a
 burst. The exact RC image must pass a new empty and golden lab burst before
 stable promotion. The lab must measure request-bound market-data and
-portfolio-cache completion and record the accepted limit and delay with the
+portfolio-cache completion and record the fixed delay and chain timings with the
 connector image digest and informational Ghostfolio version. The connector cannot
 poll this completion through the activity API. A failed or uncertain correction stops the whole financial run. No resend
 is allowed. Observed background chains of 6.708-9.839 seconds are samples, not
 a qualification. If the lab shows a longer background chain, revise the
 permit in a new RC. Until the burst gate passes, stable promotion and production
 use remain unqualified.
-The installed RC also passed network-denied normal-run budget/deferred-approval,
+The installed RC also passed network-denied normal-run correction/deferred-approval,
 interruption/restart, no-resend, duplicate-reference and notes-compatible-reader
 replays. Those tests prove connector behavior, not live background timing.
 Private native evidence stays outside this public repository.
@@ -420,8 +421,10 @@ Private native evidence stays outside this public repository.
 Prove full/reverse PUT preservation, exact numeric/date readback, notes (Unicode
 length/trimming), tags, ownership, profile/background effects, duplicate references,
 interruption at each journal transition, restart recovery and no repeat logical
-request. The burst gate must also prove five sequential corrections, the delay,
-stop-on-first-uncertainty, deferred approvals and the shared multi-account budget.
+request. Each lab must prove at least thirty consecutive corrections in one
+account and across two accounts. Require gaps of at least D=28 seconds and each
+request-bound background chain at most D/1.5 seconds. Inject uncertainty in the
+middle of a chain. Prove exact readback, stop, retained approvals and no resend.
 Failed preservation keeps affected corrections unavailable. Changed
 security profiles currently require separate preservation evidence. Current
 report windows cannot qualify historical legacy-global reference upgrades.
