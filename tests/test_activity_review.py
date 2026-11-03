@@ -722,7 +722,7 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         monkeypatch.setenv("ACTIVITY_REVIEW_DELAY", "0")
         assert review.QUALIFIED_EXECUTION is not None
         limit, delay = review.QUALIFIED_EXECUTION
-        assert (limit, delay) == (5, 15.0)
+        assert (limit, delay) == (5, 28.0)
     else:
         # Synthetic larger budgets exercise the generic deferral and pacing logic.
         monkeypatch.setattr(review, "QUALIFIED_EXECUTION", (limit, delay))
@@ -783,7 +783,7 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
 
     assert len(server.writes) == 3
     assert {payload["id"] for payload in server.writes} == {"row1", "row2", "row3"}
-    assert server.waits == ([0.5] if limit == 2 else ([15.0, 15.0] if limit == 5 else []))
+    assert server.waits == ([0.5] if limit == 2 else ([28.0, 28.0] if limit == 5 else []))
     # A fresh normal run reopens the journal and cannot resend a consumed yes.
     assert app.run_sync(new_run_outcome()) == 0
     assert len(server.writes) == 3 and len(server.cash) == passes + 1
