@@ -45,7 +45,7 @@ Exact journal recovery still compares the full instant, including intraday drift
 
 The RC activates a review permit for the connector behavior.
 The permit allows **five corrections per connector run**, across all configured
-accounts, with a **15-second minimum delay** between confirmed corrections.
+accounts, with a **28-second minimum delay** between confirmed corrections.
 Stable promotion requires a PASS from the empty and golden burst lab gate on
 this exact RC digest. Until that PASS, stable promotion and production use are
 not qualified. Other approved proposals remain unchanged for later runs and
@@ -54,9 +54,10 @@ The activity API exposes no background completion signal.
 No ENV setting can raise the count or reduce the delay.
 Qualification covers connector behavior. Each release records the Ghostfolio
 version observed in its labs as information. A Ghostfolio version or image change
-does not invalidate qualification. If a future background chain exceeds the delay,
-exact readback and stop-on-uncertainty still protect the data. Raise the delay in
-a new connector release.
+does not invalidate qualification. The 28-second delay comes from the lab measurement: the maximum observed
+background chain was 18.19 seconds, with a 1.5x margin. If a future lab shows
+a longer chain, revise the delay in a new connector release. Exact readback and
+stop-on-uncertainty still protect the data.
 Production activation retains its separate approval. See [qualification evidence
 and limits](releasing.md#activity-review-qualification).
 
@@ -378,7 +379,7 @@ Offline tests and the existing correction budget do not qualify a new image.
 A failed preservation case keeps affected corrections unavailable.
 
 Profiles and manual consent share the qualified execution limit. The RC permit
-allows five PUTs per run with a 15-second minimum delay. A reference
+allows five PUTs per run with a 28-second minimum delay. A reference
 migration consumes that same limit. The next financial correction
 uses a fresh revision after confirmed migration. Oldest first-eligible revisions
 run first. Remaining eligible work retains its hold for later normal cycles.

@@ -123,7 +123,7 @@ Pending proposals alone SHALL warn without failing the account. Those requiring 
 
 Manual, automatic and comment-only correction PUTs SHALL share one connector-qualified
 finite budget across all configured accounts. The RC activates five corrections
-per run with a fifteen-second minimum inter-correction delay. Stable promotion
+per run with a twenty-eight-second minimum inter-correction delay. Stable promotion
 SHALL require the exact RC image to pass the versioned empty and golden burst
 qualification gate. The qualified lab record SHALL bind the accepted ceiling
 and delay to the connector release. Ghostfolio image and version SHALL NOT be
@@ -132,8 +132,7 @@ version as information. A version or image change SHALL NOT invalidate
 qualification. If a future background chain exceeds D, exact readback and
 stop-on-uncertainty SHALL still protect data; a new release SHALL raise D. There SHALL be no ENV bypass above that
 ceiling or below that delay. A future lower-only setting MAY reduce the dispatch
-count; it SHALL never increase the count or reduce the qualified delay. If the
-lab observes a longer background chain, a new RC SHALL revise the values. Each
+count; it SHALL never increase the count or reduce the qualified delay. If a lab observes a longer background chain, a new release SHALL revise the values. Each
 request SHALL complete bounded exact readback before the next PUT. The connector
 SHALL stop at the qualified limit and retain unchanged approvals and related
 import holds without requesting another approval.

@@ -379,16 +379,17 @@ explained.
 
 Review is opt-in. `activity_review.QUALIFIED_EXECUTION` permits
 five corrections per complete connector run, across all configured accounts,
-with a 15-second minimum delay between confirmed requests. The RC activates
+with a 28-second minimum delay between confirmed requests. The RC activates
 this permit for the lab burst scenario. Stable promotion requires a PASS from
 the empty and golden burst gate on this exact digest.
 Remaining approvals and import holds stay pending for the next run. No ENV
 setting can raise the count or lower the delay.
 Qualification covers connector behavior. Each release records the Ghostfolio
 version observed in its labs as information. A Ghostfolio version or image change
-does not invalidate qualification. If a future background chain exceeds the delay,
-exact readback and stop-on-uncertainty still protect the data. Raise the delay in
-a new connector release.
+does not invalidate qualification. The 28-second delay comes from the lab measurement: the maximum observed
+background chain was 18.19 seconds, with a 1.5x margin. If a future lab shows
+a longer chain, revise the delay in a new connector release. Exact readback and
+stop-on-uncertainty still protect the data.
 
 The 2026-10-23 isolated proof used the published v3.1.0-rc.1 package against the
 Ghostfolio version recorded in that proof. Six TRADE/DIVIDEND full-update/reverse

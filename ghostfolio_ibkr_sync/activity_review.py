@@ -1028,7 +1028,7 @@ def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
 # as information and measure its background chain against the fixed delay.
 # Exact readback and stop-on-uncertainty protect data if a future chain is longer.
 # A longer delay requires a new connector release; ENV cannot weaken the permit.
-QUALIFIED_EXECUTION: tuple[int, float] | None = (5, 15.0)
+QUALIFIED_EXECUTION: tuple[int, float] | None = (5, 28.0)
 RECOVERY_WAITS = (0, 2, 5, 10)
 
 

@@ -5,7 +5,7 @@ once in `a-ghostfolio-lab` and once in `a-ghostfolio-lab-golden`. Use the
 versioned infra entry point from the selected stack directory. Reserve the lab,
 record the operation reference, and stop the instance after the run.
 
-The RC permit is five corrections with a 15-second minimum delay. Stable
+The RC permit is five corrections with a 28-second minimum delay. Stable
 promotion requires PASS in both instances on the same connector digest. This
 procedure does not authorize stable publication or production writes.
 
@@ -82,10 +82,12 @@ that PUT response:
    reaches `completed` after the market job and the PUT response.
 
 Record `market_seconds` and `portfolio_seconds` for every PUT. Define `D` as
-the largest PUT-response-to-portfolio-completion value. Add the documented
+the largest PUT-response-to-portfolio-completion value. The 28-second delay comes from the lab measurement: the maximum observed
+background chain was 18.19 seconds, with a 1.5x margin. If a future lab shows
+a longer chain, revise the delay in a new connector release. Add the documented
 qualification margin to `D` when accepting a delay. The five requests must be
 sequential, each must have exact activity readback before the next PUT, and the
-observed spacing must be at least 15 seconds. The sixth activity must remain
+observed spacing must be at least 28 seconds. The sixth activity must remain
 unchanged and its approval must remain deferred. No later import or cash write
 may follow an uncertain correction.
 
@@ -105,6 +107,6 @@ python3 ghostfolio/scripts/lab.py qualification-review --review-jobs \
 That command proves the per-PUT observer and exact readback. The six-row normal
 run above proves the active five-request permit and the deferred sixth proposal.
 Keep the private observer output and connector evidence with the lab acceptance
-record. If any background chain exceeds the 15-second permit, or if any result
+record. If any background chain exceeds the 28-second permit, or if any result
 is uncertain, mark the RC FAIL. Revise the values in a new RC before stable
 promotion. Never retag the failed RC.
