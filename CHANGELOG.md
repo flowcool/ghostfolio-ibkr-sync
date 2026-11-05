@@ -15,7 +15,8 @@ in Flex `dateTime`, at 00:00 UTC. Their posting clock no longer moves late-night
 payments to the next day. Accrual matching, deduplication, review and migration
 use the same day. Trade execution instants retain EST/EDT conversion to UTC.
 Known execution venues now check `tradeDate` in the exchange timezone and hold
-inconsistent rows with a reason. Unknown venues stay unchecked.
+inconsistent rows with a reason. If your query includes Exchange, select TradeDate
+too. Missing or invalid TradeDate holds trades on known venues. Unknown venues stay unchecked.
 
 Set connector `TZ` to the Ghostfolio server timezone. Startup logs the comparison
 zone. Canonical source values do not depend on `TZ`. Ghostfolio 3.96.0 uses the
