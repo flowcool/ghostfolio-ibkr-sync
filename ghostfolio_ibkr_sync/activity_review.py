@@ -42,7 +42,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     dividend_input_compatible,
     flex_provenance_failures,
     parse_cash_dividends,
-    parse_ibkr_datetime,
+    parse_ibkr_calendar_day,
     parse_source_account_ids,
     parse_trades,
 )
@@ -824,7 +824,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                           else [payment.get("dateTime", "") for payment in raw.get("payments", [])])
                 date_context.update({"source text": "; ".join(clocks),
                                      "source calendar day": ", ".join(sorted({
-                                         (parse_ibkr_datetime(clock.split(";")[0].split(",")[0]) or "")[:10]
+                                         parse_ibkr_calendar_day(clock) or ""
                                          for clock in clocks})),
                                      "source zone": ", ".join(sorted({clock.rsplit(None, 1)[-1]
                                          if re.fullmatch(r"\d{8};\d{6}\s+(EST|EDT)", clock.strip())
