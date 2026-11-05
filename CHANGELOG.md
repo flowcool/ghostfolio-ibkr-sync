@@ -8,6 +8,23 @@ the release history, migration notes and published artifacts.
 For installations from 2.x, read [Upgrading to 3.0](docs/upgrading-to-3.0.md).
 Current behavior and settings are in the [configuration guide](docs/configuration.md).
 
+## Unreleased
+
+Dividend, payment-in-lieu and withholding dates now keep the calendar day written
+in Flex `dateTime`, at 00:00 UTC. Their posting clock no longer moves late-night
+payments to the next day. Accrual matching, deduplication, review and migration
+use the same day. Trade execution instants retain EST/EDT conversion to UTC.
+Known execution venues now check `tradeDate` in the exchange timezone and hold
+inconsistent rows with a reason. If your query includes Exchange, select TradeDate
+too. Missing or invalid TradeDate holds trades on known venues. Unknown venues stay unchecked.
+
+Set connector `TZ` to the Ghostfolio server timezone. Startup logs the comparison
+zone. Canonical source values do not depend on `TZ`. Ghostfolio 3.96.0 uses the
+browser zone for display and the server zone for valuation. A 00:00Z dividend
+can show on the previous day west of UTC. Keep this documented limit; a noon-UTC
+anchor needs historical conversion under a separate operator GO.
+No stored activity is rewritten or review proposal approved by this change.
+
 ## Unreleased — v4.3.0
 
 Dividend coverage and representation limits now use informational blocks and counts. They request no manual correction or required-action reminder.

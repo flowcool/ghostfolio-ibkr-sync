@@ -757,6 +757,9 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
 def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     """Execute with any optional persistent-review lock held for the whole run."""
     reason = timezone_preview_reason()
+    if not reason:
+        log.info("Activity comparison TZ=%s; must match the Ghostfolio server TZ",
+                 os.environ["TZ"].strip())
     if reason:
         config["dry_run"] = True
         outcome["forced_preview"] = reason
