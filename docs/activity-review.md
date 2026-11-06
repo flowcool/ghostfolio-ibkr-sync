@@ -171,6 +171,14 @@ New candidates start blank. Changes to bound operation evidence clear consent.
 An unavailable source suspends consent. No request uses cached source data.
 Deleting an entry permits blank rediscovery. It does not authorize import.
 
+When status is `target missing or unavailable`, `current` is retained target
+evidence from an earlier cycle. `proposed` shows values from the current source only.
+It is not an executable replacement. Target-dependent comparisons are empty.
+Restore fresh source and target proof before reviewing an operation.
+The proposal keeps its source hold and clears consent.
+Deleting its compact entry restores it from private state with blank consent.
+Use `reject` only for a false association with fresh endpoint proof.
+
 Pending candidates hold related imports. Unrelated events continue.
 An exact confirmed correction releases its alternatives without modifying them.
 Ordinary import selection still applies its identity and holdings guards.

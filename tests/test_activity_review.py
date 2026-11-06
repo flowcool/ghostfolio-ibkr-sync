@@ -2112,3 +2112,91 @@ def test_review_replacement_timezone_different_day_uses_existing_financial_path(
         assert review.row_matches(entry["after"], server.rows[0])
     finally:
         review.close_review(state)
+
+
+@pytest.mark.parametrize("kind", ["BUY", "SELL", "DIVIDEND"])
+@pytest.mark.parametrize("target_state", ["missing", "inactive", "outside_window"])
+def test_unavailable_target_refreshes_source_preview_across_compact_restart(tmp_path, kind, target_state):
+    def events(day, amount):
+        if kind == "DIVIDEND":
+            return source_events(report(divs=div_xml(date=f"202607{day}", amount=amount)))
+        return source_events(report(trade_xml("T1", side=kind, date=f"202608{day};100000", qty=int(amount))))
+
+    old_events = events("16", "20")
+    fresh_events = events("15", "25")
+    event_id = next(iter(fresh_events))
+    row = destination(type=kind, date=old_events[event_id]["values"]["date"])
+    proposals, _ = review.refresh_proposals({}, old_events, [row], {"U1": "acc"})
+    key = next(iter(proposals))
+    proposals[key]["approve"] = "yes"
+    original = deepcopy(proposals[key])
+    rows = [] if target_state == "missing" else [
+        {**row, "isDraft": True} if target_state == "inactive" else
+        {**row, "date": "2020-01-01T00:00:00Z"}]
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    try:
+        review.publish_review(state, {"version": 1, "proposals": proposals})
+    finally:
+        review.close_review(state)
+    # Delete a legacy stale row. The private state must restore its hold.
+    public = review.read_yaml(path.read_bytes())
+    for section in review.SECTIONS:
+        public[section].pop(key, None)
+    path.write_text(__import__("yaml").safe_dump(public))
+    revision = None
+    for _ in range(3):
+        state = review.open_review(str(path), [])
+        try:
+            assert key in state["document"]["proposals"]
+            proposals, held = review.refresh_proposals(state["document"]["proposals"], fresh_events, rows,
+                                                       {"U1": "acc"}, reconciliation="permissive")
+            item = proposals[key]
+            expected = {field: value for field, value in fresh_events[event_id]["values"].items()
+                        if field in review.REPLACED}
+            assert item["proposed values"] == expected
+            assert item["proposed values"]["date"] != original["proposed values"]["date"]
+            assert item["source evidence"]["values"] == fresh_events[event_id]["values"]
+            assert item["current values"] == original["current values"]
+            assert item["status"] == "target missing or unavailable"
+            assert not item["actionable"] and not item["automatic eligible"] and item["approve"] is None
+            assert item["review revision"] != original["review revision"]
+            if revision is not None:
+                assert item["review revision"] == revision
+            revision = item["review revision"]
+            assert item["rejection binding"] == original["rejection binding"]
+            assert held == {event_id} and review.selected_proposals(proposals) == ([], set())
+            for field in ("date context", "profile date context", "numeric evidence", "diagnostic differences"):
+                assert item[field] == {}
+            review.publish_review(state, {"version": 1, "proposals": proposals})
+        finally:
+            review.close_review(state)
+        public = review.read_yaml(path.read_bytes())
+        displayed = next(public[section][key] for section in review.SECTIONS if key in public[section])
+        assert displayed["proposed"] == expected
+        assert displayed["held scope"] == event_id and displayed["decision"] is None
+        assert displayed["date context"] == {} and displayed["numeric evidence"] == {}
+        # Deletion after publication cannot restore the old preview or authority.
+        for section in review.SECTIONS:
+            public[section].pop(key, None)
+        path.write_text(__import__("yaml").safe_dump(public))
+
+
+def test_unavailable_target_fresh_endpoints_control_hold_release_and_consent():
+    events = source_events(report(divs=div_xml()))
+    event_id = next(iter(events))
+    row = destination(type="DIVIDEND", date=events[event_id]["values"]["date"])
+    original, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"})
+    key = next(iter(original))
+    original[key]["approve"] = "yes"
+    absent, held = review.refresh_proposals(original, events, [], {"U1": "acc"})
+    assert held == {event_id}
+    suspended, held = review.refresh_proposals(absent, {}, [], {"U1": "acc"})
+    assert suspended[key]["status"] == "source unavailable" and held == {event_id}
+    assert not suspended[key]["actionable"] and suspended[key]["approve"] is None
+    returned, held = review.refresh_proposals(suspended, events, [row], {"U1": "acc"})
+    assert returned[key]["actionable"] and returned[key]["approve"] is None and held == {event_id}
+    satisfied = review.expected_row(row, review.update_payload(row, returned[key]["proposed values"]))
+    assert review.refresh_proposals(absent, events, [satisfied], {"U1": "acc"}) == ({}, set())
+    reassigned = {**row, "comment": "IBKR#v2#U1:DIVIDEND:OTHER"}
+    assert review.refresh_proposals(absent, events, [reassigned], {"U1": "acc"}) == ({}, set())
