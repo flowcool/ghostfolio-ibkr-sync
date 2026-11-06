@@ -2,24 +2,27 @@
 
 ## Why
 
-Manual history contains amount differences. Some are proven broker rounding;
-others can require correction when complete source evidence proves an entry error.
+Manual history contains rounding differences and source-proven replacements.
+Explain them without changing existing correction authority.
 
 ## What Changes
 
 - Define ordered cause functions in broker-independent helpers. Each returns
-  `(label, reason, action)` or no match. First match wins; default is `to_check`.
+  `(label, reason, action)` or no match. First match explains its proven fields.
 - Use `information` for proven source views with no more precise authoritative
-  replacement. Use `correct` for a proven entry error with an exact replacement.
-- Route corrections through existing profile authority and reviewed updates.
+  replacement. Keep all three information causes and their predicates unchanged.
+- Preserve existing corrections by profile or manual `yes` for source-proven
+  amount, fee, date, currency and comment replacements. The registry adds no gate.
+  Without a named cause, use `correct` with label `source-proven correction`.
+- Use `to_check` without a write when exact replacement proof is missing.
   Keep source, identity, quantity, journal and exact-readback guards.
-- Record three proven rounding shapes and the unresolved historical candidates.
+- Require unchanged correction sets on existing profile and manual cases.
+- Record three proven rounding shapes and split historical candidates by source proof.
   State each cause's financial risk and required authority.
 
 ## Flex Record Scope
 
-Based on retained Flex XML and the saved report scope. Private evidence records
-input hashes. Other brokers supply their own source evidence.
+Retained Flex XML defines this scope. Private evidence records input hashes.
 
 | Flex record | Scope | Use |
 | --- | --- | --- |
@@ -57,5 +60,5 @@ contain no account, security or activity values.
 
 No amount tolerance for identity or deduplication. No deletion, grouped update,
 new profile threshold, guessed quantity, generic FX cause, release or production
-action. Historical candidate differences alone do not prove human error.
+action. Historical candidate differences alone do not prove an exact replacement.
 Implementation requires approval of this proposal.
