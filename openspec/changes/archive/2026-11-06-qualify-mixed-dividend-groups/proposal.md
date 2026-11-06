@@ -14,6 +14,7 @@ A dividend group can contain one v2 activity and one legacy activity. The curren
 | --- | --- |
 | AccountInformation | Account validation only |
 | CashTransaction: Dividends, Payment In Lieu Of Dividends, Withholding Tax | Action payment and withholding evidence |
+| CashTransaction: Broker Interest Paid, Other Fees | Out of scope |
 | ChangeInDividendAccrual | Structured quantity evidence only |
 | Trade | Out of scope; preserve current behavior |
 | CashReportCurrency | Out of scope; preserve cash updates |

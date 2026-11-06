@@ -107,6 +107,7 @@ def test_mixed_shapes_unique_proposal_and_no_import(shape, profile):
     item = selected[0]
     assert item["source event"] == missing and item["activity id"] == "legacy"
     assert item["changed fields"] == ["comment", "fee"]
+    assert item["automatic eligible"] is (profile in ("balanced", "permissive"))
     assert item["proposed values"]["comment"] == missing
     for field in ("id", "quantity", "unitPrice", "date", "tags", "userId", "accountId"):
         assert item["proposed values"][field] == item["current values"][field]
