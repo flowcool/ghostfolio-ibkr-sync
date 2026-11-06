@@ -14,6 +14,10 @@ from decimal import ROUND_HALF_UP, Decimal, DecimalException, localcontext
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+from ghostfolio_ibkr_sync.amount_differences import (
+    Cause,
+    classify_amount_difference,
+)
 from ghostfolio_ibkr_sync.config import timezone_preview_reason
 from ghostfolio_ibkr_sync.ghostfolio import effective_currency
 from ghostfolio_ibkr_sync.ibkr import (
@@ -24,6 +28,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     _dividend_decimal,
     dividend_input_compatible,
 )
+from ghostfolio_ibkr_sync.models import AmountFinding
 from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
 from ghostfolio_ibkr_sync.sync import (
     DIVIDEND_MATCH_DAYS,
@@ -506,9 +511,61 @@ def historical_dividend_findings(dividends: Sequence[DividendGroup], account_id:
 
 def historical_dividend_comparison(dividends: Sequence[DividendGroup], account_id: str, mapping: SymbolMapping,
                                    positions: Positions, report_window: tuple[str, str] | None = None,
-                                   existing_dividend_comments: Collection[tuple[str, str]] = ()) -> list[Finding]:
-    return classify_dividend_findings(historical_dividend_findings(
+                                   existing_dividend_comments: Collection[tuple[str, str]] = (), *,
+                                   review_proposals: Mapping[str, Any] | None = None) -> list[Finding]:
+    findings = classify_dividend_findings(historical_dividend_findings(
         dividends, account_id, mapping, positions, report_window, existing_dividend_comments))
+    attach_review_amount_causes(findings, review_proposals or {}, account_id)
+    return findings
+
+
+def attach_review_amount_causes(findings: list[Finding], proposals: Mapping[str, Any], account_id: str) -> None:
+    """Join fresh internal review proof by unique target. Never derive authority.
+
+    A historical comparison alone cannot prove review eligibility. Reject weak,
+    ambiguous, partial, unavailable and stale source/target combinations here.
+    """
+    from ghostfolio_ibkr_sync.activity_reconciliation import denomination
+
+    for finding in findings:
+        if finding.get("source") is None or finding.get("category") not in (
+                "differences", "coherent_single") or len(finding.get("activity_ids", [])) != 1:
+            continue
+        candidates = [item for item in proposals.values()
+                      if item["activity id"] == finding["activity_ids"][0]
+                      and item["destination account"] == account_id]
+        if len(candidates) != 1:
+            continue
+        item = candidates[0]
+        numbers = item.get("numeric evidence", {})
+        cause = numbers.get("amount cause", {})
+        if (not item["actionable"] or item.get("rejected") or item.get("execution path") != "normal run"
+                or item.get("status") in ("source unavailable", "target missing or unavailable")
+                or cause.get("action") != "correct"
+                or sum(other["source event"] == item["source event"] for other in proposals.values()) != 1):
+            continue
+        try:
+            with localcontext() as context:
+                current = item["current values"]
+                source = item["source evidence"]["values"]
+                context.prec = max(100, sum(len(str(value)) for value in current.values()) + 20)
+                factor = denomination(str(numbers["currency evidence"]["effective"]))[1]
+                if (numbers["currency"] != finding["source_currency"]
+                        or Decimal(numbers["source gross"]) != finding["source_gross"]
+                        or Decimal(source["quantity"]) != finding["source_quantity"]
+                        or Decimal(source["fee"]) * denomination(source["currency"])[1] != finding["source_fee"]
+                        or Decimal(current["quantity"]) != finding["quantity"]
+                        or Decimal(current["quantity"]) * Decimal(current["unitPrice"]) * factor != finding["gross"]
+                        or Decimal(current["fee"]) * factor != finding["fee"]):
+                    continue
+        except (KeyError, ValueError, ArithmeticError):
+            continue
+        finding["review cause"] = cause
+        finding["review outcome"] = ("unresolved" if item["status"] == "unresolved request; account writes blocked" else
+                                     "would correct" if item["status"] == "would correct" else
+                                     "automatic work deferred" if item.get("automatic eligible") or item.get("approve") == "yes"
+                                     else "manual approval needed")
+        finding["readable"] = _readable_set(cause["label"], "to_check", cause["reason"])
 
 
 def _readable_values(destination: Evidence) -> tuple[Any, Any, Any] | None:
@@ -597,19 +654,19 @@ def _propose_match(finding: Finding, twins: Sequence[Finding]) -> dict[str, Any]
             "manual_comparison": False}
 
 
-def _declared_rate_rounding(finding: Finding) -> bool:
-    """Complete proven pattern: one row, equal quantity and fee, destination gross equals
-    quantity x declared rate, and the cash gross differs by exactly one minor unit."""
-    rate = finding.get("declared_rate")
+def _dividend_amount_cause(finding: Finding) -> Cause | None:
+    """Adapt an identity-proven comparison; raw Re association stays upstream."""
     representations = finding.get("representations", [])
-    if rate is None or len(representations) != 1 or "gross" not in finding:
-        return False
+    if len(representations) != 1 or "gross" not in finding:
+        return None
     row = representations[0]
-    unit = _historical_minor_unit(finding["source_currency"])
-    return (row["kind"] == "single" and not row["component_deltas"] and unit is not None
-            and not any(row["quantity_deltas"]) and not row["fee_delta"]
-            and abs(row["gross_delta"]) == unit
-            and finding["gross"] == finding["source_quantity"] * rate)
+    return classify_amount_difference(AmountFinding(
+        broker="IBKR", currency=finding["source_currency"], scope="destination",
+        complete=row["kind"] == "single", associations=1,
+        quantity=finding["source_quantity"], gross=finding["source_gross"], fee=finding["source_fee"],
+        destination_quantity=finding["quantity"], destination_gross=finding["gross"],
+        destination_fee=finding["fee"], declared_rate=finding.get("declared_rate"),
+        representations=len(representations), components=len(row["component_deltas"])))
 
 
 def classify_dividend_findings(findings: list[Finding]) -> list[Finding]:
@@ -656,9 +713,8 @@ def classify_dividend_findings(findings: list[Finding]) -> list[Finding]:
                 result = _readable_set("rounding noise", "noise")
             elif delta == "quantity":
                 result = _readable_set("quantity difference", "to_check")
-            elif delta == "minimal" and _declared_rate_rounding(finding):
-                result = _readable_set("legacy declared-rate rounding", "information",
-                                       "Legacy row uses the declared rate; IBKR paid a rounded cash amount.")
+            elif delta == "minimal" and (cause := _dividend_amount_cause(finding)) is not None:
+                result = _readable_set(cause[0], "information", cause[1])
             elif delta == "minimal":
                 result = _readable_set("minimal difference, cause unknown", "to_check")
             else:
@@ -825,6 +881,8 @@ def _format_match(finding: Finding) -> list[str]:
 
 
 def _finding_action(finding: Finding) -> str:
+    if "review cause" in finding:
+        return format_amount_cause(finding["review cause"], finding["review outcome"]).split("  Action: ", 1)[1]
     if finding["readable"]["label"] == "legacy declared-rate rounding":
         return "No action: IBKR rounding accepted."
     if finding["reason"] in DIAGNOSTIC_LIMITATIONS:
@@ -854,6 +912,27 @@ def _finding_action(finding: Finding) -> str:
                     "fix it by hand if IBKR is right.")
         return _match_action(match)
     return _readable_action(finding["readable"])
+
+
+def format_amount_cause(explanation: Mapping[str, Any], outcome: str) -> str:
+    """One action from an observed review outcome. This formatter never writes."""
+    if outcome == "unresolved":
+        action = "Unresolved request; stop dependent writes and do not resend."
+    elif explanation["action"] == "information":
+        action = ("No action: IBKR rounding accepted."
+                  if explanation["label"] == "legacy declared-rate rounding"
+                  else "No correction requested for the proven source fields.")
+    elif explanation["action"] == "to_check" or outcome == "blocked":
+        action = "Restore the missing or conflicting proof; no correction requested."
+    else:
+        action = {
+            "would correct": "Would correct through the existing review path; nothing was written.",
+            "confirmed": "Corrected after exact readback.",
+            "automatic work deferred": "Correction deferred; approval retained.",
+            "rejected": "Association rejected; no correction requested.",
+        }.get(outcome, "Manual approval needed; nothing was written.")
+    return (f"Cause: {explanation['label']}\n  Reason: {explanation['reason']}\n"
+            f"  Action: {action}")
 
 
 def format_historical_dividend_finding(finding: Finding, account_id: str) -> str:
@@ -887,6 +966,8 @@ def format_historical_dividend_finding(finding: Finding, account_id: str) -> str
             lines.append(f"  Difference of representation {number} (Ghostfolio minus IBKR): "
                          + _plain_deltas(row, finding["source_currency"]))
     lines.append(f"  Reason: {readable['reason'] or readable['label']}")
+    if "review cause" in finding:
+        lines.append("  Review fields: " + ", ".join(finding["review cause"]["fields"]))
     if readable["label"] == "probable duplicate":
         lines.append("  This row looks like a duplicate: legacy comment, same security and same day as the "
                      "IBKR dividend (activity "

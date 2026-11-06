@@ -22,6 +22,28 @@ preserved user notes, even after review is disabled.
 See [proposal review](#review-a-proposal), [approval](#decide-on-a-proposal) and
 [execution paths](#choose-the-execution-path).
 
+## Understand amount causes
+
+The cause explains the evidence. It does not grant correction authority.
+An exact replacement without a named cause uses `source-proven correction`.
+Existing profiles or manual `yes` still control amount, fee, date, currency
+and comment corrections. Missing proof remains blocked.
+
+An `information` cause requests no correction for its proven fields.
+The IBKR declared-rate case requires equal quantity and fee, a uniquely matched
+payment rate, and an exact one-minor-unit cash difference.
+Other fields retain their independent source checks.
+Small display differences alone do not prove a cause.
+
+The named omitted-withholding cause remains disabled until complete real broker
+evidence passes its registration gate. Existing source-proven fee corrections
+remain available. Bourse Direct and DEGIRO source-view contracts need separate
+adoption in their repositories.
+
+Review reports `would correct` during simulation. It reports `corrected` only
+after exact readback. Manual approval, deferral and unresolved requests remain
+separate outcomes. Explanations do not change consent or pending-journal recovery.
+
 ## Compare dates
 
 Review converts qualified Flex timestamps to UTC with the fixed EST/EDT offset.

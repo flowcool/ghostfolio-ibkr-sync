@@ -374,6 +374,62 @@ def test_review_simulation_keeps_yes_and_has_no_applied_journal(tmp_path, monkey
         review.close_review(state)
 
 
+@pytest.mark.parametrize("profile_name", ["off", "conservative", "balanced", "permissive"])
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize("mode", ["live", "preview", "uncertain"])
+def test_amount_cause_execution_non_regression_and_old_pending_recovery(
+        tmp_path, monkeypatch, caplog, profile_name, manual, mode):
+    from ghostfolio_ibkr_sync import activity_reconciliation as rules
+    monkeypatch.setenv("TZ", "UTC")
+    caplog.set_level("INFO")
+    results = []
+    for explained in (False, True):
+        directory = tmp_path / str(explained)
+        directory.mkdir()
+        with monkeypatch.context() as patch:
+            if not explained:
+                patch.setattr(rules, "amount_explanation", lambda *args: {})
+            row = destination("IBKR#v2#U1:TRADE:T1", quantity=Decimal("10"), fee=Decimal("2"))
+            other = destination("IBKR#v2#U2:TRADE:OTHER", accountId="other", id="untouched")
+            server = ReviewServer(patch, [row, other], "unchanged" if mode == "uncertain" else "success")
+            proposals, _ = review.refresh_proposals({}, source_events(), [row, other], {"U1": "acc"},
+                                                  reconciliation=profile_name, timezone="UTC")
+            for item in proposals.values():
+                item["approve"] = "yes" if manual else None
+            path = directory / "review.yaml"
+            write_review(path, {"version": 1, "proposals": proposals})
+            state = review.open_review(str(path), [])
+            cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": mode == "preview",
+                   "activity_review_file": str(path), "activity_reconciliation": profile_name}
+            try:
+                caplog.clear()
+                blocked, held = review.process_review(state, cfg, source_events(), {"U1": "acc"})
+                expected_write = mode != "preview" and (manual or profile_name != "off")
+                assert len(server.writes) == int(expected_write)
+                if explained and expected_write:
+                    assert ("Action: Corrected after exact readback." in caplog.text) is (mode == "live")
+                assert server.rows[1] == other
+                before_recovery = (blocked, held, cfg["_review_stop_run"])
+                if mode == "uncertain" and expected_write:
+                    entry = next(iter(state["journal"]["entries"].values()))
+                    # A pre-registry pending journal must still recover exactly.
+                    entry["eligibility"]["numeric evidence"].pop("amount cause", None)
+                    review.publish_journal(state)
+                    server._apply_payload(server.writes[0])
+                    review.close_review(state)
+                    state = review.open_review(str(path), [])
+                    blocked, held = review.process_review(state, cfg, source_events(), {"U1": "acc"})
+                    assert not blocked and not held and len(server.writes) == 1
+                entries = [{key: entry[key] for key in ("before", "after", "request", "status", "authority")}
+                           for entry in state["journal"]["entries"].values()]
+                retained = [(key, item["approve"], item["status"], item.get("queue position"), item["proposed values"])
+                            for key, item in sorted(state["document"]["proposals"].items())]
+                results.append((server.writes, server.rows, before_recovery, blocked, held, entries, retained))
+            finally:
+                review.close_review(state)
+    assert results[0] == results[1]
+
+
 
 def test_review_replacement_all_types_preserve_tags_notes_and_full_instants(tmp_path, monkeypatch):
     from ghostfolio_ibkr_sync import sync

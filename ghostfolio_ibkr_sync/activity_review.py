@@ -1008,6 +1008,10 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             item.update({"automatic eligible": bool(auto and actionable), "profile": reconciliation,
                          "numeric evidence": numbers,
                          "profile date context": {**(auto["profile date context"] if auto else {}), **date_context}})
+            # Optional explanation lives in existing non-authoritative evidence.
+            # Keep bindings, revisions, eligibility, payloads and consent unchanged.
+            numbers["amount cause"] = reconciliation_rules.amount_explanation(
+                event, current, numbers, changes, actionable)
             association = association_binding(event, current, occupied, marker_of(row)) if current else None
             item.update({"rejection binding": association, "rejected": False, "rejection cooldown": 0,
                          "recognized claim": marker_of(row) == event_id or marker_of(row) in event["legacy"]})
@@ -1285,6 +1289,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         counts["corrected targets"] = len(corrected_targets)
         if changed_fields(entry["before"], entry["after"]) == ["comment"]:
             counts["reference migrations"] += 1
+        report_amount_cause(entry.get("eligibility", {}).get("numeric evidence", {}), "confirmed")
 
     def publish(proposals: dict[str, Any]) -> None:
         publish_review(state, {"version": 1, "proposals": proposals, "consistent": consistent,
@@ -1510,6 +1515,14 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
 
 
 
+def report_amount_cause(numbers: Mapping[str, Any], outcome: str) -> None:
+    """Optional evidence explains outcomes; it grants no authority."""
+    from ghostfolio_ibkr_sync.diagnostics import format_amount_cause
+
+    if explanation := numbers.get("amount cause"):
+        log.info("Activity review %s", format_amount_cause(explanation, outcome))
+
+
 def report_review_outcome(state: ReviewState, config: dict[str, Any], proposals: dict[str, Any],
                           held: set[str], uncertain: set[str]) -> None:
     """Report decisions without changing approvals, holds or execution state."""
@@ -1519,6 +1532,13 @@ def report_review_outcome(state: ReviewState, config: dict[str, Any], proposals:
     deferred: set[str] = set()
     for key, item in sorted(proposals.items()):
         event = item["source event"]
+        observed = ("unresolved" if event in uncertain else
+                    "blocked" if not item.get("actionable") or item.get("status") == "source unavailable" else
+                    "rejected" if item.get("rejected") else
+                    "would correct" if item.get("status") == "would correct" else
+                    "automatic work deferred" if item.get("approve") == "yes" or item.get("automatic eligible") else
+                    "manual approval needed")
+        report_amount_cause(item.get("numeric evidence", {}), observed)
         if event in uncertain:
             reason = "review_uncertain"
         elif item.get("execution path") == "historical maintenance":
