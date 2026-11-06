@@ -1,0 +1,20 @@
+# Tasks
+
+Implementation starts only after proposal approval. This PR contains planning
+artifacts only. Each acceptance command below is future implementation proof;
+strict OpenSpec validation does not certify runtime behavior.
+
+## 1. Exact cause classification
+
+- [ ] 1.1 Implement the ordered pure-function contract and broker/currency/field guards in `ghostfolio_ibkr_sync/amount_differences.py`; add meaningful positive and refusal cases in `tests/test_amount_differences.py`. Cover activity-reconciliation / Ordered amount causes and correction authority / Ordering, field scope and default refusal. Acceptance: `python -m pytest -q tests/test_amount_differences.py -k registry`.
+- [ ] 1.2 Move the exact declared-rate predicate from `diagnostics.py` into the registry. Add source-only BD printed-gross and DEGIRO execution-view contracts without sibling adapters or pin changes. Cover Evidence-bound cause catalogue / Proven source views and false acceptances. Acceptance: `python -m pytest -q tests/test_amount_differences.py tests/test_dividend_diagnostics.py -k 'cause_catalogue or coherent_dividend_one_jpy or coherent_dividend_declared_rate'`.
+
+## 2. Source-proven correction and existing authority
+
+- [ ] 2.1 Implement the omitted-withholding candidate predicate and its real-data registration gate. Keep it disabled for automatic dispatch until complete real-data one-to-one proof exists. Reuse validated cash/accrual evidence; keep the retained partial-coverage and unavailable-target cases refused. Do not infer a general human-error cause from history provenance. Cover Evidence-bound cause catalogue / Manual entry evidence is not an assumption. Files: `amount_differences.py`, `activity_review.py`, `tests/test_amount_differences.py`. Acceptance: `python -m pytest -q tests/test_amount_differences.py -k manual_entry`.
+- [ ] 2.2 Gate amount corrections through a proven correct-action cause or the unchanged independently reproduced converter-residue exception. Preserve profile matching, both gross caps, quantity rules, separate comment migration and all existing source/conflict holds. Cover Ordered amount causes and correction authority / Cause and profile are independent gates, plus both modified financial requirements. Files: `activity_reconciliation.py`, `activity_review.py`, `tests/test_activity_reconciliation.py`. Acceptance: `python -m pytest -q tests/test_activity_reconciliation.py -k 'amount_cause_authority or financial_limits or numeric_residue or legacy_migration'`.
+- [ ] 2.3 Bind cause evidence to existing proposal revisions and journal eligibility; retain old pending-journal recovery, exact payload/readback, preservation, fixed delay and uncertainty fencing. Cover Cause-bound reviewed execution and downstream adoption / Exact readback and uncertainty remain authoritative. Files: `activity_review.py`, `tests/test_activity_reconciliation.py`, `tests/test_activity_review.py`. Acceptance: `python -m pytest -q tests/test_activity_reconciliation.py tests/test_activity_review.py -k 'amount_cause_execution or profile_execution or recovery'`. This financial/state change also requires the repository's empty/golden pre-merge lab gate on the exact candidate; retain its evidence in the owning issue.
+
+## 3. Consistent operator outcomes
+
+- [ ] 3.1 Connect cause actions to the existing report and observed correction outcomes. Preserve one action per block, source precision, separate display noise, unknown warnings and simulation semantics. Update `docs/activity-review.md` only for the operator-visible cause/profile distinction. Cover connector-runtime / Readable dividend report / Cause action and observed outcome agree and Historical dividend comparison. Files: `diagnostics.py`, `activity_review.py`, the guide, `tests/test_dividend_diagnostics.py`, `tests/test_check_dividend_report.py`. Acceptance: `python -m pytest -q tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'amount_cause_report or coherent_dividend or dividend_readable'`.
