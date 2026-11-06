@@ -725,6 +725,77 @@ def automatic_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]
             and sum(other[1] == pair[1] for other in edges) == 1}
 
 
+def mixed_dividend_pairs(events: dict[str, dict[str, Any]], rows: list[dict[str, Any]],
+                         timezone: str) -> dict[tuple[str, str], str]:
+    """Qualify one missing identity, never infer another payment from absence."""
+    result: dict[tuple[str, str], str] = {}
+    for event_id, event in events.items():
+        scope = event.get("dividend scope")
+        if not scope or len(scope["events"]) != 2:
+            continue
+        expected = set(scope["events"])
+        covered = [row for row in rows if marker_of(row) in expected]
+        if len(covered) != 1 or event_id in {marker_of(row) for row in covered}:
+            continue
+        if not expected <= events.keys():
+            continue
+        group = [events[key] for key in sorted(expected)]
+        try:
+            target = event["values"]
+            relevant = []
+            for row in rows:
+                if marker_of(row) in expected:
+                    relevant.append(row)
+                    continue
+                if row.get("accountId") != event["destination account"]:
+                    continue
+                asset = profile(row)
+                same_security = (asset.get("symbol") == target["symbol"]
+                                 or bool(event["isin"] and asset.get("isin") == event["isin"]))
+                nearby, _ = reconciliation_rules.date_eligible(
+                    "permissive", target["date"], row["date"], "DIVIDEND", timezone)
+                if (marker_of(row) in event["legacy"]
+                        or (row.get("type") == "DIVIDEND" and same_security and nearby)):
+                    relevant.append(row)
+            if len(relevant) != 2:
+                continue
+            legacy = next(row for row in relevant if marker_of(row) not in expected)
+            if marker_of(legacy) not in event["legacy"]:
+                continue
+            for member in group:
+                if (member.get("dividend scope") != scope
+                        or member["destination account"] != event["destination account"]
+                        or member["source account"] != event["source account"]):
+                    raise RuntimeError("Conflicting mixed dividend source scope")
+                raw = member["source evidence"]
+                if (not raw.get("accruals") or not raw.get("payments")
+                        or not any(row.get("type") == "Withholding Tax" for row in raw.get("cash_rows", []))):
+                    raise RuntimeError("Missing mixed dividend cash, tax or accrual evidence")
+            for row in relevant:
+                asset = profile(row)
+                currency = effective_currency(row)
+                same_day, _ = reconciliation_rules.date_eligible(
+                    "conservative", target["date"], row["date"], "DIVIDEND", timezone)
+                if (row.get("accountId") != event["destination account"]
+                        or row.get("type") != "DIVIDEND" or not activity_is_active(row)
+                        or asset.get("dataSource") != "YAHOO" or asset.get("symbol") != target["symbol"]
+                        or (asset.get("isin") and event["isin"] and asset["isin"] != event["isin"])
+                        or currency["reason"] or currency["effective"] != target["currency"] or not same_day):
+                    raise RuntimeError("Unproven mixed dividend destination context")
+                values_of(row)
+            current = values_of(legacy)
+            numbers = reconciliation_rules.numeric_evidence(event, current)
+            if (numeric(current["quantity"]) != numeric(target["quantity"])
+                    or (numbers["destination gross"] != numbers["source gross"]
+                        and not numbers["calculation residue"])):
+                continue
+            inventory = [values_of(row) for row in sorted(relevant, key=lambda row: row["id"])]
+            result[event_id, legacy["id"]] = fingerprint([group, inventory])
+        except (RuntimeError, ValueError, ArithmeticError, KeyError, StopIteration):
+            continue
+    return result
+
+
 PROPOSAL_FIELDS = {"key", "source account", "source event", "destination account", "activity id",
                    "match reason", "current values", "proposed values", "changed fields", "status",
                    "approve", "actionable", "binding", "date context", "review revision"}
@@ -785,6 +856,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
     satisfied: set[str] = set()
     automatic = automatic_pairs(events, rows, reconciliation, timezone)
     migration_pairs = automatic_pairs(events, rows, "permissive", timezone)
+    mixed_pairs = mixed_dividend_pairs(events, rows, timezone)
     discovery_timezone = "UTC" if reconciliation == "off" else timezone
     historical_pairs = {(item["source event"], item["destination account"], item["activity id"])
                         for item in previous.values() if item.get("execution path") == "historical maintenance"}
@@ -833,10 +905,14 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                     proposed["date"] = current["date"]
                 diagnostics = {field: {"current": current[field], "source": proposed[field]}
                                for field in changed_fields(current, proposed)}
+                mixed_pair = (event_id, row["id"]) in mixed_pairs
                 legacy_trade = marker_of(row) in event["legacy"] and event["values"]["type"] != "DIVIDEND"
                 legacy_dividend = (marker_of(row) in event["legacy"] and event["values"]["type"] == "DIVIDEND"
-                                   and (event["legacy safe"] or (event_id, row["id"]) in migration_pairs))
-                if (legacy_trade or legacy_dividend) and same_day:
+                                   and (event["legacy safe"] or mixed_pair or (event_id, row["id"]) in migration_pairs))
+                if mixed_pair:
+                    # Allocation proves quantity/gross, not permission to rewrite them.
+                    proposed = {**current, "comment": proposed["comment"], "fee": proposed["fee"]}
+                elif (legacy_trade or legacy_dividend) and same_day:
                     proposed = {**current, "comment": proposed["comment"]}
                 changes = changed_fields(current, proposed)
                 payload = update_payload(row, proposed)
@@ -845,7 +921,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 if scope:
                     expected_ids = set(scope["events"])
                     covered = {marker_of(item) for item in rows} & expected_ids
-                    if covered and covered != expected_ids:
+                    if covered and covered != expected_ids and not mixed_pair:
                         raise RuntimeError("Partial versioned dividend action coverage")
                     conflicting: list[str] = []
                     for other_row in rows:
@@ -881,6 +957,8 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                 actionable, status = False, str(exc)
                 changes = sorted(REPLACED) if not current else changes
             binding = fingerprint([event, current, occupied])
+            if (proof := mixed_pairs.get((event_id, row["id"]))) is not None:
+                binding = fingerprint([binding, proof])
             item = {"key": key, "source account": event["source account"], "source event": event_id,
                     "destination account": event["destination account"], "activity id": row["id"],
                     "match reason": reason, "current values": current, "proposed values": proposed,
