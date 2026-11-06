@@ -321,3 +321,18 @@ def test_send_notification_spawns_the_production_argv_without_a_script_guard(mon
     assert notify.send_notification({"urls": URLS, "timeout": 10}, "t", "b") == "sent"
     assert [argv for argv, _ in spawned] == [
         [sys.executable, "-I", "-m", "ghostfolio_ibkr_sync", "--notify-worker"]]
+
+
+@pytest.mark.parametrize("url", [
+    "https://broker.invalid/flex?t=PRIVATE&other=QUERY-CANARY",
+    "/flex?t=PRIVATE&other=QUERY-CANARY",
+    "https://broker.invalid/flex?t='PRIVATE'&other=QUERY-CANARY",
+])
+def test_source_failure_reason_removes_url_queries_and_bounds_text(url):
+    from ghostfolio_ibkr_sync.notify import redacted_source_failure
+    detail = redacted_source_failure(RuntimeError("Request failed " + url + "\n" + "x" * 800), ["PRIVATE"])
+    assert detail.startswith("RuntimeError: Request failed ")
+    assert len(detail) <= len("RuntimeError: ") + 500
+    assert len(detail.splitlines()) == 1
+    for private in ("PRIVATE", "QUERY-CANARY", "?t=", "&other="):
+        assert private not in detail

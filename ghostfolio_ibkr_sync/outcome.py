@@ -1,4 +1,4 @@
-"""Run-local failures and delivery bookkeeping; external summaries use fixed codes."""
+"""Run-local failures and delivery bookkeeping with redacted source diagnostics."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ class RunOutcome(TypedDict):
     review_held: NotRequired[set[str]]
     deferred: NotRequired[set[str]]
     reconciliation: NotRequired[dict[str, int]]
+    source_failures: NotRequired[dict[int, str]]
 
 
 RECONCILIATION_COUNTS = ("already consistent", "automatically corrected", "manually corrected",
@@ -48,8 +49,9 @@ RECONCILIATION_COUNTS = ("already consistent", "automatically corrected", "manua
                          "blocked", "would correct", "reference migrations", "corrected targets")
 
 
-# Allowed failure reasons per stage. External summaries use only these codes,
-# counts and 1-based ordinals. The corporate_notification field is private
+# Allowed failure reasons per stage. Failure records use only these codes,
+# counts and 1-based ordinals; source_failures holds separately redacted details.
+# The corporate_notification field is private
 # delivery bookkeeping; its paths and fingerprints must never enter a summary.
 OUTCOME_REASONS = {
     "config": ("invalid_configuration",),
