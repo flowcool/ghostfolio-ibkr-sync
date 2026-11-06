@@ -214,4 +214,14 @@ reviewed preview and a new operation approval before further recovery. Reverting
 the tool does not undo imported activities. Never delete accepted actions as an
 automatic rollback. Retain an rc.5-or-newer reader after v2 history exists.
 
+## Mixed legacy and v2 dividend history
+
+This maintenance tool still refuses ambiguous or partial dividend coverage.
+Normal activity review has a separate strict exception for one legacy row that
+uniquely represents the missing action in a two-action group. It corrects that
+stored row and creates no dividend. Do not use maintenance submission or comment
+edits to bypass its proof. See
+[activity review](../activity-review.md#one-legacy-row-in-a-partial-two-action-group).
+
+
 [Maintenance index](../maintenance.md)

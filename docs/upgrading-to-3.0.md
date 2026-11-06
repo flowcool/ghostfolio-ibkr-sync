@@ -421,4 +421,16 @@ requirements and replay a preview before resuming writes. Restoring an image
 does not undo imported activities, cash or platform changes. Restore financial
 data only through your separately reviewed backup procedure.
 
+## Qualified mixed dividend history
+
+Activity review can resolve one strict two-action case: one v2 destination and
+one legacy row that uniquely represents the missing action. It requires complete
+cash, explicit withholding and accrual evidence, exact quantity and gross
+representation, and matching account, security, currency and payment day.
+Review proposes the missing identity and the displayed fee on the same ID.
+The existing v2 sibling resumes review only after complete identity readback.
+No dividend is added. Other partial groups stay blocked. See
+[activity review](activity-review.md#one-legacy-row-in-a-partial-two-action-group).
+
+
 [Back to the README](../README.md)

@@ -100,7 +100,8 @@ never grants approval. A manual BUY two days later remains a candidate even when
 its quantity differs. A dividend three days later also remains a candidate.
 Separate fills/actions are never combined. Dividend cash portions from one action
 reuse normal withholding and quantity conversion. Partial action coverage and
-conflicting context remain refused. Legacy dividend groups require independently unique one-to-one pairs.
+conflicting context remain refused, except for the qualified case below.
+Legacy dividend groups require independently unique one-to-one pairs.
 The configured mapping owns historical trade-reference migration.
 
 The schema-3 YAML contains a summary, groups, conforming activities and two
@@ -138,6 +139,22 @@ reference_updates:
       comment: "IBKR#v2#SOURCE:TRADE:123"
     decision: null
 ```
+
+### One legacy row in a partial two-action group
+
+Review can qualify the single missing v2 identity when the other action already
+has one v2 destination. It requires one legacy row with the exact account,
+security, currency, quantity, payment day and gross representation. Complete cash,
+explicit withholding and associated accrual evidence must support both actions.
+A second candidate, conflicting identity or missing evidence retains the block.
+Profile amount tolerance cannot prove this allocation.
+
+The proposal changes the legacy comment and the displayed fee. It preserves both
+destination IDs and all other stored values. Review keeps the existing v2 sibling
+blocked until fresh readback proves complete identity coverage. The sibling then
+resumes normal review. The group creates no new dividend. Read each proposal and
+its authority before execution. A changed group or destination clears consent.
+Existing journal, exact readback and stop-on-uncertainty rules still apply.
 
 ## Decide on a proposal
 
