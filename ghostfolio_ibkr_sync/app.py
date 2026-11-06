@@ -72,9 +72,11 @@ from ghostfolio_ibkr_sync.notify import (
     build_failure_summary,
     build_forced_preview_summary,
     build_token_expiry_summary,
+    redacted_source_failure,
     send_notification,
 )
 from ghostfolio_ibkr_sync.outcome import (
+    MAX_OUTCOME_FAILURES,
     AccountResult,
     RunOutcome,
     action_summary,
@@ -717,7 +719,8 @@ def prepare_review_sources(config: dict[str, Any], mapping: dict[str, str], name
     source_reports: dict[tuple[str, str], str | None] = {}
     source_accounts: dict[tuple[str, str], str] = {}
     source_failed: set[tuple[str, str]] = set()
-    for source, query, name in zip(config["account_ids"], config["query_ids"], names, strict=True):
+    for ordinal, (source, query, name) in enumerate(
+            zip(config["account_ids"], config["query_ids"], names, strict=True), 1):
         try:
             xml = fetch_flex_report(config["ibkr_token"], query)
             if parse_source_account_ids(xml) != {source}:
@@ -732,12 +735,22 @@ def prepare_review_sources(config: dict[str, Any], mapping: dict[str, str], name
             source_reports[(source, query)] = xml
             if config.get("_review_state") is not None:
                 events.update(source_events(xml, source, target, mapping))
-        except Exception:
+        except Exception as exc:
             reports[source] = None
             failed.add(source)
             source_reports[(source, query)] = None
             source_failed.add((source, query))
-            log.error("Source report acquisition/validation failed for source account %s", source)
+            detail = redacted_source_failure(exc, [
+                config["ibkr_token"], *config["query_ids"], *config["account_ids"], *names,
+                config.get("ghost_token", ""), config.get("ghost_access_token", ""),
+            ])
+            outcome = config.get("_corporate_outcome")
+            if outcome is not None:
+                details = outcome.setdefault("source_failures", {})
+                if len(details) < MAX_OUTCOME_FAILURES:
+                    details[ordinal] = detail
+            log.error("Source report acquisition/validation failed for source account %s: %s",
+                      source, detail)
     for item in (config.get("_review_state") or {"document": {"proposals": {}}})["document"]["proposals"].values():
         source = item.get("source account")
         target = item.get("destination account")
