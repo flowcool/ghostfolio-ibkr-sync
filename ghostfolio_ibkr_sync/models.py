@@ -1,6 +1,8 @@
 """Immutable records shared across modules; they import nothing from the package."""
 
 from dataclasses import dataclass, field
+from decimal import Decimal
+from typing import Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,3 +44,63 @@ class NotificationSettings:
 
     urls: tuple[str, ...] = field(repr=False)
     timeout: int
+
+
+@dataclass(frozen=True)
+class PrintedGross:
+    kind: Literal["BUY", "SELL"]
+    price: Decimal
+    vat: Decimal
+    net: Decimal
+
+
+@dataclass(frozen=True)
+class ExecutionView:
+    product_id: str
+    date: str
+    value_date: str
+    order_id: str
+    currency: str
+    amount: Decimal
+    view: Literal["execution", "api", "csv"]
+    kind: str
+    description: str
+
+
+@dataclass(frozen=True)
+class ExecutionViews:
+    side: Literal["BUY", "SELL"]
+    product_type: str
+    contract_size: Decimal
+    price: Decimal
+    trade: ExecutionView
+    cash: tuple[ExecutionView, ...]
+
+
+@dataclass(frozen=True)
+class WithholdingEvidence:
+    payment_amounts: tuple[Decimal, ...]
+    tax_amounts: tuple[Decimal, ...]
+    action_ids: tuple[str, ...]
+    accrual_quantities: tuple[Decimal, ...]
+
+
+@dataclass(frozen=True)
+class AmountFinding:
+    broker: str
+    currency: str
+    scope: Literal["source", "destination"]
+    complete: bool
+    associations: int
+    quantity: Decimal
+    gross: Decimal
+    fee: Decimal
+    destination_quantity: Decimal | None = None
+    destination_gross: Decimal | None = None
+    destination_fee: Decimal | None = None
+    declared_rate: Decimal | None = None
+    representations: int = 0
+    components: int = 0
+    notice: PrintedGross | None = None
+    execution: ExecutionViews | None = None
+    withholding: WithholdingEvidence | None = None

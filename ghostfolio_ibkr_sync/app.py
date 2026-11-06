@@ -237,6 +237,7 @@ def process_account(config: dict[str, Any], ibkr_account_id: str, query_id: str,
             xml_text, ibkr_account_id, ghost_account_id, mapping, existing_trade_ids,
             existing_dividend_comments, positions, query_id=query_id,
             diagnostic_preview=bool(config.get("dry_run")),
+            review_proposals=(config.get("_review_state") or {}).get("document", {}).get("proposals", {}),
             review_holds=config.get("_review_holds"),
             review_rejections=config.get("_review_rejected"),
             corporate_decision=config.get("_corporate_decisions", {}).get(ibkr_account_id),
@@ -308,6 +309,7 @@ def select_account_activities(
     holdings_trace: dict[str, Any] | None = None,
     review_holds: set[str] | None = None,
     review_rejections: Mapping[str, set[str]] | None = None,
+    review_proposals: Mapping[str, Any] | None = None,
     corporate_decision: ca.Decision | None = None,
     outcome: RunOutcome | None = None,
     account_result: AccountResult | None = None,
@@ -426,7 +428,7 @@ def select_account_activities(
     if diagnostic_preview:
         findings = historical_dividend_comparison(dividends, ghost_account_id, mapping, positions,
                                                  historical_dividend_report_window(xml_text),
-                                                 existing_dividend_comments)
+                                                 existing_dividend_comments, review_proposals=review_proposals)
         report_counts = log_historical_dividend_comparison(findings, ghost_account_id, outcome=outcome)
     div_activities: list[Activity] = []
     proposed_dividend_context: dict[str, DividendContext] = {}

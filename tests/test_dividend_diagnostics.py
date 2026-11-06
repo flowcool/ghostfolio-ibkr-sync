@@ -1321,6 +1321,71 @@ def jpy_case(monkeypatch, amount="2541", price="25.4", fee=0, quantity=100, rate
     return findings[0]
 
 
+@pytest.mark.parametrize("status,expected", [
+    ("would correct", "Would correct"), ("confirmed", "Corrected after exact readback"),
+    ("manual approval needed", "Manual approval needed"), ("automatic work deferred", "Correction deferred"),
+    ("unresolved", "Unresolved request"), ("blocked", "Restore the missing"),
+    ("rejected", "Association rejected"),
+])
+def test_amount_cause_report_uses_observed_review_outcomes(status, expected):
+    cause = {"label": "source-proven correction", "reason": "Exact source replacement.", "action": "correct"}
+    block = diagnostics.format_amount_cause(cause, status)
+    assert expected in block and block.count("Action:") == 1
+    assert "source-proven correction" in block
+    if status != "confirmed":
+        assert "Corrected" not in block
+
+
+def test_amount_cause_report_information_and_missing_proof_request_no_correction():
+    block = diagnostics.format_amount_cause({"label": "printed-gross cent rounding", "reason": "Source only.",
+                                            "action": "information"}, "pending")
+    assert "No correction requested for the proven source fields" in block
+    blocked = diagnostics.format_amount_cause({"label": "replacement proof unavailable", "reason": "Partial source.",
+                                              "action": "to_check"}, "pending")
+    assert "Restore the missing" in blocked
+    uncertain = diagnostics.format_amount_cause({"label": "replacement proof unavailable", "reason": "Source changed.",
+                                                "action": "to_check"}, "unresolved")
+    assert "do not resend" in uncertain and uncertain.count("Action:") == 1
+
+
+@pytest.mark.parametrize("authority,status,expected", [
+    ("balanced", "would correct", "Would correct"),
+    ("off", "pending", "Manual approval needed"),
+    ("balanced", "unresolved request; account writes blocked", "do not resend"),
+])
+def test_amount_cause_report_historical_uses_unique_qualified_review(monkeypatch, authority, status, expected):
+    from copy import deepcopy
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import destination as review_destination, source_events
+    finding = jpy_case(monkeypatch, amount="2540", price="25.4", fee=1)
+    xml = report(divs=div_xml(amount="2540").replace('currency="USD"', 'currency="JPY"'))
+    events = source_events(xml)
+    row = review_destination("dividend#KO#2026-07-15", id="dividend-1", type="DIVIDEND",
+                             currency="JPY", date="2026-07-15T00:00:00Z", quantity=Decimal("100"),
+                             unitPrice=Decimal("25.4"), fee=Decimal("1"))
+    proposals, _ = review.refresh_proposals({}, events, [row], {"U1": "acc"}, reconciliation=authority, timezone="UTC")
+    # The legacy phase changes the reference only. It does not grant a fee update.
+    for item in proposals.values():
+        item["status"] = status
+    diagnostics.attach_review_amount_causes([finding], proposals, "acc")
+    block = diagnostics.format_historical_dividend_finding(finding, ACC)
+    assert "source-proven correction" in block and expected in block
+    assert block.count("Action:") == 1 and "fix it by hand" not in block
+    assert "comment" in block
+    ambiguous = deepcopy(proposals)
+    item = next(iter(ambiguous.values()))
+    ambiguous["second"] = dict(item, key="second", **{"source event": "another"})
+    original = jpy_case(monkeypatch, amount="2540", price="25.4", fee=1)
+    diagnostics.attach_review_amount_causes([original], ambiguous, "acc")
+    assert original["readable"]["label"] == "minimal difference, cause unknown"
+    for item in proposals.values():
+        item["actionable"] = False
+        item["status"] = "Partial versioned dividend action coverage"
+    partial = jpy_case(monkeypatch, amount="2540", price="25.4", fee=1)
+    diagnostics.attach_review_amount_causes([partial], proposals, "acc")
+    assert partial["readable"]["label"] == "minimal difference, cause unknown"
+
+
 @pytest.mark.parametrize("amount", ["2541", "2539"])
 def test_coherent_dividend_one_jpy_proven_pattern_both_directions(monkeypatch, amount, caplog):
     finding = jpy_case(monkeypatch, amount=amount)

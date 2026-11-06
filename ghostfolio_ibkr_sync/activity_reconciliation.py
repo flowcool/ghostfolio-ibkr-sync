@@ -143,6 +143,56 @@ def numeric_evidence(event: Mapping[str, Any], destination: Mapping[str, Any]) -
                 "cause": "reproduced conversion multiply/divide/JSON" if residue else "no proven residue"}
 
 
+def amount_explanation(event: Mapping[str, Any], destination: Mapping[str, Any],
+                       numbers: Mapping[str, Any], fields: list[str], actionable: bool) -> dict[str, Any]:
+    """Explain an existing proposal. The caller never selects from this result.
+
+    Review already has exact replacement values. Source-view information cannot
+    override that proof or suppress an independently correctable field.
+    """
+    from ghostfolio_ibkr_sync.amount_differences import (
+        classify_amount_difference,
+    )
+
+    result: dict[str, Any] = {
+        "label": "source-proven correction" if actionable else "replacement proof unavailable",
+        "reason": ("Exact source replacement uses the existing profile or manual approval."
+                   if actionable else "Restore the missing or conflicting source and target proof."),
+        "action": "correct" if actionable else "to_check", "fields": fields}
+    if not actionable or event["values"]["type"] != "DIVIDEND" or "source gross" not in numbers:
+        return result
+    from ghostfolio_ibkr_sync.models import AmountFinding, WithholdingEvidence
+
+    raw, values = event["source evidence"], event["values"]
+    payments, accruals = raw.get("payments", []), raw.get("accruals", [])
+    taxes = [row for row in raw.get("cash_rows", []) if row.get("type") == "Withholding Tax"]
+    cash = [*payments, *taxes]
+    if any(denomination(row.get("currency", ""))[0] != numbers["currency"] for row in cash):
+        return result
+    try:
+        with localcontext() as context:
+            context.prec = arithmetic_precision(event, destination, numbers)
+            factor = denomination(values["currency"])[1]
+            other = denomination(str(numbers["currency evidence"]["effective"]))[1]
+            proof = WithholdingEvidence(
+                tuple(Decimal(row["amount"]) * denomination(row["currency"])[1] for row in payments),
+                tuple(Decimal(row["amount"]) * denomination(row["currency"])[1] for row in taxes),
+                tuple(row.get("actionID", "") for row in [*cash, *accruals]),
+                tuple(Decimal(row["quantity"]) for row in accruals))
+            finding = AmountFinding(broker="IBKR", currency=numbers["currency"], scope="destination",
+                complete=True, associations=1, quantity=Decimal(values["quantity"]),
+                gross=Decimal(numbers["source gross"]), fee=Decimal(values["fee"]) * factor,
+                destination_quantity=Decimal(destination["quantity"]),
+                destination_gross=Decimal(numbers["destination gross"]),
+                destination_fee=Decimal(destination["fee"]) * other, representations=1, withholding=proof)
+            cause = classify_amount_difference(finding)
+    except (KeyError, ValueError, ArithmeticError):
+        return result
+    if cause is not None and cause[2] == "correct":
+        result.update(label=cause[0], reason=cause[1], action=cause[2])
+    return result
+
+
 def group_diagnosis(events: Mapping[str, Any], proposals: Mapping[str, Any]) -> dict[str, Any]:
     """Connected candidate groups with each endpoint counted exactly once."""
     with localcontext() as context:

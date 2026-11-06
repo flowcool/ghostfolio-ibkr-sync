@@ -127,6 +127,91 @@ def matching_row(**kwargs):
     return destination(**{"quantity": D("10"), **kwargs})
 
 
+@pytest.mark.parametrize("name", reconciliation.PROFILES)
+def test_amount_cause_authority_no_named_cause_preserves_fee_correction(name):
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("2"))
+    proposals, _ = review.refresh_proposals({}, matching_events(), [row], {"U1": "acc"},
+                                          reconciliation=name, timezone="UTC")
+    item = next(iter(proposals.values()))
+    assert item["changed fields"] == ["fee"]
+    assert item["numeric evidence"]["amount cause"]["label"] == "source-proven correction"
+    assert item["numeric evidence"]["amount cause"]["action"] == "correct"
+    assert item["automatic eligible"] is (name != "off")
+    item["approve"] = "yes"
+    refreshed, _ = review.refresh_proposals(proposals, matching_events(), [row], {"U1": "acc"},
+                                         reconciliation=name, timezone="UTC")
+    assert refreshed[item["key"]]["approve"] == "yes"
+    assert review.selected_proposals(refreshed)[0][0]["key"] == item["key"]
+
+
+@pytest.mark.parametrize("name", reconciliation.PROFILES)
+@pytest.mark.parametrize("case", ["fee", "amount", "date", "currency", "comment", "legacy",
+                                  "quantity", "ambiguous", "partial", "omission", "rejected"])
+def test_amount_cause_non_regression_correction_sets_and_consent(monkeypatch, name, case):
+    from copy import deepcopy
+    from _sync_helpers import report, div_xml
+    from ghostfolio_ibkr_sync import activity_review as review
+    from test_activity_review import destination
+    events = matching_events()
+    row = matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("2"))
+    if case == "amount":
+        row["unitPrice"] = D("60.0001")
+    elif case == "date":
+        row["date"] = "2026-08-02T10:00:00Z"
+    elif case == "currency":
+        row["currency"] = "EUR"
+    elif case == "comment":
+        row.update(comment="My notes", fee=D("1"))
+    elif case == "legacy":
+        row["comment"] = "IBKR#T1"
+    elif case in ("quantity", "partial", "omission"):
+        cash = div_xml() + div_xml(amount="-3").replace('type="Dividends"', 'type="Withholding Tax"')
+        if case == "partial":
+            cash += div_xml().replace('actionID="A1"', 'actionID="A2"')
+        events = matching_events(report(divs=cash))
+        row = destination("IBKR#v2#U1:DIVIDEND:A1", type="DIVIDEND", date="2026-07-15T00:00:00Z",
+                          quantity=D("99") if case == "quantity" else D("100"),
+                          unitPrice=D("0.25"), fee=D("0"))
+    rows = [row] + ([dict(row, id="row2")] if case == "ambiguous" else [])
+    outputs = []
+    for explained in (False, True):
+        with monkeypatch.context() as patch:
+            if not explained:
+                patch.setattr(reconciliation, "amount_explanation", lambda *args: {})
+            initial, held = review.refresh_proposals({}, events, rows, {"U1": "acc"},
+                                                    reconciliation=name, timezone="UTC")
+            for item in initial.values():
+                item["approve"] = "reject" if case == "rejected" else "yes"
+            refreshed, refreshed_held = review.refresh_proposals(initial, events, rows, {"U1": "acc"},
+                                                                reconciliation=name, timezone="UTC")
+            for key, item in refreshed.items():
+                assert item["review revision"] == initial[key]["review revision"]
+            selected, blocked = review.selected_proposals(refreshed)
+            requests = [review.update_payload(next(row for row in rows if row["id"] == item["activity id"]),
+                                              item["proposed values"]) for item in selected if item["actionable"]]
+            visible = deepcopy(refreshed)
+            for item in visible.values():
+                item.pop("review revision")
+                item.pop("first eligible")
+                item["numeric evidence"].pop("amount cause", None)
+            outputs.append((visible, held, refreshed_held, blocked, requests, [item["key"] for item in selected]))
+    assert outputs[0] == outputs[1]
+
+
+def test_amount_cause_non_regression_label_change_keeps_existing_yes(monkeypatch):
+    from ghostfolio_ibkr_sync import activity_review as review
+    row = matching_row(comment="IBKR#v2#U1:TRADE:T1", fee=D("2"))
+    proposals, _ = review.refresh_proposals({}, matching_events(), [row], {"U1": "acc"})
+    item = next(iter(proposals.values()))
+    item["approve"] = "yes"
+    item["numeric evidence"]["amount cause"]["label"] = "old explanation"
+    refreshed, _ = review.refresh_proposals(proposals, matching_events(), [row], {"U1": "acc"})
+    current = refreshed[item["key"]]
+    assert current["approve"] == "yes" and current["review revision"] == item["review revision"]
+    assert current["numeric evidence"]["amount cause"]["label"] == "source-proven correction"
+
+
 def test_unique_matching_complete_graph_both_directions():
     from _sync_helpers import report, trade_xml
     from ghostfolio_ibkr_sync.activity_review import refresh_proposals
