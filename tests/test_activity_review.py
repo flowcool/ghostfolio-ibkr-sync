@@ -2,6 +2,7 @@
 import os
 from copy import deepcopy
 from decimal import Decimal
+from pathlib import Path
 from _sync_helpers import report, trade_xml, div_xml, ISIN_KO
 import json
 import requests
@@ -703,6 +704,114 @@ def test_review_execution_chain_covers_all_accounts(tmp_path, monkeypatch):
 
 
 
+@pytest.mark.parametrize("confirmed_trades", [0, 3])
+def test_review_dispatch_changed_dividend_coverage_defers_without_account_fence(
+        tmp_path, monkeypatch, caplog, confirmed_trades):
+    """One legacy migration changes the next queued dividend's scope evidence."""
+    monkeypatch.setenv("TZ", "Europe/Zurich")
+    trades = "".join(trade_xml(f"T{i}", date=f"202608{i + 1:02};100000")
+                     for i in range(confirmed_trades))
+    xml = report(trades, divs=div_xml(amount="25")
+                 + div_xml(amount="50").replace('actionID="A1"', 'actionID="A2"'))
+    events = source_events(xml)
+    rows = [destination(f"IBKR#T{i}", id=f"trade{i}", quantity=Decimal("10"),
+                        date=f"2026-08-{i + 1:02}T10:00:00Z") for i in range(confirmed_trades)]
+    rows += [destination("dividend#KO#2026-07-15", id=f"dividend{i}", type="DIVIDEND",
+                         date="2026-07-15T00:00:00Z", quantity=Decimal("100"),
+                         unitPrice=Decimal(price), fee=Decimal("0"))
+             for i, price in enumerate(("0.25", "0.5"))]
+    server = ReviewServer(monkeypatch, rows)
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"},
+                                           reconciliation="balanced", timezone="Europe/Zurich")
+    selected, conflicts = review.selected_proposals(proposals)
+    assert len(selected) == confirmed_trades + 2 and not conflicts
+    for item in selected:
+        ordinal = (int(item["activity id"].removeprefix("trade"))
+                   if item["activity id"].startswith("trade")
+                   else confirmed_trades + int(item["activity id"].removeprefix("dividend")))
+        item["first eligible"] = f"2026-08-01T00:00:{ordinal:02}+00:00"
+    deferred_key = next(item["key"] for item in selected if item["activity id"] == "dividend1")
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "activity_review_file": str(path),
+              "activity_reconciliation": "balanced"}
+    try:
+        blocked, held = review.process_review(state, config, events, {"U1": "acc"})
+        assert len(server.writes) == confirmed_trades + 1
+        assert not blocked and not config["_review_stop_run"]
+        assert "IBKR#v2#U1:DIVIDEND:A2" in held
+        assert all(payload["id"] != "dividend1" for payload in server.writes)
+        assert all(entry["status"] == "confirmed" for entry in state["journal"]["entries"].values())
+        pending = state["document"]["proposals"][deferred_key]
+        assert not pending["actionable"] and pending["approve"] is None
+        assert pending["status"] == "Partial versioned dividend action coverage"
+        assert deferred_key in caplog.text and "not_authorized" in caplog.text
+        assert "not_actionable" in caplog.text and "proposal deferred" in caplog.text
+        assert "account_blocked" not in caplog.text
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("drift,check", [("fee", "revision_changed"),
+                                       ("quantity", "not_authorized"),
+                                       ("satisfied", "current_missing"),
+                                       ("conflict", "selection_conflict")])
+def test_review_dispatch_revalidates_next_selection(tmp_path, monkeypatch, caplog, drift, check):
+    monkeypatch.setenv("TZ", "Europe/Zurich")
+    xml = report(trade_xml("T0") + trade_xml("T1", date="20260810;100000"))
+    events = source_events(xml)
+    rows = [destination(f"IBKR#v2#U1:TRADE:T{i}", id=f"row{i}", quantity=Decimal("10"),
+                        fee=Decimal("2"), date=f"2026-08-{day:02}T10:00:00Z")
+            for i, day in enumerate((1, 10))]
+    server = ReviewServer(monkeypatch, rows)
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"},
+                                           reconciliation="balanced", timezone="Europe/Zurich")
+    for item in proposals.values():
+        item["first eligible"] = f"2026-08-01T00:00:0{item['activity id'][-1]}+00:00"
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    original_put = server.put
+
+    def changed_snapshot(url, **kwargs):
+        response = original_put(url, **kwargs)
+        if drift == "fee":
+            server.rows[1]["fee"] = Decimal("3")
+        elif drift == "quantity":
+            server.rows[1]["quantity"] = Decimal("11")
+        elif drift == "satisfied":
+            server.rows[1]["fee"] = Decimal("1")
+        return response
+
+    monkeypatch.setattr(requests, "put", changed_snapshot)
+    if drift == "conflict":
+        original_selection = review.selected_proposals
+
+        def conflicting_selection(fresh):
+            # A newly selectable manual alternative conflicts with the profile
+            # selection. Exercise the real complete-selection conflict check.
+            if server.writes and fresh:
+                fresh = deepcopy(fresh)
+                key, item = next(iter(fresh.items()))
+                alternate = {**item, "key": key + "-alternate", "approve": "yes"}
+                fresh[alternate["key"]] = alternate
+            return original_selection(fresh)
+
+        monkeypatch.setattr(review, "selected_proposals", conflicting_selection)
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "activity_review_file": str(path),
+              "activity_reconciliation": "balanced"}
+    try:
+        blocked, held = review.process_review(state, config, events, {"U1": "acc"})
+        assert len(server.writes) == 1 and not config["_review_stop_run"]
+        assert blocked == ({"acc"} if drift == "conflict" else set())
+        assert check in caplog.text and "proposal deferred" in caplog.text
+        assert bool(held) is (drift != "satisfied")
+        assert all(entry["status"] == "confirmed" for entry in state["journal"]["entries"].values())
+    finally:
+        review.close_review(state)
+
+
 class RuntimeServer(ReviewServer):
     def __init__(self, monkeypatch, rows=None, outcome="success", accounts=None):
         super().__init__(monkeypatch, rows, outcome)
@@ -745,6 +854,60 @@ def runtime_environment(tmp_path, monkeypatch, xml=None):
         return xml or report(trade_xml("T1"))
     monkeypatch.setattr(app, "fetch_flex_report", fetch)
     return app, fetched
+
+
+def test_review_dispatch_deferred_coverage_allows_new_import_and_cash(tmp_path, monkeypatch):
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+
+    xml = report(trade_xml("T0", date="20260801;100000")
+                 + trade_xml("NEW", date="20260830;100000"),
+                 divs=div_xml(amount="25")
+                 + div_xml(amount="50").replace('actionID="A1"', 'actionID="A2"'))
+    app, _ = runtime_environment(tmp_path, monkeypatch, xml)
+    monkeypatch.setenv("TZ", "Europe/Zurich")
+    monkeypatch.setenv("ACTIVITY_RECONCILIATION", "balanced")
+    path = tmp_path / "review.yaml"
+    monkeypatch.setenv("ACTIVITY_REVIEW_FILE", str(path))
+    rows = [destination("IBKR#T0", id="trade0", quantity=Decimal("10"))]
+    rows += [destination("dividend#KO#2026-07-15", id=f"dividend{i}", type="DIVIDEND",
+                         date="2026-07-15T00:00:00Z", quantity=Decimal("100"),
+                         unitPrice=Decimal(price), fee=Decimal("0"))
+             for i, price in enumerate(("0.25", "0.5"))]
+    server = RuntimeServer(monkeypatch, rows)
+    proposals, _ = review.refresh_proposals({}, source_events(xml), rows, {"U1": "acc"},
+                                           reconciliation="balanced", timezone="Europe/Zurich")
+    selected, _ = review.selected_proposals(proposals)
+    for item in selected:
+        ordinal = {"trade0": 0, "dividend0": 1, "dividend1": 2}[item["activity id"]]
+        item["first eligible"] = f"2026-08-01T00:00:{ordinal:02}+00:00"
+    write_review(path, {"version": 1, "proposals": proposals})
+    imports = []
+
+    def import_new(url, **kwargs):
+        assert url == "http://ghost/api/v1/import"
+        submitted = kwargs["json"]["activities"]
+        assert [row["comment"] for row in submitted] == ["IBKR#v2#U1:TRADE:NEW"]
+        imports.extend(deepcopy(submitted))
+        created = destination(id="new", **{key: value for key, value in submitted[0].items() if key != "symbol"})
+        server.rows.append(created)
+        response = requests.Response()
+        response.status_code = 201
+        response._content = json.dumps({"activities": [created]}, default=float).encode()
+        return response
+
+    monkeypatch.setattr(requests, "post", import_new)
+    for _ in range(2):
+        outcome = new_run_outcome()
+        assert app.run_sync(outcome) == 0
+        assert outcome["accounts_failed"] == 0 and not outcome["failures"]
+    assert len(imports) == 1 and len(server.cash) == 2
+    assert {row["id"] for row in server.writes} == {"trade0", "dividend0"}
+    document = review.load_review(path)
+    assert any(item["source event"] == "IBKR#v2#U1:DIVIDEND:A2"
+               and not item["actionable"] for item in document["proposals"].values())
+    journal = review.read_yaml(Path(str(path) + ".journal.yaml").read_bytes())
+    assert len(journal["entries"]) == 2
+    assert all(entry["status"] == "confirmed" for entry in journal["entries"].values())
 
 
 def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, monkeypatch):

@@ -1313,9 +1313,28 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         fresh_selection, fresh_conflicts = selected_proposals(fresh)
         blocked |= fresh_conflicts
         authorized = current is not None and any(candidate["key"] == item["key"] for candidate in fresh_selection)
-        if not authorized or current is None or account in blocked or not current["actionable"]:
-            log.error("Review evidence changed before dispatch; account %s blocked", account)
-            blocked.add(account)
+        failed_checks = []
+        if current is None:
+            failed_checks.append("current_missing")
+        if not authorized:
+            failed_checks.append("not_authorized")
+        if account in blocked:
+            failed_checks.append("account_blocked")
+        if account in fresh_conflicts:
+            failed_checks.append("selection_conflict")
+        if current is not None:
+            if not current["actionable"]:
+                failed_checks.append("not_actionable")
+            if current["review revision"] != item["review revision"]:
+                failed_checks.append("revision_changed")
+        if failed_checks or current is None:
+            # A refreshed pending proposal is a source-event hold, not a
+            # failed request. Only actual selection conflicts or unresolved
+            # journals fence the account before a correction is sent.
+            report = log.error if account in blocked else log.warning
+            report("Review evidence changed before dispatch; proposal %s; failed checks=%s; "
+                   "proposal deferred%s", item["key"], ",".join(failed_checks),
+                   "; account writes blocked" if account in blocked else "")
             refreshed = fresh
             continue
         row = next(row for row in fresh_rows if row["id"] == item["activity id"])
