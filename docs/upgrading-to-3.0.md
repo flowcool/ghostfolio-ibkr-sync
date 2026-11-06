@@ -65,7 +65,7 @@ the container. The image sets no default.
 `TZ is missing: whole run forced to DRY_RUN, no Ghostfolio writes` (or
 `TZ is not a valid IANA timezone: ...`). With `APPRISE_URLS` set, one notification names the reason,
 even when every account succeeds, including default/blank/truthy simulation.
-Required user actions repeat in the same consolidated summary until resolved.
+Required user actions follow the [grouped seven-day schedule](configuration.md#user-action-required).
 Clean success sends no heartbeat; failed simulations send Failure.
 
 ## 2. Add the time zone to the Flex query times (breaking)
@@ -393,7 +393,7 @@ this does not undo financial writes.
    Missing or invalid `TZ` forces the whole run into `DRY_RUN` before accounts
    run. One WARNING names the reason. The final notification also names it
    when Apprise is configured, even if every account succeeds and in all simulation
-   modes. Required actions repeat each completed run until resolved. A clean
+   modes. Required actions follow the [grouped schedule](configuration.md#user-action-required). A clean
    simulation sends nothing; failed simulations send Failure.
 4. Upgrade the image and run once with `DRY_RUN=1 LOG_LEVEL=DEBUG` and no `CRON`,
    using the [README preview command](configuration.md#dry-run-first). Read the

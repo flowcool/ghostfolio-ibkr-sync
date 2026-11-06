@@ -106,7 +106,8 @@ Standalone Docker uses a [separate ENV file](docs/configuration.md#single-accoun
 ## Operational results
 
 `Cycle result` reports success, required action or failure.
-Configured notifications repeat required actions after each completed run, including simulation.
+Configured notifications group required actions by reason and count, including simulation.
+They notify on a group change and remind after seven days. Failures notify every run.
 Clean success sends no heartbeat.
 
 Check imports, cash, holds and delivery separately.

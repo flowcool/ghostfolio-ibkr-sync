@@ -176,9 +176,9 @@ def test_access_mode_has_no_reminder_even_for_short_lived_exchanged_jwt(env, cap
     assert "Legacy GHOST_TOKEN" not in caplog.text
 
 
-def test_reminder_is_run_local_and_multiple_runs_can_repeat_it(env):
+def test_reminder_is_grouped_and_unchanged_runs_stay_silent(env):
     sent = notifications(env)
-    assert app.main() == 0 and app.main() == 0 and len(sent) == 2
+    assert app.main() == 0 and app.main() == 0 and len(sent) == 1
     env.setenv("GHOST_TOKEN", jwt({"exp": NOW + 100 * DAY}))
     assert app.main() == 0 and len(sent) == 2
 

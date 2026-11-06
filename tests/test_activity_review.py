@@ -683,13 +683,22 @@ def test_review_execution_chain_covers_all_accounts(tmp_path, monkeypatch):
     write_review(path, {"version": 1, "proposals": proposals})
     state = review.open_review(str(path), [])
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
-    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
+    from ghostfolio_ibkr_sync import app
+    from ghostfolio_ibkr_sync.outcome import new_run_outcome
+    out = new_run_outcome()
+    sends = []
+    monkeypatch.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    monkeypatch.setattr(app, "send_notification", lambda *args: sends.append(args) or "sent")
+    config = {"_corporate_outcome": out, "ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
               "activity_review_file": str(path)}
     try:
         blocked, _ = review.process_review(state, config, events, {"U1": "acc", "U2": "other"})
         assert blocked == set()
         assert len(server.writes) == 6
         assert not state["document"]["proposals"]
+        assert not out["actions"] and not out["deferred"]
+        app.finalize_run(out, 0)
+        assert not sends and out["delivery"] == "not required"
     finally:
         review.close_review(state)
 
@@ -1656,7 +1665,7 @@ def test_operator_action_review_pending_private_path(tmp_path, monkeypatch, capl
         review.close_review(state)
 
 
-@pytest.mark.parametrize("case,expected", [("unqualified", "review_evidence"), ("historical", "review_maintenance"),
+@pytest.mark.parametrize("case,expected", [("unqualified", None), ("historical", "review_maintenance"),
                                           ("blocked", "review_evidence"), ("uncertain", "review_uncertain"),
                                           ("source unavailable", "review_evidence"), ("deferred", None)])
 def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, case, expected):
@@ -1680,7 +1689,7 @@ def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, ca
         assert out["review_held"] == {proposal["source event"]}
         if case == "uncertain":
             assert "Do not resend, delete or edit the journal" in caplog.text
-        if case == "deferred":
+        if case in ("deferred", "unqualified"):
             assert out["deferred"] == {proposal["source event"]}
         else:
             assert str(state["path"]) in caplog.text

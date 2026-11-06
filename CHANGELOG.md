@@ -27,6 +27,12 @@ No stored activity is rewritten or review proposal approved by this change.
 
 ## Unreleased — v4.3.0
 
+Required-action notifications now group unique events by reason and count. They
+notify on a group change or clearance and remind after a fixed seven days.
+Private state records confirmed delivery. Full event detail stays in private logs.
+Approved work deferred only by qualification or the run budget does not notify.
+Failed runs keep their immediate consolidated notification.
+
 Dividend coverage and representation limits now use informational blocks and counts. They request no manual correction or required-action reminder.
 
 Qualified Flex timestamps now use fixed EST (UTC-05:00) and EDT (UTC-04:00)

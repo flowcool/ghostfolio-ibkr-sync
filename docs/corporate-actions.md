@@ -143,7 +143,8 @@ The connector never registers splits, remaps identifiers, creates action cash or
 Logs show detailed findings every run.
 When notices are due, configured Apprise sends **one summary** after the completed run:
 
-- Active holds and required actions repeat until resolved.
+- Failed runs with active holds notify immediately.
+- Required actions on successful runs follow the [grouped seven-day schedule](configuration.md#user-action-required).
 - Other nonblocking findings notify on first appearance or material change.
 - Proven resumption also notifies.
 - Failure, expiry and forced-preview reasons share that summary, including in simulation.

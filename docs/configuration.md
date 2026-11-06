@@ -560,10 +560,11 @@ legacy `GHOST_TOKEN` this is how an expired session token shows up (see
 Expiry reminders use the fixed code `ghost_auth: token_expiring` and a rounded-up count
 of days remaining (`0` means expired). If the run also fails, the reminder is included
 in the same failure notification. At most one notification is sent per completed run;
-there is no daily state, so multiple runs in one day can repeat the reminder.
+unchanged successful runs follow the fixed seven-day reminder schedule below.
 
 Missing or invalid IANA `TZ` in any mode also sends a final
-notification naming the forced-preview reason, even on success. It shares the single summary with any
+notification naming the forced-preview reason on its first observation, on a group change,
+or when its seven-day reminder is due. It shares the single summary with any
 failures or expiry reminder. Notification delivery does not change exit status.
 
 **Simulation since rc.2:** failed runs send one configured Failure notification,
@@ -574,7 +575,7 @@ dispatch. Delivery does not change exit status.
 **When nothing is sent:** clean successful runs without a required action or an
 eligible corporate-action notice; deliberate simulation alone; interrupted runs;
 and disabled or invalid Apprise settings. Mapping, review, diagnostic checks and
-other explicit required actions repeat once per completed run until resolved.
+other explicit required actions follow the grouped schedule below.
 See [User action required](#user-action-required) and [Notification result](#notification-result).
 
 **Delivery:** Apprise runs in a separate short-lived worker process with only network
@@ -660,10 +661,29 @@ without a compatibility launcher, so update any script or note that calls it.
 
 ### User action required
 
-Required actions send one consolidated reminder on every completed run, including
-simulation. Repeated observations of one event and reason count once. Reminders
-continue while current evidence requires action. Clean success sends no heartbeat.
-Review approval does not suppress a reminder when missing proof still blocks work.
+Required actions form groups by fixed reason and unique event count, including
+simulation. Repeated observations of one event and reason count once.
+The first group, a new reason, any count increase or decrease, or a cleared reason
+sends one consolidated summary. A cleared reason appears with count zero.
+Replacing an event within the same reason and count does not send another notice.
+Unchanged groups send a reminder after **seven days (168 hours)** from their last
+confirmed summary. Seven days is the validated fixed default. No ENV setting
+changes this interval. Failed runs still notify immediately on every completed run.
+
+The private companion `CORPORATE_ACTION_STATE_FILE.required-actions.yaml` stores
+the grouped fingerprint, counts, context binding and last confirmed delivery time.
+Its `.lock` file protects confirmation. Keep both under the existing private state
+mount. Neither file grants financial authority. They contain no per-event data.
+Missing, corrupt or unsafe delivery state leaves actions eligible and logs a warning.
+Failed or timed-out delivery does not advance the reminder clock. Failed cycles do
+not certify cleared actions from incomplete evidence. A crash after delivery can
+repeat a notice. No exactly-once delivery is claimed.
+
+Full per-event evidence stays in the private log/report on every run.
+Approved work waiting only for automatic execution, qualification or the run budget
+is deferred work. It does not request approval or notify. Missing evidence,
+maintenance decisions and uncertain financial results remain user actions.
+Clean success without a previous action group sends no heartbeat.
 
 
 ### Notification result
