@@ -12,10 +12,10 @@
 
 ## 3. Acceptance gates
 
-- [ ] 3.1 Replay the saved affected review input in simulation. Verify that the Tokyo `6266.T` proposal no longer proposes a Friday-to-Sunday date move. Record exact review output and correction readback from authorized labs (G5).
-- [ ] 3.2 Run the empty and golden Ghostfolio lab scenarios with Tokyo, New York and London near-midnight synthetic trades on the same immutable image. Retain proof and stop both labs (G4).
+- [x] 3.1 Replay the saved affected review input in simulation. Verify that the Tokyo `6266.T` proposal no longer proposes a Friday-to-Sunday date move. Record exact review output and correction readback from authorized labs (G5).
+- [x] 3.2 Run the empty and golden Ghostfolio lab scenarios with Tokyo, New York and London near-midnight synthetic trades on the same immutable image. Retain proof and stop both labs (G4).
 - [x] 3.3 Fetch retained Flex XML evidence from the state backup by SSH into ignored worktree `tmp/`. Never read live state. Keep inputs and replay outputs separate. Replay every saved `Trade` row through the candidate parser, but scope G6 to imported asset categories (`assetCategory` not in `SKIP_ASSET_CATEGORIES`). `CASH` and `OPT` Trade rows are skipped in the import and review paths before any date use; FX `tradeDate` is a value date and can move across a weekend. Record input hashes, rows per category, violations per category, and the imported-category result. Any violation in a non-skipped category blocks G6 and invalidates the token assumption.
-- [ ] 3.4 Run the complete numbered G1–G6 gates from the spec. Record failures and block release until every gate passes on the exact candidate.
+- [x] 3.4 Run the complete numbered G1–G6 gates from the spec. Record failures and block release until every gate passes on the exact candidate.
 
 ## 4. Release preparation
 
@@ -31,11 +31,9 @@ Corporate-action Trade readers select the event security by ISIN and contract be
 
 ## Implementation scope and retained proof
 
-The implementation brief limits this PR to offline acceptance. It excludes labs,
-image builds, releases and Ghostfolio writes. G1, G2, G3 and candidate-parser G6
-have offline proof. G5 has the saved review simulation and mocked exact readback.
-Task 3.1 remains open for lab readback. Tasks 3.2 and 3.4 remain open for the exact
-release digest. Do not archive this change or qualify a release until those gates pass.
+The initial implementation had offline proof for G1, G2, G3 and candidate-parser
+G6. G5 had the saved review simulation and mocked exact readback. Native
+qualification below now completes tasks 3.1, 3.2 and 3.4 on the released digest.
 
 The candidate parser replays the same six retained XML hashes: STK 686 with zero
 violations, CASH 86 with 12 excluded deviations, OPT four with zero deviations.
@@ -54,3 +52,57 @@ Private replay output and hashes belong to the owning work item, not this reposi
 - [x] 5.3 Hold known-venue tradeDate mismatches with a reason. Exclude FX and do not infer unknown venue zones.
 - [x] 5.4 Log validated comparison TZ. Prove canonical values and replacement dates under Europe/Paris, Asia/Bangkok, America/Los_Angeles and Asia/Kolkata. Run full pytest and scripts/check.sh.
 - [x] 5.5 Add CHANGELOG and prepare PR delivery details. Merge origin/main before push. Record PR and pr-ship merge proof in the owning work item. Keep native labs, release and historical conversion open for their owner.
+
+## 6. Exact-candidate native acceptance
+
+The native date runner is versioned by Infra PRs
+[416](https://github.com/flowcool/mylittlemess/pull/416),
+[419](https://github.com/flowcool/mylittlemess/pull/419) and
+[421](https://github.com/flowcool/mylittlemess/pull/421).
+The final runner commit is `9085abd7052f8c41245a931a26d90c776937c267`.
+Both native runs use connector commit
+`e18d8475944078adb5e176a77a8d173b80aa60b6` and the v4.3.1 digest
+`sha256:9f342462b6f7e0089009d66eb799116f1629dcb4447f7132bfdd5a2a66a90fc6`.
+The private acceptance record owns the retained paths. No private input or
+financial value is published here.
+
+- Task 3.1 / G5: retain the saved affected-input simulation above. In both
+  `phase2/empty/` and `phase2/golden/`, `preview-review.json` and
+  `correction-preview-review.json` preserve the compatible Tokyo intraday
+  timestamp without a date proposal. They expose one true two-day repair.
+  `correction-result.json`, `correction-readback.json`, `journal-readback.json`
+  and `correction-jobs.json` prove the exact native PUT, one confirmed journal
+  entry, and completed market and portfolio jobs. `recovery-result.json` and
+  `repeat-result.json` prove no resend.
+- Task 3.2 / G4: each `fixture.json`, `prepare-result.json` and
+  `import-readback.json` binds 18 TSEJ, NYSE and LSE trades to exchange and
+  tradeDate evidence. Cases include midnight crossings, both US clock changes
+  and both repeated-hour tokens. Twelve late New York dividend, payment-in-lieu
+  and withholding components form four written-day payments at 00:00 UTC.
+  Each `final.json` proves preservation of original activities and cash.
+- Task 3.4 / G1-G6: reuse the exact-source offline result: 3311 tests passed,
+  one skipped; Ruff and strict mypy passed. The source and test trees match
+  between the tested commit `64c04cb7b7800339d149c621444a0ae2d02de98f`, reviewed
+  commit `31123fd7ac860ae428fc11ae07aa3c6a3c1dbae9` and released commit above.
+  `offline-source-tree-binding.json` records that binding. G6 retains the six
+  input hashes and the 686 imported STK rows with zero violations. G4 and G5
+  now have the native proof above.
+
+Each `server-dates.json` measures 110 observations through the actual compiled
+Ghostfolio 3.98.0 date constructor and holding calculator. The record includes
+the bundle hash. It covers UTC, Europe/Paris, Asia/Bangkok, America/Los_Angeles
+and Asia/Kolkata. It confirms server date bucketing and the accepted previous-day
+effect west of UTC. It does not claim a complete portfolio valuation or browser
+rendering test.
+
+Both `result.json` records report PASS, zero broker requests and stopped cleanup.
+Both final stopped checks report `running=0`. Retained result SHA256 values:
+
+- Empty: `9eb33fced187d072779e971544bba39d64770db2ed67e8093a1ec10367807c79`.
+- Golden: `c4c2f1156a55e13ee0799b0e2dd3ebfa8f4c2918194dc8fbad8309afc5acf11f`.
+
+The retained `proof-sha256.json` manifest has SHA256
+`b68bd3d3d6d35b55e4ab9d7b9584ad3c055d0f1ec8ff182d72411407046ad115`.
+All 82 recorded artifact hashes were checked at reconciliation. They match.
+The earlier failed harness attempt remains retained. These results refer only
+to the final native runs with the corrected Infra currency comparison policy.
