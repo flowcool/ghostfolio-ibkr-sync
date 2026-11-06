@@ -2,6 +2,7 @@
 
 Use this guide for one IBKR account.
 You need Git, Docker Compose and reachable Ghostfolio **2.248.0+**.
+The latest [API contract review](upstreams.md#ghostfolio-compatibility-review) covers Ghostfolio **3.98.0**.
 Native split evidence has [separate requirements](corporate-actions.md).
 You do not need to enable it for setup.
 
