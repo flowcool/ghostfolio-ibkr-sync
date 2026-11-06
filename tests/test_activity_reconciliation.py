@@ -645,8 +645,11 @@ def test_profile_execution_revalidates_profile_before_dispatch(tmp_path, monkeyp
         return response
     monkeypatch.setattr(requests, "get", get)
     try:
-        blocked, _ = review.process_review(state, config, matching_events(), {"U1": "acc"})
-        assert not server.writes and blocked == {"acc"}
+        blocked, held = review.process_review(state, config, matching_events(), {"U1": "acc"})
+        assert not server.writes and not blocked and not config["_review_stop_run"]
+        assert held == set(matching_events())
+        assert all(not item["automatic eligible"] and item["approve"] is None
+                   for item in state["document"]["proposals"].values())
     finally:
         review.close_review(state)
 
