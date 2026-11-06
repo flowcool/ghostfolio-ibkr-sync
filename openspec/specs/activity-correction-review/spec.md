@@ -111,27 +111,80 @@ Before each dispatch, fresh unredacted destination evidence SHALL match the manu
 
 Before the request, durably record its intent, full before/after evidence and manual or profile authority in the journal. Profile authority SHALL include the selected profile, policy version and exact eligibility inputs. Match tolerances SHALL NOT weaken expected-after or preserved-field verification. After the request, readback SHALL prove every approved value and every preserved destination field. A successful status alone SHALL NOT confirm completion. Changes to numeric values or UTC instants, changed owner/account, tags, unsupported profile effects or financial differences SHALL fail verification. Equivalent numeric and timestamp representations defined above SHALL NOT fail verification. Comments and preserved note text SHALL remain exact; trimming is not an equivalent representation. Only confirmed corrections SHALL affect real holdings/identity state. Rebuild that state before ordinary selection and sales checks; replacement of a BUY SHALL NOT add its full quantity a second time.
 
-A known or uncertain correction failure SHALL stop later financial writes for the same account, including imports, cash and platform updates. Earlier confirmed corrections SHALL remain explicit. Later accounts SHALL continue if their own evidence and files remain valid. Ordinary import failures outside this correction path SHALL retain existing independent-cash behavior. Pending proposals alone SHALL warn without failing the account. Those requiring intervention SHALL join the repeated consolidated notification under connector-runtime. Manual approvals and automatic work deferred solely by the qualified execution limit SHALL not request another approval. Automatic work SHALL be freshly re-evaluated next run, never treated as retained user consent. Correction failures SHALL fail the account and enter the existing single Failure summary without financial details.
+A known or uncertain correction failure SHALL stop the whole financial run after
+the first dispatched correction that cannot be confirmed. The connector SHALL
+retain the pending journal entry, the account fence, the approved proposal and
+all later deferred proposals. Earlier confirmed corrections SHALL remain
+explicit. No later correction, import, cash or platform write SHALL be sent in
+that run. A later run SHALL inspect the unresolved journal before any financial
+write. An unresolved journal entry SHALL stop the whole financial run on later
+runs, including when its destination account is no longer configured.
+No resend is allowed.
 
-Manual, automatic and comment-only correction PUTs SHALL share one budget and SHALL be sequential. Each request SHALL complete exact readback before dispatching the next. Activation qualification SHALL establish a finite per-run correction limit and any minimum inter-request delay for the exact destination image, including market-data/background effects. Record the qualified limits in the shipped configuration and operator guidance; do not invent a safe production default from mocks. Stop at the qualified limit without failing the account, preserve unchanged approvals and proposals for the next run, and retain their related import holds. No interactive prompt or separate bulk command SHALL replace normal-run processing.
+Pending proposals alone SHALL warn without failing the account. Those requiring intervention SHALL join the repeated consolidated notification under connector-runtime. Manual approvals and automatic work deferred after an unresolved correction SHALL not request another approval. Automatic work SHALL be freshly re-evaluated next run, never treated as retained user consent. Correction failures SHALL enter the existing single Failure summary without financial details.
+
+Manual, automatic and comment-only corrections SHALL apply every currently
+eligible approved or profile-authorized proposal in one connector run, across
+all configured accounts. There SHALL be no per-run correction count cap.
+Each next correction SHALL wait at least twenty-eight seconds after the previous
+confirmed correction. Each PUT SHALL complete bounded exact readback before
+the next PUT. No ENV setting SHALL lower the delay or add a correction count
+cap. There SHALL be no additional run duration bound. Existing process-level
+and request timeouts remain unchanged. Simulation SHALL preview every eligible
+correction without consuming approvals. Queue position SHALL describe execution
+order; currently eligible work SHALL have one remaining eligible run.
+
+Stable promotion SHALL require the exact RC image to pass the versioned empty
+and golden lab qualification. Each lab SHALL prove a chain of at least thirty
+corrections in one account and across two accounts. Every request gap SHALL be
+at least D=28 seconds. Every request-bound market-data and portfolio-cache
+completion chain SHALL complete within D/1.5 seconds. Exact readback SHALL
+precede each next PUT. An injected uncertainty at position k SHALL stop all
+later financial writes without resend and retain journal v3 and later approvals.
+Synthetic HTTP mocks SHALL NOT qualify the image.
+
+Ghostfolio image and version SHALL NOT be qualification dimensions. Record the
+observed version as information. A destination image or version change SHALL
+NOT invalidate qualification. If a future background chain exceeds D, exact
+readback and stop-on-uncertainty SHALL still protect data. A new connector
+release SHALL raise D when the lab margin no longer passes.
 
 #### Scenario: Exact update acceptance and account fencing
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_acceptance` mocks successful, normalized, redirected, rejected and partial correction sequences across two accounts
-- **THEN** only exact readback confirms updates, failed accounts send no later financial requests, confirmed earlier rows stay recorded, and the other account continues with the existing single failure notification.
+- **THEN** only exact readback confirms updates, a failed or uncertain correction stops the whole financial run, confirmed earlier rows stay recorded, and the pending account fence remains with the existing single failure notification.
 
 #### Scenario: Qualified correction execution budget
-- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_execution_budget` mocks the qualified limit and delay with more approved proposals than the run can dispatch
-- **THEN** PUTs remain sequential, each is verified before the next, the finite limit and delay are obeyed, and deferred approvals remain unchanged without duplicate import or false failure.
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_execution_chain` exercises 1, 5 and 32 approved corrections with delayed destination updates
+- **THEN** all corrections dispatch in one run, exact readback precedes each next PUT, D=28 seconds is preserved, simulation previews all corrections, and restart sends no correction again.
 
 #### Scenario: Corrected holdings before later sales
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_holdings` corrects BUY/SELL quantities or symbols before selecting later trades
 - **THEN** positions and reference indexes reflect replacement effects once, no corrected event is imported again, and subsequent sales use verified refreshed holdings.
 
 #### Scenario: Review actions do not change correction authority
-- **WHEN** `python -m pytest -q tests/test_activity_review.py -k operator_action_review` covers pending, blocked, historical, uncertain and budget-deferred proposals
-- **THEN** required intervention notifies without authorizing corrections; automatic budget deferral does not request another approval.
+- **WHEN** `python -m pytest -q tests/test_activity_review.py -k operator_action_review` covers pending, blocked, historical, uncertain and deferred proposals
+- **THEN** required intervention notifies without authorizing corrections; automatic deferral does not request another approval.
+
+#### Scenario: Burst budget and shared account ceiling
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_execution_chain` approves corrections across two accounts
+- **THEN** all eligible corrections execute with the same fixed delay and exact readback; an uncertainty in either account stops all later financial writes.
+
+#### Scenario: First uncertainty stops the financial run
+
+- **WHEN** the first dispatched correction stays in the before/unknown state
+  after bounded recovery
+- **THEN** exactly one PUT is sent, the v3 journal remains pending, later
+  corrections remain approved and deferred, no later account import or cash PUT
+  is sent, and the completed run uses the existing single redacted failure
+  notification.
 
 ### Requirement: Bounded read-only recovery after uncertainty
+
+The existing bounded reads of 0, 2, 5 and 10 seconds SHALL remain the recovery budget.
+They are not a completion signal for Ghostfolio background jobs. Ghostfolio 3.96.0
+does not expose a completion endpoint for the market-data and portfolio-cache
+chain through the activity API. A fixed qualified inter-correction delay plus
+exact readback is therefore the connector completion gate.
 
 A timeout, interrupted connection, crash with pending intent or unavailable readback SHALL retain an unresolved journal entry. Recovery SHALL read the activity immediately, then after waits of 2, 5 and 10 seconds while its state remains unchanged or unreadable. Reads SHALL have finite request timeouts and no automatic retry loop. The waits are a connector budget, not proof that a delayed write has settled.
 
@@ -140,6 +193,13 @@ Exact expected-after state SHALL confirm the correction and allow pending-file c
 #### Scenario: Delayed update and unresolved result
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_recovery` mocks delayed success, unchanged state, drift, missing rows, repeated read errors and a restart with pending intent
 - **THEN** waits are bounded, eventual exact success is confirmed, each logical request sends at most one PUT, unresolved rows remain blocked across runs and no repeated correction can overwrite later edits. Include manual expected-after correction, permanent before state and drift: only complete expected-after evidence releases the block, no prompt/reset/abandon path is exposed, and other accounts continue.
+
+#### Scenario: Delayed background job before the next PUT
+
+- **WHEN** the offline Ghostfolio mock delays the derived row update after a PUT
+- **THEN** the connector waits for exact expected-after readback, honors the
+  qualified inter-correction delay, and sends no second PUT before the first
+  correction is confirmed.
 
 ### Requirement: Durable files and recovery evidence
 
@@ -157,7 +217,7 @@ Removing a confirmed proposal SHALL follow durable success recording. If the pro
 
 Simulation SHALL create and refresh proposals, validate manual decisions, evaluate the active profile and display exact intended replacements and authority. It SHALL send no financial POST/PUT/DELETE and create no applied journal result. Valid approvals SHALL remain unconsumed. Stale approvals SHALL be cleared using the same rules as live runs. Simulated correction effects SHALL remain isolated from real state. Simulation may display that an unresolved journal now matches expected-after, but SHALL NOT resolve that journal, consume its yes, remove its proposal or release its real account fence. A later live run SHALL revalidate and record observed completion without another PUT.
 
-README SHALL link directly to the activity-review guide. That guide SHALL document the ENV opt-in, persistent-volume permissions, YAML example, literal yes/reject decisions, profile limits, import holds, durable false-match rejection, stale/unavailable status, logs, recovery journal and disabling procedure. Activation SHALL require exact-image isolated qualification of full updates, notes and tags, profile/background effects, duplicate references, restart recovery and no repeat writes. Existing empty/golden release acceptance remains required under its own authority; no new mandatory duration gate is introduced. Source inspection and mocks SHALL NOT be presented as image qualification. A failed preservation case SHALL keep affected corrections unavailable.
+README SHALL link directly to the activity-review guide. That guide SHALL document the ENV opt-in, persistent-volume permissions, YAML example, literal yes/reject decisions, profile limits, import holds, durable false-match rejection, stale/unavailable status, logs, recovery journal and disabling procedure. Activation SHALL require isolated qualification of full updates in the exact connector release, notes and tags, profile/background effects, duplicate references, restart recovery and no repeat writes. Existing empty/golden release acceptance remains required under its own authority; no new mandatory duration gate is introduced. Source inspection and mocks SHALL NOT be presented as image qualification. A failed preservation case SHALL keep affected corrections unavailable.
 
 #### Scenario: Review without financial writes
 - **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k review_simulation` exercises blank/yes/stale proposals, forced preview and unresolved journals
@@ -175,10 +235,54 @@ Each review report requiring user intervention SHALL identify ACTIVITY_REVIEW_FI
 
 For eligible unapproved normal-run proposals, instruct the user to read current/proposed values and execution path, then edit only decision between runs if the correction is intended. State that only lowercase literal yes approves that exact eligible proposal. Never recommend bulk approval. Blocked, source-unavailable, conflicting or unqualified proposals SHALL name required proof and state that yes cannot make them executable. Historical-maintenance proposals SHALL point to documented preparation and separate operation authorization; normal sync cannot execute them. Uncertain requests SHALL point to preserved journal/readback evidence and prohibit resend, journal deletion or journal edits as release instructions. False matches SHALL offer the bound reject choice and explain that all-rejected events without a recognized reference still claiming them can resume ordinary import, without granting cleanup authority.
 
-Manually approved or profile-authorized work awaiting the qualified per-run limit SHALL report remaining automatic work and its hold. Do not request approval again or force reruns. Simulation SHALL explain that approval executes no financial write in that cycle. Instructions SHALL explain profile authority separately from manual consent. Presentation alone SHALL NOT change qualification, recovery, locking, financial effects or exits. Required actions SHALL join the one per-run notification; keys, paths and financial comparisons remain only in private logs/files.
+Manually approved or profile-authorized work deferred after an unresolved correction SHALL report remaining automatic work and its hold. Do not request approval again or force reruns. Simulation SHALL explain that approval executes no financial write in that cycle. Instructions SHALL explain profile authority separately from manual consent. Presentation alone SHALL NOT change qualification, recovery, locking, financial effects or exits. Required actions SHALL join the one per-run notification; keys, paths and financial comparisons remain only in private logs/files.
 
 Baseline: docs/activity-review.md documents two sections and execution paths. The production warning names only the internal path and held-event count.
 
 #### Scenario: Distinct safe instructions from one shared file
-- **WHEN** `python -m pytest -q tests/test_activity_review.py -k operator_action_review` creates normal-run, historical, blocked, invalid-choice, stale, source-unavailable, uncertain and approved-budget-deferred cases at a custom path
+- **WHEN** `python -m pytest -q tests/test_activity_review.py -k operator_action_review` creates normal-run, historical, blocked, invalid-choice, stale, source-unavailable, uncertain and approved-deferred cases at a custom path
 - **THEN** logs show path, section/key, reason and next action; event counts do not assume candidate counts; no bulk yes, fabricated host path, maintenance permission or uncertainty reset is suggested; financial requests and exits remain unchanged.
+
+### Requirement: Effective currency in activity update payloads
+
+Every activity update payload SHALL carry the resolved effective currency as a
+valid ISO4217 code. A null stored activity currency SHALL use the
+proven currency from its current symbol profile. If the effective currency is
+missing, empty, invalid or conflicting, the proposal SHALL stay held and the
+connector SHALL send no PUT. Identity maintenance apply, inspection and rollback
+SHALL compare proven effective currencies at readback. All other preserved
+fields SHALL stay exact. Journal fingerprints SHALL still bind raw evidence.
+
+#### Scenario: Legacy comment migration
+
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k legacy_comment_migration_null` runs with a null activity currency and a USD profile
+- **THEN** the comment-only PUT carries `currency: USD`, Ghostfolio readback
+  accepts the update, and the next run creates no proposal for that event.
+
+#### Scenario: Unresolved currency
+
+- **WHEN** a selected correction or pending journal cannot resolve one valid
+  effective currency
+- **THEN** the proposal or journal remains held with a reason and no PUT is
+  sent.
+
+### Requirement: Effective currency in pending correction recovery
+
+Journal recovery SHALL validate the effective currency of the expected-after
+evidence before confirming a pending intent. A legacy pending request with a
+null currency MAY be read for exact already-applied readback when the expected
+after evidence resolves to one valid currency. It SHALL never be resent. A
+stale, conflicting or unresolved currency SHALL retain the account hold.
+
+#### Scenario: Pending null-currency request
+
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k pending_null_currency_journal` runs with a v3 pending request with `currency: null`
+- **THEN** recovery sends no PUT; it confirms only an exact effective-currency
+  readback, otherwise it keeps the journal pending and the proposal held.
+
+#### Scenario: Identity maintenance readback
+
+- **WHEN** a comment-only maintenance PUT sends `USD` and Ghostfolio returns
+  a null activity currency with the same proven USD profile
+- **THEN** apply and rollback accept the equivalent currency representation,
+  reject every other field drift, and keep raw journal fingerprints unchanged.

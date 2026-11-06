@@ -11,7 +11,7 @@ context: |
   ghostfolio-degiro-sync; a change to them flags downstream propagation.
   DEGIRO stays pinned to the last single-file commit; propagation needs a separate DEGIRO change.
   Imports are additive. Optional activity review can replace one activity with manual yes or bounded profile authority.
-  Qualification, durable intent and exact readback remain required, with at most one correction per cycle.
+  Qualification, durable intent and exact readback remain required, with a fixed 28-second delay and no per-run correction count cap.
   Sync never deletes activities. Stable publication and production require separate explicit GO.
   The product already runs with live writes; specs describe observed behavior before any change.
   Readers: the operator (infrastructure expert, not a developer) and community users.

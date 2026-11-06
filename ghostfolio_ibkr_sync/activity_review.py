@@ -42,7 +42,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     dividend_input_compatible,
     flex_provenance_failures,
     parse_cash_dividends,
-    parse_ibkr_datetime,
+    parse_ibkr_calendar_day,
     parse_source_account_ids,
     parse_trades,
 )
@@ -628,7 +628,14 @@ def update_payload(row: dict[str, Any], proposed: dict[str, Any]) -> dict[str, A
             or not isinstance(tag.get("id"), str) or not tag["id"] for tag in tags)
             or len({tag["id"] for tag in tags}) != len(tags)):
         raise RuntimeError("Unproven update tag identities")
+    currency = effective_currency(proposed)
+    if currency["reason"]:
+        raise RuntimeError(currency["reason"])
     payload = {key: proposed[key] for key in REPLACED}
+    # Ghostfolio stores a redundant activity currency as NULL when it equals
+    # the profile currency. UpdateOrderDto still requires the effective ISO
+    # currency on every PUT, including comment-only migrations.
+    payload["currency"] = currency["effective"]
     payload.update(id=row["id"], accountId=row["accountId"], dataSource="YAHOO",
                    tags=[tag["id"] for tag in tags])
     for field in NUMBERS:
@@ -817,7 +824,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                           else [payment.get("dateTime", "") for payment in raw.get("payments", [])])
                 date_context.update({"source text": "; ".join(clocks),
                                      "source calendar day": ", ".join(sorted({
-                                         (parse_ibkr_datetime(clock.split(";")[0].split(",")[0]) or "")[:10]
+                                         parse_ibkr_calendar_day(clock) or ""
                                          for clock in clocks})),
                                      "source zone": ", ".join(sorted({clock.rsplit(None, 1)[-1]
                                          if re.fullmatch(r"\d{8};\d{6}\s+(EST|EDT)", clock.strip())
@@ -1017,14 +1024,11 @@ def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
     return [item for item in selected if item["destination account"] not in blocked], blocked
 
 
-# Isolated full-update/readback/background proof covers one correction at a time.
-# No intra-run spacing applies with a limit of one. This is not a cross-run
-# background-completion guarantee; see docs/releasing.md. ENV cannot override it.
-QUALIFIED_EXECUTION: tuple[str, int, float] | None = (
-    "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078",
-    1,
-    0.0,
-)
+# Qualification covers connector behavior. Labs record the Ghostfolio version
+# as information and measure its background chain against the fixed delay.
+# Exact readback and stop-on-uncertainty protect data if a future chain is longer.
+# A longer delay requires a new connector release; ENV cannot weaken the permit.
+QUALIFIED_EXECUTION: float | None = 28.0
 RECOVERY_WAITS = (0, 2, 5, 10)
 
 
@@ -1080,6 +1084,17 @@ def row_matches(row: dict[str, Any], evidence: dict[str, Any], policy: str | Non
 
 
 def recovery_read(config: dict[str, Any], entry: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
+    request = entry.get("request")
+    after_currency = effective_currency(entry["after"])
+    request_currency = request.get("currency") if isinstance(request, dict) else None
+    if (after_currency["reason"]
+            or (request_currency is not None and request_currency != after_currency["effective"])):
+        log.error("Review account %s activity %s remains blocked; journal currency is not proven effective",
+                  entry["destination account"], entry["activity id"])
+        return False, None
+    # A legacy v3 journal can contain a NULL request currency. It is safe to
+    # inspect and confirm an already-applied update, but it must never be sent
+    # again. The effective value above is the only accepted recovery evidence.
     observed = None
     policy = entry.get("eligibility", {}).get("policy version")
     for wait in RECOVERY_WAITS:
@@ -1162,6 +1177,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     """Recover, refresh and dispatch sequentially before any ordinary writes."""
     assert_unchanged(state)
     validate_journal(state, config)
+    config["_review_stop_run"] = False
     original = state["document"]["proposals"]
     from ghostfolio_ibkr_sync.config import timezone_preview_reason
     from ghostfolio_ibkr_sync.outcome import RECONCILIATION_COUNTS
@@ -1239,6 +1255,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             unresolved.add(entry["destination account"])
             unresolved_events.add(entry["source event"])
     blocked |= unresolved
+    config["_review_stop_run"] = bool(unresolved)
     consumed = {(state["evidence"]["aliases"].get(entry["proposal key"], entry["proposal key"]), entry["review revision"])
                 for entry in state["journal"]["entries"].values() if entry["status"] == "confirmed"}
     remaining_previous = {key: item for key, item in original.items()
@@ -1261,27 +1278,25 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             refreshed[key] = {**old, "status": "unresolved request; account writes blocked"}
     for position, item in enumerate(sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])), 1):
         item["queue position"] = position
-        item["remaining eligible runs"] = position
+        item["remaining eligible runs"] = 1
     publish(refreshed)
     executed = 0
-    planned = 0
     previews: set[str] = set()
     for item in sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])):
+        if config["_review_stop_run"]:
+            break
         account = item["destination account"]
         if (account in blocked or item["source event"] not in events or not item["actionable"]
                 or item["key"] not in refreshed or item.get("execution path") != "normal run"):
             continue
         qualification = QUALIFIED_EXECUTION
         if qualification is None:
-            log.warning("Reviewed correction retained: exact-image execution budget not qualified")
+            log.warning("Reviewed correction retained: correction execution not qualified")
             continue
-        image, limit, delay = qualification
-        if not image or type(limit) is not int or limit < 1 or not 0 <= delay < float("inf"):
-            raise RuntimeError("Invalid qualified correction execution budget")
-        if executed + planned >= limit:
-            continue
+        delay = qualification
+        if not 0 <= delay < float("inf"):
+            raise RuntimeError("Invalid qualified correction delay")
         if simulated:
-            planned += 1
             counts["would correct"] += 1
             previews.add(item["key"])
             item["status"] = "would correct"
@@ -1340,7 +1355,11 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
         matched, observed = recovery_read(config, entry)
         if not matched:
             blocked.add(account)
-            continue
+            config["_review_stop_run"] = True
+            log.error("Review correction failure for account %s activity %s; stopping the correction run; "
+                      "later approved corrections remain deferred and the account fence is retained",
+                      account, item["activity id"])
+            break
         entry["status"] = "confirmed"
         entry["verified result"] = plain(observed) if observed is not None else None
         publish_journal(state)
@@ -1365,7 +1384,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     queue = [item for item in deferred if item["destination account"] not in blocked and item["key"] not in previews]
     for position, item in enumerate(sorted(queue, key=lambda item: (item.get("first eligible") or "", item["key"])), 1):
         item["queue position"] = position
-        item["remaining eligible runs"] = position
+        item["remaining eligible runs"] = 1
         if item["destination account"] not in blocked and item["key"] not in previews:
             item["status"] = "automatic work deferred"
     publish(refreshed)

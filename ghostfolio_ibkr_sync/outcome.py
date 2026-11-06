@@ -1,5 +1,7 @@
 """Run-local failures and delivery bookkeeping; external summaries use fixed codes."""
 
+from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
@@ -52,7 +54,7 @@ RECONCILIATION_COUNTS = ("already consistent", "automatically corrected", "manua
 OUTCOME_REASONS = {
     "config": ("invalid_configuration",),
     "mapping": ("invalid_mapping",),
-    "review": ("review_unavailable",),
+    "review": ("review_unavailable", "correction_uncertain"),
     "corporate_actions": ("trade_hold",),
     "ghost_auth": ("login_failed",),
     "ghost_startup": ("activities_unavailable", "token_rejected", "invalid_identity"),

@@ -9,6 +9,7 @@ import requests
 import pytest
 
 from ghostfolio_ibkr_sync import activity_review as review
+from ghostfolio_ibkr_sync.ghostfolio import DESTINATION_CURRENCIES
 
 
 def write_review(path, document):
@@ -214,11 +215,14 @@ def test_review_approval_one_source_two_targets_refused_before_dispatch():
 
 
 class ReviewServer:
-    """HTTP boundary with a mutable synthetic destination and recorded wire writes."""
-    def __init__(self, monkeypatch, rows=None, outcome="success"):
+    """HTTP boundary with mutable rows and optional delayed background jobs."""
+    def __init__(self, monkeypatch, rows=None, outcome="success", background_reads=0):
         self.rows = deepcopy(rows or [destination()])
         self.writes = []
         self.outcome = outcome
+        self.background_reads = background_reads
+        self.pending_updates = []
+        self.reads_since_put = 0
         self.reads = 0
         self.waits = []
         monkeypatch.setattr(requests, "get", self.get)
@@ -233,6 +237,9 @@ class ReviewServer:
     def get(self, url, **kwargs):
         assert kwargs["allow_redirects"] is False
         self.reads += 1
+        self.reads_since_put += 1
+        if self.pending_updates and self.reads_since_put > self.background_reads:
+            self._apply_payload(self.pending_updates.pop(0))
         response = requests.Response()
         response.status_code = 200
         response._content = json.dumps({"activities": self.rows, "count": len(self.rows)}, default=float).encode()
@@ -241,23 +248,56 @@ class ReviewServer:
     def put(self, url, **kwargs):
         assert kwargs["allow_redirects"] is False and kwargs["timeout"]
         payload = kwargs["json"]
+        assert isinstance(payload.get("currency"), str)
+        assert payload["currency"] in DESTINATION_CURRENCIES
         self.writes.append(deepcopy(payload))
         if self.outcome != "unchanged":
-            row = next(row for row in self.rows if row["id"] == payload["id"])
-            row.update({key: Decimal(str(value)) if key in review.NUMBERS else value
-                        for key, value in payload.items() if key in review.REPLACED and key != "symbol"})
-            row["assetProfile"]["symbol"] = payload["symbol"]
-            row["updatedAt"] = "2026-08-02T00:00:00Z"
-            row["value"] = row["quantity"] * row["unitPrice"]
-            row["valueInBaseCurrency"] = row["value"] * Decimal("0.91")
-            row["feeInBaseCurrency"] = row["fee"] * Decimal("0.91")
-            row["unitPriceInAssetProfileCurrency"] = row["unitPrice"]
-            row["feeInAssetProfileCurrency"] = row["fee"]
+            if self.background_reads:
+                self.pending_updates.append(deepcopy(payload))
+                self.reads_since_put = 0
+            else:
+                self._apply_payload(payload)
         if self.outcome in ("timeout", "unchanged"):
             raise requests.Timeout("synthetic timeout")
         response = requests.Response()
         response.status_code = 200
         return response
+
+    def _apply_payload(self, payload):
+        row = next(row for row in self.rows if row["id"] == payload["id"])
+        row.update({key: Decimal(str(value)) if key in review.NUMBERS else value
+                    for key, value in payload.items() if key in review.REPLACED and key != "symbol"})
+        row["assetProfile"]["symbol"] = payload["symbol"]
+        if payload["currency"] == row["assetProfile"].get("currency"):
+            row["currency"] = None
+        row["updatedAt"] = "2026-08-02T00:00:00Z"
+        row["value"] = row["quantity"] * row["unitPrice"]
+        row["valueInBaseCurrency"] = row["value"] * Decimal("0.91")
+        row["feeInBaseCurrency"] = row["fee"] * Decimal("0.91")
+        row["unitPriceInAssetProfileCurrency"] = row["unitPrice"]
+        row["feeInAssetProfileCurrency"] = row["fee"]
+
+
+@pytest.mark.parametrize("currency", [None, "", "AAA", "usd", 123])
+def test_review_http_double_rejects_invalid_currency(monkeypatch, currency):
+    server = ReviewServer(monkeypatch)
+    row = server.rows[0]
+    payload = review.update_payload(row, review.values_of(row))
+    payload["currency"] = currency
+    with pytest.raises(AssertionError):
+        server.put("http://ghost/api/v1/activities/id", json=payload, allow_redirects=False, timeout=30)
+    assert not server.writes
+
+
+@pytest.mark.parametrize("currency", [None, "", "AAA", "usd", 123])
+def test_review_dispatch_refuses_invalid_currency_before_http(monkeypatch, currency):
+    server = ReviewServer(monkeypatch)
+    row = server.rows[0]
+    payload = review.update_payload(row, review.values_of(row))
+    payload["currency"] = currency
+    with pytest.raises(RuntimeError, match="valid effective currency"):
+        review.ghost_update_reviewed_activity({"ghost_host": "http://ghost", "ghost_token": "synthetic"}, payload)
+    assert not server.writes
 
 
 def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_run=False, rows=None, run_outcome=None):
@@ -271,8 +311,8 @@ def run_review(tmp_path, monkeypatch, *, outcome="success", approval="yes", dry_
     state = review.open_review(str(path), [])
     config = {"ghost_host": "http://ghost", "ghost_token": "secret", "dry_run": dry_run,
               "activity_review_file": str(path), "_corporate_outcome": run_outcome}
-    # This is an isolated execution-budget fixture, not image qualification.
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-image", 2, 0.5))
+    # This is an isolated execution-delay fixture, not image qualification.
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0.5)
     blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
     return server, state, config, blocked, held
 
@@ -347,7 +387,7 @@ def test_review_replacement_all_types_preserve_tags_notes_and_full_instants(tmp_
         path = directory / "review.yaml"
         state = review.open_review(str(path), [])
         config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False, "activity_review_file": str(path)}
-        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
         try:
             review.process_review(state, config, events, {"U1": "acc"})
             proposals = deepcopy(state["document"])
@@ -381,7 +421,7 @@ def test_review_persistence_second_process_lock_and_atomic_failure(tmp_path, mon
         review.close_review(state)
 
 
-def test_review_qualification_no_invented_live_budget(tmp_path, monkeypatch):
+def test_review_qualification_no_unqualified_execution(tmp_path, monkeypatch):
     server, state, config, _, _ = run_review(tmp_path, monkeypatch, dry_run=True)
     config["dry_run"] = False
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", None)
@@ -437,27 +477,218 @@ def test_review_persistence_reverse_only_unchanged_confirmed_rows(tmp_path, monk
 
 
 
-def test_review_execution_budget_sequential_limit_delay_and_deferred_yes(tmp_path, monkeypatch):
-    xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000") for i, day in [(1, 1), (2, 10), (3, 20)]))
+@pytest.mark.parametrize("count", [1, 5, 32])
+@pytest.mark.parametrize("accounts", [1, 2])
+@pytest.mark.parametrize("simulated", [False, True])
+def test_review_execution_chain_all_approved_with_delayed_readback(tmp_path, monkeypatch, count, accounts, simulated):
+    from datetime import datetime, timedelta
+
+    events, rows, bindings = {}, [], {}
+    for index in range(count):
+        source, target = f"U{index % accounts + 1}", f"acc{index % accounts + 1}"
+        bindings[source] = target
+        day = datetime(2026, 6, 1) + timedelta(days=index)
+        xml = report(trade_xml(f"T{index}", date=day.strftime("%Y%m%d;100000")), source_account=source)
+        events.update(source_events(xml, source, target))
+        rows.append(destination(f"IBKR#v2#{source}:TRADE:T{index}", id=f"row{index}", accountId=target,
+                                date=day.strftime("%Y-%m-%dT10:00:00Z")))
+    server = ReviewServer(monkeypatch, rows, background_reads=2)
+    original_put = server.put
+    def sequential_put(url, **kwargs):
+        assert not server.pending_updates  # Exact readback completed before each next PUT.
+        assert kwargs["json"]["id"] not in {item["id"] for item in server.writes}
+        return original_put(url, **kwargs)
+    monkeypatch.setattr(requests, "put", sequential_put)
+    monkeypatch.setenv("ACTIVITY_REVIEW_LIMIT", "1")
+    monkeypatch.setenv("ACTIVITY_REVIEW_DELAY", "0")
+    assert review.QUALIFIED_EXECUTION == 28.0
+    proposals, _ = review.refresh_proposals({}, events, rows, bindings)
+    for item in proposals.values():
+        item["approve"] = "yes"
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": simulated,
+              "activity_review_file": str(path)}
+    try:
+        blocked, held = review.process_review(state, config, events, bindings)
+        assert not blocked and not config["_review_stop_run"]
+        if simulated:
+            assert not server.writes and not server.waits
+            assert len(held) == count and len(state["document"]["proposals"]) == count
+            assert all(item["approve"] == "yes" and item["remaining eligible runs"] == 1
+                       for item in state["document"]["proposals"].values())
+            assert not state["journal"]["entries"]
+        else:
+            assert not held and not state["document"]["proposals"]
+            assert len(server.writes) == count
+            assert server.waits == [2, 5] + [wait for _ in range(count - 1) for wait in (28.0, 2, 5)]
+            assert len(state["journal"]["entries"]) == count and state["journal"]["version"] == 3
+            assert all(entry["status"] == "confirmed" for entry in state["journal"]["entries"].values())
+    finally:
+        review.close_review(state)
+    if not simulated:
+        state = review.open_review(str(path), [])
+        try:
+            assert review.process_review(state, config, events, bindings) == (set(), set())
+            assert len(server.writes) == count
+        finally:
+            review.close_review(state)
+
+
+@pytest.mark.parametrize("fault_at", [1, 16, 32])
+def test_review_execution_chain_fault_at_k_stops_without_resend(tmp_path, monkeypatch, fault_at):
+    from datetime import datetime, timedelta
+
+    events, rows = {}, []
+    bindings = {"U1": "acc1", "U2": "acc2"}
+    for index in range(32):
+        source, target = f"U{index % 2 + 1}", f"acc{index % 2 + 1}"
+        day = datetime(2026, 6, 1) + timedelta(days=index)
+        events.update(source_events(report(trade_xml(f"T{index}", date=day.strftime("%Y%m%d;100000")),
+                                           source_account=source), source, target))
+        rows.append(destination(f"IBKR#v2#{source}:TRADE:T{index}", id=f"row{index}", accountId=target,
+                                date=day.strftime("%Y-%m-%dT10:00:00Z")))
+    server = ReviewServer(monkeypatch, rows, background_reads=2)
+    original_put = server.put
+    def fail_k(url, **kwargs):
+        assert not server.pending_updates
+        if len(server.writes) + 1 == fault_at:
+            server.outcome = "unchanged"
+        return original_put(url, **kwargs)
+    monkeypatch.setattr(requests, "put", fail_k)
+    proposals, _ = review.refresh_proposals({}, events, rows, bindings)
+    for item in proposals.values():
+        item["approve"] = "yes"
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
+              "activity_review_file": str(path)}
+    for attempt in range(2):
+        state = review.open_review(str(path), [])
+        try:
+            review.process_review(state, config, events, bindings)
+            assert config["_review_stop_run"] and len(server.writes) == fault_at
+            entries = state["journal"]["entries"]
+            assert state["journal"]["version"] == 3 and len(entries) == fault_at
+            assert sum(item["status"] == "pending" for item in entries.values()) == 1
+            assert len(state["document"]["proposals"]) == 33 - fault_at
+            assert all(item["approve"] == "yes" for item in state["document"]["proposals"].values())
+        finally:
+            review.close_review(state)
+
+
+def test_review_execution_failure_stops_burst_and_keeps_later_approvals(tmp_path, monkeypatch):
+    xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000")
+                          for i, day in enumerate((1, 5, 10), 1)))
     events = source_events(xml)
-    rows = [destination(id=f"row{i}", date=f"2026-08-{day:02}T10:00:00Z") for i, day in [(1, 1), (2, 10), (3, 20)]]
-    server = ReviewServer(monkeypatch, rows)
+    rows = [destination(id=f"row{i}", date=f"2026-08-{day:02}T10:00:00Z")
+            for i, day in enumerate((1, 5, 10), 1)]
+    server = ReviewServer(monkeypatch, rows, "unchanged")
     proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"})
     for item in proposals.values():
         item["approve"] = "yes"
     path = tmp_path / "review.yaml"
     write_review(path, {"version": 1, "proposals": proposals})
-    path.chmod(0o600)
     state = review.open_review(str(path), [])
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0.5))
-    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False, "activity_review_file": str(path)}
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
+              "activity_review_file": str(path)}
     try:
         blocked, held = review.process_review(state, config, events, {"U1": "acc"})
-        assert not blocked and len(held) == 1 and len(server.writes) == 2
-        assert server.waits == [0.5]
-        assert len(state["document"]["proposals"]) == 1
-        assert next(iter(state["document"]["proposals"].values()))["approve"] == "yes"
-        assert all(entry["status"] == "confirmed" for entry in state["journal"]["entries"].values())
+        assert blocked == {"acc"} and held
+        assert config["_review_stop_run"] is True
+        assert len(server.writes) == 1
+        assert len(state["document"]["proposals"]) == 3
+        assert next(iter(state["journal"]["entries"].values()))["status"] == "pending"
+    finally:
+        review.close_review(state)
+
+
+def test_review_execution_delay_waits_for_delayed_background_job(tmp_path, monkeypatch):
+    xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000")
+                          for i, day in enumerate((1, 5), 1)))
+    events = source_events(xml)
+    rows = [destination(id=f"row{i}", date=f"2026-08-{day:02}T10:00:00Z")
+            for i, day in enumerate((1, 5), 1)]
+    server = ReviewServer(monkeypatch, rows, background_reads=2)
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"})
+    for item in proposals.values():
+        item["approve"] = "yes"
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    state = review.open_review(str(path), [])
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 15.0)
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
+              "activity_review_file": str(path)}
+    try:
+        blocked, _ = review.process_review(state, config, events, {"U1": "acc"})
+        assert blocked == set()
+        assert len(server.writes) == 2
+        assert server.waits == [2, 5, 15.0, 2, 5]
+    finally:
+        review.close_review(state)
+
+
+def test_review_journal_v3_recovers_mid_burst_without_resend(tmp_path, monkeypatch):
+    xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000")
+                          for i, day in enumerate((1, 5), 1)))
+    events = source_events(xml)
+    rows = [destination(id=f"row{i}", date=f"2026-08-{day:02}T10:00:00Z")
+            for i, day in enumerate((1, 5), 1)]
+    server = ReviewServer(monkeypatch, rows, "unchanged")
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc"})
+    for item in proposals.values():
+        item["approve"] = "yes"
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    state = review.open_review(str(path), [])
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
+              "activity_review_file": str(path)}
+    try:
+        blocked, _ = review.process_review(state, config, events, {"U1": "acc"})
+        assert blocked == {"acc"}
+        entry = next(iter(state["journal"]["entries"].values()))
+        assert state["journal"]["version"] == 3 and entry["status"] == "pending"
+        server.outcome = "success"
+        server.rows[0] = deepcopy(entry["after"])
+        for field in review.NUMBERS:
+            server.rows[0][field] = Decimal(server.rows[0][field])
+        review.close_review(state)
+        state = review.open_review(str(path), [])
+        blocked, _ = review.process_review(state, config, events, {"U1": "acc"})
+        assert blocked == set()
+        assert len(server.writes) == 2
+        assert all(item["status"] == "confirmed" for item in state["journal"]["entries"].values())
+    finally:
+        review.close_review(state)
+
+
+def test_review_execution_chain_covers_all_accounts(tmp_path, monkeypatch):
+    events = {}
+    rows = []
+    for source, target, days in (("U1", "acc", (1, 5, 10)), ("U2", "other", (15, 20, 25))):
+        xml = report("".join(trade_xml(f"T{day}", date=f"202608{day:02};100000") for day in days),
+                     source_account=source)
+        events.update(source_events(xml, source, target))
+        rows.extend(destination(id=f"{target}-{day}", accountId=target,
+                                date=f"2026-08-{day:02}T10:00:00Z") for day in days)
+    server = ReviewServer(monkeypatch, rows)
+    proposals, _ = review.refresh_proposals({}, events, rows, {"U1": "acc", "U2": "other"})
+    for item in proposals.values():
+        item["approve"] = "yes"
+    path = tmp_path / "review.yaml"
+    write_review(path, {"version": 1, "proposals": proposals})
+    state = review.open_review(str(path), [])
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
+    config = {"ghost_host": "http://ghost", "ghost_token": "t", "dry_run": False,
+              "activity_review_file": str(path)}
+    try:
+        blocked, _ = review.process_review(state, config, events, {"U1": "acc", "U2": "other"})
+        assert blocked == set()
+        assert len(server.writes) == 6
+        assert not state["document"]["proposals"]
     finally:
         review.close_review(state)
 
@@ -521,7 +752,7 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     item = next(iter(document["proposals"].values()))
     item["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     assert app.run_sync(new_run_outcome()) == 0
     assert len(server.writes) == 1 and len(server.cash) == 3
     server.rows[0]["comment"] += "\n\nUser note"
@@ -531,19 +762,20 @@ def test_review_runtime_contract_disabled_enabled_then_disabled_notes(tmp_path, 
     assert fetched == ["Q1"] * 4  # No second acquisition during account processing.
 
 
-@pytest.mark.parametrize("limit,delay", [(1, 0), (2, 0.5), (None, None)])
-def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monkeypatch, limit, delay):
+@pytest.mark.parametrize("delay", [0, 0.5, None])
+def test_review_runtime_all_corrections_without_resend(tmp_path, monkeypatch, delay):
     from ghostfolio_ibkr_sync.outcome import new_run_outcome
 
-    if limit is None:
-        # Exercise the shipped budget through the full normal-run path too.
+    if delay is None:
+        # ENV cannot weaken the shipped permit in the normal-run path.
+        monkeypatch.setenv("ACTIVITY_REVIEW_LIMIT", "1")
+        monkeypatch.setenv("ACTIVITY_REVIEW_DELAY", "0")
         assert review.QUALIFIED_EXECUTION is not None
-        image, limit, delay = review.QUALIFIED_EXECUTION
-        assert image == "ghostfolio/ghostfolio@sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078"
-        assert (limit, delay) == (1, 0.0)
+        delay = review.QUALIFIED_EXECUTION
+        assert delay == 28.0
     else:
-        # Synthetic larger budgets exercise the generic deferral and pacing logic.
-        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", limit, delay))
+        # Shorten pacing only inside this synthetic fixture.
+        monkeypatch.setattr(review, "QUALIFIED_EXECUTION", delay)
 
     days = [(1, 1), (2, 10), (3, 20)]
     xml = report("".join(trade_xml(f"T{i}", date=f"202608{day:02};100000") for i, day in days)
@@ -588,7 +820,7 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
         outcome = new_run_outcome()
         assert app.run_sync(outcome) == 0
         assert outcome["accounts_failed"] == 0
-        assert len(server.writes) - previous == min(limit, len(expected_pending))
+        assert len(server.writes) - previous == len(expected_pending)
         assert len(server.cash) == passes  # Ordinary cash processing still runs.
         assert len(imports) == 1  # Unrelated new activity imports despite deferred approvals.
         document = review.load_review(path)
@@ -596,12 +828,12 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
             return {key: value for key, value in item.items() if key not in review.QUEUE_FIELDS | {"status"}}
         assert {key: stable(value) for key, value in document["proposals"].items()} == {
             key: stable(value) for key, value in expected_pending.items() if key in document["proposals"]}
-        assert len(document["proposals"]) == max(0, len(expected_pending) - limit)
+        assert len(document["proposals"]) == 0
         expected_pending = document["proposals"]
 
     assert len(server.writes) == 3
     assert {payload["id"] for payload in server.writes} == {"row1", "row2", "row3"}
-    assert server.waits == ([0.5] if limit == 2 else [])
+    assert server.waits == ([delay, delay] if delay else [])
     # A fresh normal run reopens the journal and cannot resend a consumed yes.
     assert app.run_sync(new_run_outcome()) == 0
     assert len(server.writes) == 3 and len(server.cash) == passes + 1
@@ -609,7 +841,7 @@ def test_review_runtime_budget_defers_then_resumes_without_resend(tmp_path, monk
     assert fetched == ["Q1"] * (passes + 2)
 
 
-def test_review_acceptance_failure_fences_cash_other_account_continues(tmp_path, monkeypatch):
+def test_review_acceptance_failure_stops_whole_run_and_fences_cash(tmp_path, monkeypatch):
     from ghostfolio_ibkr_sync.outcome import new_run_outcome
     app, fetched = runtime_environment(tmp_path, monkeypatch)
     monkeypatch.setenv("IBKR_ACCOUNT_IDS", "U1,U2")
@@ -629,12 +861,13 @@ def test_review_acceptance_failure_fences_cash_other_account_continues(tmp_path,
     document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     server.cash.clear()
     outcome = new_run_outcome()
     assert app.run_sync(outcome) == 1
-    assert [cash["id"] for cash in server.cash] == ["other"]
-    assert outcome["accounts_failed"] == 1
+    assert server.cash == []
+    assert outcome["accounts_failed"] == 0
+    assert outcome["failures"] == [{"stage": "review", "reason": "correction_uncertain", "ordinal": None}]
     assert fetched == ["Q1", "Q2", "Q1", "Q2"]
     assert len(server.writes) == 1
 
@@ -780,7 +1013,7 @@ def test_review_runtime_sigkill_restart_never_repeats_request(tmp_path, monkeypa
     """Kill a real process; retain only its durable files and synthetic server state.
 
     This proves offline runtime recovery. It does not qualify a destination image
-    or replace the installed-image lab gate. The test-only budget is never shipped.
+    or replace the installed-image lab gate. The test-only delay is never shipped.
     """
     import signal
     import socket
@@ -799,7 +1032,7 @@ def test_review_runtime_sigkill_restart_never_repeats_request(tmp_path, monkeypa
     document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     remote = tmp_path / "synthetic-server.json"
     requests_file = tmp_path / "synthetic-requests"
     remote.write_text(json.dumps(server.rows, default=float))
@@ -894,7 +1127,7 @@ def test_review_runtime_duplicate_reference_approval_never_dispatches(tmp_path, 
     for proposal in document["proposals"].values():
         proposal["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic-only", 1, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     assert app.run_sync(new_run_outcome()) == 0
     assert not server.writes and server.rows == rows
     refreshed = review.load_review(path)
@@ -1040,7 +1273,7 @@ def test_review_config_failure_has_review_outcome(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("pending", [False, True])
-def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypatch, pending):
+def test_review_runtime_removed_account_stops_cash_if_journal_pending(tmp_path, monkeypatch, pending):
     from ghostfolio_ibkr_sync.outcome import new_run_outcome
     app, _ = runtime_environment(tmp_path, monkeypatch)
     rows = [destination(), destination("IBKR#v2#U2:TRADE:T2", id="row2", accountId="other", quantity=Decimal("10"))]
@@ -1055,14 +1288,14 @@ def test_review_runtime_removed_account_allows_remaining_cash(tmp_path, monkeypa
     document = review.load_review(path)
     next(iter(document["proposals"].values()))["approve"] = "yes"
     write_review(path, document)
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     assert app.run_sync(new_run_outcome()) == (1 if pending else 0)
     monkeypatch.setenv("IBKR_ACCOUNT_IDS", "U2")
     monkeypatch.setenv("IBKR_QUERY_IDS", "Q2")
     monkeypatch.setenv("GHOST_ACCOUNT_NAMES", "Other")
     server.cash.clear()
-    assert app.run_sync(new_run_outcome()) == 0
-    assert [cash["id"] for cash in server.cash] == ["other"]
+    assert app.run_sync(new_run_outcome()) == (1 if pending else 0)
+    assert [cash["id"] for cash in server.cash] == ([] if pending else ["other"])
     assert len(server.writes) == 1
 
 
@@ -1274,7 +1507,7 @@ def test_operator_action_review_distinct_paths(tmp_path, monkeypatch, caplog, ca
         proposal.update(actionable=False, status="missing proof")
     if case == "source unavailable":
         proposal["status"] = case
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", None if case == "unqualified" else ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", None if case == "unqualified" else 0)
     state = review.open_review(str(tmp_path / "custom.yaml"), [])
     config = {"_corporate_outcome": out, "dry_run": True}
     try:
@@ -1315,7 +1548,63 @@ def test_effective_currency_comparison_legacy_preserves_raw_and_other_fields():
     assert item["changed fields"] == ["comment"]
     assert item["proposed values"]["currency"] is None
     assert item["proposed values"]["quantity"] == "1"
-    assert review.update_payload(row, item["proposed values"])["currency"] is None
+    assert review.update_payload(row, item["proposed values"])["currency"] == "USD"
+
+
+def test_legacy_comment_migration_null_currency_puts_effective_and_stops_on_second_run(
+    tmp_path, monkeypatch,
+):
+    row = destination("IBKR#T1", quantity=Decimal(10), currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+              "activity_review_file": str(path)}
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
+    try:
+        review.process_review(state, config, source_events(), {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert item["changed fields"] == ["comment"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held
+        assert len(server.writes) == 1 and server.writes[0]["currency"] == "USD"
+        # Ghostfolio may return NULL for a redundant stored override. Effective
+        # readback still proves the correction and the next run is quiet.
+        server.rows[0]["currency"] = None
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held and len(server.writes) == 1
+        assert state["document"]["proposals"] == {}
+    finally:
+        review.close_review(state)
+
+
+def test_fee_correction_null_currency_puts_effective_currency(tmp_path, monkeypatch):
+    row = destination("IBKR#v2#U1:TRADE:T1", quantity=Decimal(10), fee=Decimal(2), currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server = ReviewServer(monkeypatch, [row])
+    path = tmp_path / "review.yaml"
+    state = review.open_review(str(path), [])
+    config = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
+              "activity_review_file": str(path)}
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
+    try:
+        review.process_review(state, config, source_events(), {"U1": "acc"})
+        document = deepcopy(state["document"])
+        item = next(iter(document["proposals"].values()))
+        assert item["changed fields"] == ["fee"]
+        item["approve"] = "yes"
+        review.publish_review(state, document)
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        assert not blocked and not held
+        assert len(server.writes) == 1
+        assert server.writes[0]["currency"] == "USD"
+        assert server.writes[0]["fee"] == 1
+    finally:
+        review.close_review(state)
 
 
 @pytest.mark.parametrize("blocked", ["unknown", "journal", "corporate"])
@@ -1388,10 +1677,51 @@ def test_effective_currency_readback_retains_raw_and_no_resend(tmp_path, monkeyp
             assert entry["eligibility"]["currency comparison"] == review.currency_contract(entry)
     finally:
         review.close_review(state)
+
     state = review.open_review(str(path), [])
     try:
         review.process_review(state, config, source_events(), {"U1": "acc"})
         assert len(server.writes) == 1
+    finally:
+        review.close_review(state)
+
+
+@pytest.mark.parametrize("outcome", ["unchanged", "applied", "missing", "drift", "invalid request"])
+def test_pending_null_currency_journal_recovery_never_resends(tmp_path, monkeypatch, outcome):
+    row = destination("IBKR#T1", quantity=Decimal(10), currency=None)
+    row["assetProfile"]["currency"] = "USD"
+    server, state, config, _, _ = run_review(tmp_path, monkeypatch, rows=[row], outcome="unchanged")
+    path = state["path"]
+    entry = next(iter(state["journal"]["entries"].values()))
+    assert state["journal"]["version"] == 3
+    # Reconstruct the RC2 intent: both request and after evidence kept raw NULL.
+    entry["request"]["currency"] = None
+    entry["after"]["currency"] = None
+    if outcome == "applied":
+        server.rows[0]["comment"] = entry["after"]["comment"]
+    elif outcome == "missing":
+        entry["after"]["assetProfile"].pop("currency")
+    elif outcome == "drift":
+        server.rows[0]["assetProfile"]["currency"] = "EUR"
+    elif outcome == "invalid request":
+        entry["request"]["currency"] = ""
+    entry["eligibility"]["currency comparison"] = review.currency_contract(entry)
+    review.publish_journal(state)
+    saved = deepcopy(entry)
+    writes = len(server.writes)
+    review.close_review(state)
+    state = review.open_review(str(path), [])
+    try:
+        blocked, held = review.process_review(state, config, source_events(), {"U1": "acc"})
+        recovered = next(iter(state["journal"]["entries"].values()))
+        assert len(server.writes) == writes
+        assert recovered["request"] == saved["request"]
+        assert recovered["eligibility"] == saved["eligibility"]
+        assert recovered["status"] == ("confirmed" if outcome == "applied" else "pending")
+        assert bool(blocked) is (outcome != "applied")
+        assert bool(held) is (outcome != "applied")
+        if outcome == "applied":
+            assert recovered["verified result"]["currency"] is None
     finally:
         review.close_review(state)
 
@@ -1427,7 +1757,10 @@ def test_effective_currency_persistence_real_v400_reader(tmp_path, monkeypatch):
     path = tmp_path / "rollback.yaml"
     path.write_bytes(review.atomic_yaml(path, {"version": 1, "proposals": {}}))
     script = """
-import json, sys
+import builtins, json, sys
+# v4.0.0 predates deferred annotations and refers to its type-only
+# NotificationPlan name at runtime on Python 3.13.
+builtins.NotificationPlan = object
 sys.addaudithook(lambda event, args: (_ for _ in ()).throw(RuntimeError("Network denied"))
                 if event in ("socket.connect", "socket.getaddrinfo") else None)
 from ghostfolio_ibkr_sync import activity_review as r
@@ -1548,7 +1881,7 @@ def test_review_replacement_timezone_readback_keeps_stored_instant(tmp_path, mon
     cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
            "activity_review_file": str(path), "timezone": "Europe/Paris"}
     monkeypatch.setenv("TZ", "Europe/Paris")
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     try:
         review.process_review(state, cfg, events, {"U1": "acc"})
         document = deepcopy(state["document"])
@@ -1588,7 +1921,7 @@ def test_review_replacement_timezone_different_day_uses_existing_financial_path(
     path = tmp_path / "review.yaml"
     state = review.open_review(str(path), [])
     monkeypatch.setenv("TZ", "Europe/Paris")
-    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", ("synthetic", 2, 0))
+    monkeypatch.setattr(review, "QUALIFIED_EXECUTION", 0)
     cfg = {"ghost_host": "http://ghost", "ghost_token": "synthetic", "dry_run": False,
            "activity_review_file": str(path)}
     try:

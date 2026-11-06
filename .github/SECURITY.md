@@ -7,5 +7,5 @@ transaction exports in public issues or pull requests.
 
 Security fixes target the current `main` branch. Older releases do not receive
 separate backports. Dependency and image security checks run on pull requests
-and weekly; merging a fix publishes an image but does not deploy a running
-container.
+and weekly. Merging a fix validates the change. Release publication is a
+separate step. Infra owns managed production deployment and image pins.

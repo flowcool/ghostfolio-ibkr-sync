@@ -749,6 +749,9 @@ def ghost_update_reviewed_activity(config: Config, payload: dict[str, Any]) -> N
     from urllib.parse import quote
 
     validate_ghost_host(config["ghost_host"])
+    currency = payload.get("currency")
+    if not isinstance(currency, str) or currency not in DESTINATION_CURRENCIES:
+        raise RuntimeError("Review correction requires a valid effective currency")
     if config.get("dry_run"):
         raise RuntimeError("Review correction dispatch refused in simulation")
     try:

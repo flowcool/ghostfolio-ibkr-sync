@@ -70,6 +70,11 @@ See [GitHub Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)
 - Back up before the first import and significant upgrades. Image rollback does not undo writes.
 - `DRY_RUN` defaults to simulation. Writes need an explicit false value and valid `TZ`.
   Account, currency, mapping and evidence checks still apply.
+- Set connector `TZ` to the Ghostfolio server timezone. Trades keep their UTC
+  execution instant. Dividends keep the written payment day at 00:00 UTC.
+  Ghostfolio 3.96.0 displays dates in the browser timezone and values them in the
+  server timezone. A viewer or server west of UTC can see the previous day for
+  a 00:00Z dividend. See [date rules and limits](docs/configuration.md#date-rules-and-timezone-limits).
 - Simulation reads services and maintains local evidence. It sends no financial writes.
 - Keep `CORPORATE_ACTION_STATE_FILE` in a private persistent directory.
   Initialize it in simulation. Review the inventory before live mode.
@@ -150,6 +155,9 @@ release history and artifacts. [Changelog](CHANGELOG.md) links there too.
 
 See [Contributing](CONTRIBUTING.md) for development, architecture and releases.
 Docker is the supported runtime.
+The connector project owns code, specifications, lab tests, PRs and qualified
+releases. Infra owns managed production deployment, image pins and schedules.
+See the [contribution boundaries and lab gates](CONTRIBUTING.md#scope-and-lab-gates).
 Local development requires Python 3.14+ with the pinned packages
 (CI and the container use Python 3.14).
 

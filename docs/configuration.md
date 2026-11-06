@@ -364,12 +364,40 @@ in simulation. A deliberate clean simulation alone sends no notification. Failed
 configured Failure notification. After review, set `DRY_RUN=false` and retain
 valid `TZ` to permit writes.
 
+### Date rules and timezone limits
+
+Set connector `TZ` to the Ghostfolio server timezone. The startup log prints the
+comparison timezone. The connector cannot verify the server or browser setting.
+`TZ` controls local-day tolerance, diagnostic display and scheduling. It does not
+change converted source values or canonical replacement timestamps.
+
 Flex timezone tokens describe the query account clock, not the exchange clock.
 The connector accepts only `EST` (UTC-05:00) and `EDT` (UTC-04:00).
 It applies these fixed offsets even on US clock-change days.
 For example, `20260113;231127 EST` becomes `2026-01-14T04:11:27+00:00`.
 The configured `TZ` controls local-day comparison and scheduling.
 It does not interpret a source token.
+
+Trade execution times use that UTC conversion. `tradeDate` is the exchange
+business day. For known venues (KRX, TSEJ, LSE, NASDAQ, NYSE, ARCA, BYX and TSE),
+the connector checks the execution day in the exchange timezone. Missing or invalid
+date evidence, or a mismatch, holds the trade with a reason. Unknown venues stay
+unchecked. The connector does not infer their zone from currency or ticker.
+CASH/FX and OPT rows remain excluded.
+
+Dividend, payment-in-lieu and withholding dates use the calendar day written in
+`dateTime`, at 00:00 UTC. Their ledger posting clock does not define an execution
+instant. The same day controls accrual matching, deduplication and review.
+`reportDate` does not replace the payment day. Stored activities are not converted.
+
+Ghostfolio 3.96.0 displays table dates in the browser timezone. Its portfolio
+calculator uses the server timezone for valuation days. Thus a date-only 00:00Z
+value can show or value on the previous day west of UTC. The connector keeps this
+known limit. A noon-UTC anchor would avoid the demonstrated western-zone shift,
+but needs historical-data conversion under a separate operator GO. It cannot
+preserve one calendar day in every timezone. Trades keep their execution instant.
+See the pinned [browser formatter](https://github.com/ghostfolio/ghostfolio/blob/2f21c2558684e8cc9974f1b2da683992a83ef3cb/libs/ui/src/lib/value/value.component.ts)
+and [portfolio calculator](https://github.com/ghostfolio/ghostfolio/blob/2f21c2558684e8cc9974f1b2da683992a83ef3cb/apps/api/src/app/portfolio/calculator/portfolio-calculator.ts).
 
 Every DETAIL dividend, payment-in-lieu and withholding cash row must have
 `dateTime` in `YYYYMMDD;HHmmss TimeZone` form.
@@ -674,8 +702,11 @@ that require intervention join the same `dividend_check` reminder. Inspect the
 named activity and both sides of the comparison. Current agreement or documented
 manual resolution proves resolution. Information, accepted rounding and noise
 alone send no reminder. Named representation or coverage limits remain visible
-as evidence limitations without requesting an impossible correction. No diagnostic
-changes financial selection, grants cleanup authority or writes a correction.
+as evidence limitations without requesting an impossible correction.
+Missing source coverage is informational. It does not request a manual correction.
+The report counts these items as informational, and their action says `No action needed.`
+They do not enter the `to check` count or the `dividend_check` reminder.
+No diagnostic changes financial selection, grants cleanup authority or writes a correction.
 
 
 Corporate-action holds and concrete historical discrepancies repeat in the same

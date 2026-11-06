@@ -757,6 +757,9 @@ def run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
 def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
     """Execute with any optional persistent-review lock held for the whole run."""
     reason = timezone_preview_reason()
+    if not reason:
+        log.info("Activity comparison TZ=%s; must match the Ghostfolio server TZ",
+                 os.environ["TZ"].strip())
     if reason:
         config["dry_run"] = True
         outcome["forced_preview"] = reason
@@ -850,6 +853,11 @@ def _run_configured_sync(config: dict[str, Any], outcome: RunOutcome) -> int:
             record_failure(outcome, "review", "review_unavailable")
             return 1
         config["_review_blocked_accounts"], config["_review_holds"] = blocked, held
+        if config.get("_review_stop_run"):
+            record_failure(outcome, "review", "correction_uncertain")
+            log.error("Activity review stopped the run after a failed or uncertain correction; "
+                      "later corrections and all dependent financial writes remain deferred")
+            return 1
         # A replacement changes positions once. Never add its full quantity to
         # the earlier holdings. Rebuild every account from verified destination.
         existing_trade_ids, existing_dividend_comments, positions = ghost_get_existing_orders(config)

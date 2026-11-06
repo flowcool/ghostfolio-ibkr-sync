@@ -48,7 +48,7 @@
 
 **Trades (Execution):**
 
-Select these fields for a predictable report. **ClientAccountID** (`accountId`) and **TradeID** (`tradeID`) are mandatory for every selected trade. Its account must equal the configured account and Account Information evidence. A missing or mismatched account, unsafe identity or comment over 2000 ASCII characters fails the account before financial writes. CASH/OPT rows stay excluded. The parser ignores additional attributes:
+Select these fields for a predictable report. **ClientAccountID** (`accountId`) and **TradeID** (`tradeID`) are mandatory for every selected trade. Its account must equal the configured account and Account Information evidence. A missing or mismatched account, unsafe identity or comment over 2000 ASCII characters fails the account before financial writes. CASH/OPT rows stay excluded. For a known execution venue, **TradeDate** (`tradeDate`) is also required. A missing or invalid TradeDate holds that trade with a reason. Keep **Exchange** so the connector can check its business day. The parser ignores unrelated additional attributes:
 
 - ClientAccountID
 - CurrencyPrimary

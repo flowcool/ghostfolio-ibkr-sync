@@ -249,7 +249,7 @@ Baseline replaced: tests/test_finalize.py success/warning silence and the 2026-1
 
 ### Requirement: Current operational limits
 
-The connector SHALL retain documented boundaries: 365-day guidance; daily data; corporate-action detection with evidence-based BUY/SELL holds; manual corporate-action treatment, history and token renewal; additive imports with optional manually approved or explicitly profile-authorized corrections; proximity skips next to manual or legacy rows (INFO when amounts agree, WARNING otherwise, never imported; a distinct payment there needs a manual add); trust principle: a row with a connector comment (`dividend#…`) is ours and trusted by exact identity, and with review disabled a user edit of such a row is out of contract; enabled review SHALL expose differences and manual or profile authority; stored UTC instants with configured-TZ business-date eligibility; unconverted cash/commission currencies; Yahoo quality; net, nonchronological checks; nontransactional buy/sell phases; preview without server acceptance; buffered 10 MiB Flex responses; no general overlap protection. Enabled correction dispatch SHALL require exclusive writes and persistent recovery evidence as specified in activity-correction-review. README SHALL retain the additive-import boundary, manual corporate-action treatment, the 365-day window, persistent-volume requirement, simulation initialization and explicit live opt-in. It SHALL link directly to detailed safety and recovery guidance. Linked user guides SHALL describe the reader floor for notes-bearing references. They SHALL document CORPORATE_ACTION_STATE_FILE, simulation initialization, live BUY/SELL refusal on missing/invalid state, simulation refusal with exit 1 on missing/unwritable state, private retained report bytes, retained events outside later report windows, candidate-specific hold/release evidence, notification frequency and the stable Ghostfolio 3.91.0 minimum for accepting native split evidence. Ordinary acquired reports SHALL rotate automatically after a fixed 30 days from acquisition, without a new ENV setting or quota. Required safety originals SHALL follow corporate-action-detection retention rules. The linked corporate-action guide SHALL explain the exceptions and private copies for longer investigations. Reconciliation supports opt-in bounded automatic corrections and compact decisions without a new job lifecycle. The linked activity-review and configuration guides SHALL describe profiles and limits, fee exclusion from identity, pair rejection, schema-3 migration and private state, the shared execution budget and downgrade recovery. Correction journals SHALL remain outside rotation. State loss SHALL require a reviewed simulation inventory that reuses surviving evidence and unresolved events; deleting state SHALL not be a resolution method. Available windows cannot certify lifetime history. Document unsupported-event holds, explicit old/new identity mappings, effective-date uncertainty and the unqualified non-admin read gate. Native corporate-action treatment, corporate-action identity remapping and historical repair remain unavailable; legacy comment migration follows activity-reconciliation. Acknowledgment SHALL not release holds. Rollback SHALL stop writers and force simulation before using an older image that lacks these guards; reverting code SHALL not be described as restoring financial data.
+The connector SHALL retain documented boundaries: 365-day guidance; daily data; corporate-action detection with evidence-based BUY/SELL holds; manual corporate-action treatment, history and token renewal; additive imports with optional manually approved or explicitly profile-authorized corrections; proximity skips next to manual or legacy rows (INFO when amounts agree, WARNING otherwise, never imported; a distinct payment there needs a manual add); trust principle: a row with a connector comment (`dividend#…`) is ours and trusted by exact identity, and with review disabled a user edit of such a row is out of contract; enabled review SHALL expose differences and manual or profile authority; stored UTC instants with configured-TZ business-date eligibility; unconverted cash/commission currencies; Yahoo quality; net, nonchronological checks; nontransactional buy/sell phases; preview without server acceptance; buffered 10 MiB Flex responses; no general overlap protection. Enabled correction dispatch SHALL require exclusive writes and persistent recovery evidence as specified in activity-correction-review. README SHALL retain the additive-import boundary, manual corporate-action treatment, the 365-day window, persistent-volume requirement, simulation initialization and explicit live opt-in. It SHALL link directly to detailed safety and recovery guidance. Linked user guides SHALL describe the reader floor for notes-bearing references. They SHALL document CORPORATE_ACTION_STATE_FILE, simulation initialization, live BUY/SELL refusal on missing/invalid state, simulation refusal with exit 1 on missing/unwritable state, private retained report bytes, retained events outside later report windows, candidate-specific hold/release evidence, notification frequency and the stable Ghostfolio 3.91.0 minimum for accepting native split evidence. Ordinary acquired reports SHALL rotate automatically after a fixed 30 days from acquisition, without a new ENV setting or quota. Required safety originals SHALL follow corporate-action-detection retention rules. The linked corporate-action guide SHALL explain the exceptions and private copies for longer investigations. Reconciliation supports opt-in bounded automatic corrections and compact decisions without a new job lifecycle. The linked activity-review and configuration guides SHALL describe profiles and limits, fee exclusion from identity, pair rejection, schema-3 migration and private state, uncapped correction execution, the fixed 28-second delay, scheduler duration guidance and downgrade recovery. Correction journals SHALL remain outside rotation. State loss SHALL require a reviewed simulation inventory that reuses surviving evidence and unresolved events; deleting state SHALL not be a resolution method. Available windows cannot certify lifetime history. Document unsupported-event holds, explicit old/new identity mappings, effective-date uncertainty and the unqualified non-admin read gate. Native corporate-action treatment, corporate-action identity remapping and historical repair remain unavailable; legacy comment migration follows activity-reconciliation. Acknowledgment SHALL not release holds. Rollback SHALL stop writers and force simulation before using an older image that lacks these guards; reverting code SHALL not be described as restoring financial data.
 
 #### Scenario: Operator checks limits
 - **WHEN** limitations are read
@@ -477,7 +477,9 @@ The classes SHALL remain coherent, information, noise, outside window and to che
 
 A complete single legacy activity with equal quantity and fee SHALL be `legacy declared-rate rounding` information when its Ghostfolio gross equals quantity × the matched payment `Re` `grossRate` and the paid cash gross differs by exactly one minor unit. Its reason SHALL state that the legacy row uses the declared rate and IBKR paid a rounded cash amount. Its sole action SHALL read `No action: IBKR rounding accepted.` The block SHALL stay visible at INFO as audit information. It SHALL NOT suggest that IBKR revised the amount after import. A one-minor-unit fee difference, or any one-minor-unit gross difference outside this proven pattern, SHALL remain to check as `minimal difference, cause unknown`. No finding SHALL automatically correct an activity.
 
-After informational findings, one INFO line SHALL read `N to check, N informational, N noise`, followed by each item to check at WARNING or above. Findings SHALL NOT change exits. Items to check SHALL join the required-action notification. Information and noise alone SHALL not trigger it.
+After informational findings, one INFO line SHALL read `N to check, N informational, N noise`, followed by each item to check at WARNING or above. Findings SHALL NOT change exits. Items to check SHALL join the required-action notification. Information and noise alone SHALL not trigger it. Named diagnostic evidence limitations
+SHALL be informational and SHALL state that no correction is requested. Explicit
+outside-window findings SHALL retain debug visibility without a correction request.
 
 #### Scenario: Plain, quantized, single-action report
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'coherent_dividend_format or check_dividend_report'` formats decimals, unavailable values, empty/nonempty summaries and blocks with match proposals
@@ -485,7 +487,7 @@ After informational findings, one INFO line SHALL read `N to check, N informatio
 
 #### Scenario: Classes from synthetic inputs
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py -k 'dividend_readable_classes or dividend_readable_pairs or coherent_dividend_one_jpy'` runs noise, one-unit, larger, quantity, legacy, split, absent and unsupported cases
-- **THEN** existing classes stay stable except the complete declared-rate one-unit pattern, which becomes information with its known reason and no-action audit result.
+- **THEN** existing classes stay stable except the complete declared-rate one-unit pattern and named diagnostic evidence limitations. These become information with their known reasons and no-action results.
 
 #### Scenario: Plain report
 - **WHEN** `.venv/bin/python -m pytest -v tests/test_dividend_diagnostics.py tests/test_check_dividend_report.py -k 'dividend_readable_report or coherent_dividend_format or coherent_dividend_action'` formats source, destination, identity, summary and match text
@@ -720,7 +722,7 @@ Trade qualification SHALL likewise check overlapping-report stability, repeated/
 
 ### Requirement: Destination comment compatibility gates
 
-The destination qualification reference SHALL be Ghostfolio 3.86.0, source commit `ef47c0d1b2c48fa4e97fb381561b514e657928cf`. Existing local lab documentation binds it to image digest `sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`. This is saved deployment evidence, not a current runtime observation. Production desired configuration uses mutable `latest`; version drift SHALL require renewed qualification.
+Qualification SHALL cover connector behavior. Ghostfolio image and version SHALL NOT be qualification dimensions. Each release SHALL record the Ghostfolio version observed in its labs as information. Production desired configuration uses mutable `latest`. Version or image drift SHALL NOT require renewed qualification. If a future background chain exceeds D, exact readback and stop-on-uncertainty SHALL still protect data; a new connector release SHALL raise D.
 
 Pinned source observations:
 
@@ -898,3 +900,64 @@ Preserve LAB_EVIDENCE kind/value JSON, one-line escaping and DEBUG visibility. L
 #### Scenario: User can locate and act on a finding
 - **WHEN** `rg -n -A 12 'User action required|Notification result|container path' docs/configuration.md docs/activity-review.md README.md` runs after implementation
 - **THEN** examples explain action-only success, repeats and clean silence, severity/streams, delivery states, volume resolution, safe review distinctions and unchanged financial authority, without private deployment paths.
+
+### Requirement: Valid currency at activity update boundaries
+
+The optional correction and identity-maintenance PUT paths SHALL send a valid
+effective activity currency on every update payload. Cleanup comment PUTs SHALL validate their explicit currency before HTTP and
+retain their existing refusal of null-currency rows. A null, empty or unresolved
+payload currency SHALL block the update before HTTP. Additive imports and
+independent cash updates retain their existing behavior.
+
+#### Scenario: Offline DTO enforcement
+
+- **WHEN** `.venv/bin/python -m pytest -q tests/test_activity_review.py -k http_double_rejects_invalid_currency` submits a null, empty or non-ISO currency
+- **THEN** the mock Ghostfolio endpoint rejects it before applying any row
+  change, matching the deployed DTO contract.
+
+### Requirement: Consistent dividend coverage messages
+
+An activity outside proven IBKR source coverage SHALL remain visible as an
+informational diagnostic. Its block SHALL use the `information` class and one
+`No action needed.` line. It SHALL NOT enter the `to check` count or the
+`dividend_check` required-action notification. The same rule SHALL apply to all
+existing named diagnostic evidence limitations. An explicit outside-window
+finding SHALL retain its debug visibility and SHALL request no correction.
+A concrete source/destination discrepancy SHALL remain a required manual action with its existing evidence
+and resolution instruction. The detailed report, summary and required-action
+notification SHALL use the same classification for the same input.
+
+Baseline: the saved 4.1.0 preview emitted 15 `destination outside proven source
+coverage` blocks as `Dividend to check` with a manual fix action, while the
+companion evidence message said that no user correction was requested. The
+triage file contains 12 dividend candidate pairs: six manual assignments and
+six rejected crossed pairs across three groups. Those review pairs are not
+historical coverage findings.
+
+#### Scenario: Outside coverage is informational
+
+- **WHEN** `python -m pytest -q tests/test_dividend_diagnostics.py -k dividend_coverage_message_consistency` runs the synthetic 15-row case
+- **THEN** the report has 0 to-check and 15 informational findings, each block
+  says `Dividend information: evidence limitation` and `Action: No action needed`,
+  and the outcome has no `dividend_check` action or notification. A mixed case
+  with one concrete discrepancy has one warning, one to-check item and one
+  `dividend_check` action in one notification. Active and inactive rows use
+  the same rule.
+
+#### Scenario: Concrete discrepancy remains required
+
+- **WHEN** `python -m pytest -q tests/test_dividend_diagnostics.py -k operator_action_diagnostic_warning_and_summary` runs the existing amount-difference case
+- **THEN** the finding remains `to_check`, emits a warning and records one
+  `dividend_check` action.
+
+#### Scenario: Other named limitations remain consistent
+
+- **WHEN** `python -m pytest -q tests/test_dividend_diagnostics.py -k dividend_evidence_limitation_message_consistency` runs all existing limitation reasons
+- **THEN** each limitation has an informational or outside-window block, one
+  `No action needed.` line, no to-check count and no required-action notification.
+
+#### Scenario: Operator reads the coverage rule
+
+- **WHEN** `rg -n -A 5 'Missing source coverage' docs/configuration.md` runs
+- **THEN** the guide states the informational count, no-correction action and
+  notification rule.

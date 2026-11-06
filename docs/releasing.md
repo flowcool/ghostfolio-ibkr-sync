@@ -11,10 +11,28 @@ Plain-language checklist for cutting a release. Why these choices:
    previously working setup fail or behave differently (stricter validation,
    new file format, changed limit, new required setting).
 2. CI is green on `main`.
-3. Record the installed image digest as the rollback target, using the running
-   container's image ID and its matching repository digest. Follow the
-   [Docker image guide](../README.md#docker-image); inspecting a mutable tag does
-   not prove which artifact is installed. Preserve the existing ENV and mounts.
+3. For a managed production upgrade, obtain the installed rollback digest from
+   Infra. Infra owns production inspection, pins, deployment and schedules.
+   Record the qualified release digest and evidence for the handoff. Infra
+   preserves ENV and mounts. A mutable tag does not prove the installed artifact.
+
+## Lab gates and ownership
+
+Before merge, test the PR image in both empty and golden labs for changes to
+financial logic, deduplication or activity identity, Ghostfolio authentication,
+transport or writes, state or journal formats, or a major dependency or base
+image. Other PRs need CI only for this gate. See [contribution rules](../CONTRIBUTING.md#scope-and-lab-gates).
+
+Every release passes both scenarios on its exact digest before production use
+or stable promotion. Promote that digest without a rebuild. Reuse pre-merge
+proof only when the digest is identical. Use the RC path below for every
+release, including patches, to qualify before stable promotion. Stable
+publication needs the operator's GO.
+
+Infra owns the shared runner and canonical `docs/runbooks/ghostfolio-lab.md` in
+`flowcool/mylittlemess`. This project owns connector tests and release evidence.
+Reserve labs, use separate credentials, retain proof, then stop and verify both
+owned instances. Route runner defects and production work to Infra.
 
 ## Stable-channel cutover
 
@@ -93,10 +111,10 @@ release advances `:latest`. Check that the release notes show the head text and
 generated list. Fill in "Published artifacts" with the workflow link, version
 and verified manifest digest from its `release-manifest` artifact.
 
-## Release candidate (optional)
+## Release candidate
 
-A release candidate (RC) lets a maintainer validate an image before the stable
-tag exists. Use it for risky changes; normal patch releases may skip it.
+A release candidate (RC) supplies the immutable image for the release lab gate.
+Qualify it before stable promotion, including for patch releases.
 
 Tag format: `vX.Y.Z-rc.N`, with `N >= 1` and no leading zeros.
 
@@ -207,8 +225,9 @@ What the workflow refuses:
 - Any prerelease tag that is not an exact `vX.Y.Z-rc.N` (for example `-beta.1`,
   `-rc.0`, `-rc.01`), a stable tag flagged prerelease, drafts and tag pushes.
 - A stable `vX.Y.Z` when a `vX.Y.Z-rc.N` tag exists and the stable tag is not on
-  the commit of the highest `N`. The error names both tags. With no RC, stable
-  publication is unchanged.
+  the commit of the highest `N`. The error names both tags. The workflow still
+  permits a native build with no RC. That path does not prove the required lab
+  acceptance before stable promotion; use the qualified RC path above.
 
 An RC never creates or moves `:latest`, `:X.Y.Z` or `:X.Y`. The workflow skips
 `latest` promotion for RC tags.
@@ -297,11 +316,10 @@ code against that history. Reader rollback retains rows and can still refuse
 partial dividend coverage. Comment reversal restores only unchanged journal-owned
 comments; it retains new v2 imports. See [guarded rollback](cleanup.md#guarded-comment-rollback-and-resume-inspection).
 
-Select the previously recorded installed digest and recreate the connector with
-its original ENV and mounts. This restores the runtime only: financial records
-and cash updates remain. It does not restore financial data or undo imports.
-Use a separately authorized Ghostfolio recovery procedure if data recovery is
-needed.
+For managed production rollback, hand the recorded installed digest to Infra.
+Infra recreates the connector with its original ENV and mounts. Runtime rollback
+keeps financial records and cash updates. Use a separately authorized Ghostfolio
+recovery procedure if data recovery is needed.
 
 ## V2 writer qualification and release order
 
@@ -359,17 +377,24 @@ explained.
 
 ## Activity review qualification
 
-Review is opt-in. `activity_review.QUALIFIED_EXECUTION` binds the initial
-execution budget to Ghostfolio image
-`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`:
-one correction per complete connector run, across all configured accounts.
-Remaining approvals and import holds stay pending for the next run. No ENV
-setting bypasses this boundary. Operators must verify that destination image;
-the connector cannot discover a server's Docker image through its activity API.
-Image drift requires renewed qualification.
+Review is opt-in. Each connector run applies all eligible approved corrections
+across all configured accounts. `activity_review.QUALIFIED_EXECUTION` contains
+the fixed 28-second minimum delay between confirmed requests. There is no count
+cap. No ENV setting can lower the delay or add a count cap. Stable promotion
+requires PASS from the empty and golden long-chain gate on this exact digest.
+The first unresolved correction stops the run and retains later approvals.
+Allow `(corrections - 1) * 28` seconds plus source, request and readback time.
+The connector adds no run duration limit. Keep writers exclusive.
+Qualification covers connector behavior. Each release records the Ghostfolio
+version observed in its labs as information. A Ghostfolio version or image change
+does not invalidate qualification. The 28-second delay comes from the lab measurement: the maximum observed
+background chain was 18.19 seconds, with a 1.5x margin. If a future lab shows
+a longer chain, revise the delay in a new connector release. Exact readback and
+stop-on-uncertainty still protect the data.
 
-The 2026-10-23 isolated proof used the published v3.1.0-rc.1 package against that
-Ghostfolio image. Six TRADE/DIVIDEND full-update/reverse cases covered exact
+The 2026-10-23 isolated proof used the published v3.1.0-rc.1 package against the
+Ghostfolio version recorded in that proof. Six TRADE/DIVIDEND full-update/reverse
+cases covered exact
 numeric values, UTC dates, tags, ownership, unchanged profiles and Unicode notes
 at 1999/2000 UTF-16 units. Thirteen observed PUTs each had exact financial
 readback and independently attributed new market-data and later portfolio-cache
@@ -378,13 +403,17 @@ its FAIL is retained. A separately authorized, journal-bound inverse completed
 the final case and restored the original financial state. These observations
 qualify isolated corrections; they do not qualify a burst of corrections.
 
-The finite limit is therefore one. The configured minimum inter-correction
-delay is zero because no second correction can dispatch in that run. This does
-not certify a safe interval between separate runs, background completion at HTTP
-readback, or production throughput. Observed background chains of 6.708-9.839
-seconds are samples, not a safe-delay guarantee. Do not use repeated immediate
-runs to drain approvals. Larger limits need separate isolated qualification.
-The installed RC also passed network-denied normal-run budget/deferred-approval,
+The previous proof qualified isolated corrections only. It did not qualify a
+burst. The exact RC image must pass a new empty and golden lab burst before
+stable promotion. The lab must measure request-bound market-data and
+portfolio-cache completion and record the fixed delay and chain timings with the
+connector image digest and informational Ghostfolio version. The connector cannot
+poll this completion through the activity API. A failed or uncertain correction stops the whole financial run. No resend
+is allowed. Observed background chains of 6.708-9.839 seconds are samples, not
+a qualification. If the lab shows a longer background chain, revise the
+permit in a new RC. Until the burst gate passes, stable promotion and production
+use remain unqualified.
+The installed RC also passed network-denied normal-run correction/deferred-approval,
 interruption/restart, no-resend, duplicate-reference and notes-compatible-reader
 replays. Those tests prove connector behavior, not live background timing.
 Private native evidence stays outside this public repository.
@@ -392,7 +421,11 @@ Private native evidence stays outside this public repository.
 Prove full/reverse PUT preservation, exact numeric/date readback, notes (Unicode
 length/trimming), tags, ownership, profile/background effects, duplicate references,
 interruption at each journal transition, restart recovery and no repeat logical
-request. Failed preservation keeps affected corrections unavailable. Changed
+request. Each lab must prove at least thirty consecutive corrections in one
+account and across two accounts. Require gaps of at least D=28 seconds and each
+request-bound background chain at most D/1.5 seconds. Inject uncertainty in the
+middle of a chain. Prove exact readback, stop, retained approvals and no resend.
+Failed preservation keeps affected corrections unavailable. Changed
 security profiles currently require separate preservation evidence. Current
 report windows cannot qualify historical legacy-global reference upgrades.
 

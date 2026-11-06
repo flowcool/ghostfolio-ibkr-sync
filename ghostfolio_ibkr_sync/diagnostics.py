@@ -702,6 +702,8 @@ def classify_dividend_findings(findings: list[Finding]) -> list[Finding]:
                 result = _readable_set("uncertain", "to_check", finding["reason"])
         else:
             result = _readable_set("uncertain", "to_check", finding["reason"])
+        if result["class"] == "to_check" and finding["reason"] in DIAGNOSTIC_LIMITATIONS:
+            result = _readable_set("evidence limitation", "information", finding["reason"], result["related"])
         finding["readable"] = result
     for group in compared:
         if twins[id(group)]:
@@ -825,6 +827,8 @@ def _format_match(finding: Finding) -> list[str]:
 def _finding_action(finding: Finding) -> str:
     if finding["readable"]["label"] == "legacy declared-rate rounding":
         return "No action: IBKR rounding accepted."
+    if finding["reason"] in DIAGNOSTIC_LIMITATIONS:
+        return _readable_action(finding["readable"])
     match = finding.get("match")
     # Twins share the proposal, but each block's action belongs to its compared row.
     destination = finding.get("destination", [])
@@ -984,9 +988,6 @@ def log_historical_dividend_comparison(findings: Sequence[Finding], account_id: 
         if diagnostic_requires_action(finding):
             key = f"{account_id}:{finding['source']}:{','.join(sorted(finding['activity_ids']))}"
             record_action(outcome, "dividend_check", key)
-        else:
-            log.warning("Evidence limitation: %s; comparison cannot certify this representation; "
-                        "no user correction is requested", finding["reason"])
     log.info("[DRY RUN] Historical dividends account=%s coverage=%d source_groups=%d "
              "unmatched_destination=%d categories=%s failed_checks=%s unavailable_checks=%s",
              account_id, len(findings),

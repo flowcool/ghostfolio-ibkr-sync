@@ -43,16 +43,26 @@ Exact journal recovery still compares the full instant, including intraday drift
 
 ## Safety limits
 
-Review dispatch is qualified for Ghostfolio image
-`sha256:929a54a1972c48f3cfb30af2db6f9f2aaeb610a9cc5f53264f1df1629eb43078`
-with **at most one correction per connector run**, across all configured accounts.
-Other approved proposals remain unchanged for later runs and keep their import
-holds. The zero inter-correction delay is unused with this single-correction
-limit; it does not certify immediate repeated runs or background completion.
-Verify the destination image before enabling review. A different image requires
-renewed qualification. No ENV setting changes this budget. Production activation
-and stable publication retain their separate approval. See
-[qualification evidence and limits](releasing.md#activity-review-qualification).
+Each connector run applies **all eligible approved corrections**, across all
+configured accounts. There is no correction count cap. The fixed minimum delay
+between confirmed corrections is **28 seconds**. Each PUT needs exact readback
+before the next PUT. The first unresolved correction stops the whole financial
+run. Preserve journal v3 and later approvals. Never resend an uncertain request.
+No ENV setting can lower the delay or add a count cap.
+
+Allow at least `(corrections - 1) * 28` seconds, plus source acquisition, request
+and readback time. The connector adds no run duration limit. Existing process
+and request timeouts still apply. Keep scheduled and manual writers exclusive.
+Stable promotion requires PASS in both labs on the exact RC digest.
+The activity API exposes no background completion signal.
+Qualification covers connector behavior. Each release records the Ghostfolio
+version observed in its labs as information. A Ghostfolio version or image change
+does not invalidate qualification. The 28-second delay comes from the lab measurement: the maximum observed
+background chain was 18.19 seconds, with a 1.5x margin. If a future lab shows
+a longer chain, revise the delay in a new connector release. Exact readback and
+stop-on-uncertainty still protect the data.
+Production activation retains its separate approval. See [qualification evidence
+and limits](releasing.md#activity-review-qualification).
 
 ## Configure persistent review
 
@@ -190,10 +200,10 @@ and overlength comments keep affected corrections unavailable.
 
 Before PUT, `<review-file>.journal.yaml` records full before/after evidence,
 request and bindings. Requests are sequential; exact readback precedes the next
-request. The qualified limit defers remaining approvals unchanged. Holdings and
+request. All eligible approvals execute with the fixed delay. Holdings and
 identity indexes are rebuilt before ordinary imports; a corrected BUY counts once.
-A correction failure blocks later imports, cash and platform writes on that account.
-Other safe accounts continue. Ordinary import failures keep independent cash.
+The first unresolved correction stops all later financial writes across accounts.
+Later approvals remain unchanged. Ordinary import failures keep independent cash.
 Failure notifications retain the single summary without financial details.
 
 ## Recovery
@@ -243,15 +253,18 @@ The connector does not discover host mounts.
 For an eligible `normal run` proposal, compare current and proposed values and
 execution path. Edit only `decision` between runs. Only lowercase literal `yes`
 approves that exact eligible proposal. Never approve proposals in bulk. Simulation
-executes no financial write. Already approved work waiting for the qualified limit
-remains automatic work; do not approve again or force reruns.
+executes no financial write. Already approved work deferred after an unresolved
+correction keeps its approval. Do not approve again or force reruns.
 
 For missing proof, invalid/stale choices or conflicts, inspect the reason and
 restore current source and destination proof. `yes` cannot make blocked work
 executable. Historical maintenance needs the documented preparation and separate
 operation authorization; normal sync cannot execute it. For an uncertain request,
 inspect the preserved journal and exact destination readback. Do not resend,
-delete or edit the journal to release a hold. Use `decision: reject` for a false association. Cleanup retains separate authority.
+delete or edit the journal to release a hold. The first failed or uncertain
+correction stops the whole financial run. Later approved corrections remain
+deferred. Use `decision: reject` for a false association. Cleanup retains
+separate authority.
 
 
 ## Activity review journals
@@ -365,13 +378,15 @@ A threshold match is a profile match, not exact identity proof.
 Qualify the exact connector image in isolated empty and golden labs before real
 activation. Cover full updates, comments, tags, background effects, duplicate
 references, restart recovery, private-state recovery and no repeated writes.
-Offline tests and the existing destination budget do not qualify a new image.
+Offline tests and an earlier correction qualification do not qualify a new image.
 A failed preservation case keeps affected corrections unavailable.
 
-Profiles and manual consent share the qualified limit of one PUT per run.
-A reference migration consumes that same limit. The next financial correction
+Profiles and manual consent use the same fixed 28-second delay. All eligible
+corrections run without a count cap. A reference migration uses that same delay.
+The next financial correction
 uses a fresh revision after confirmed migration. Oldest first-eligible revisions
-run first. Remaining eligible work retains its hold for later normal cycles.
+run first. Work deferred after an unresolved correction retains its approval
+and hold until exact recovery.
 Do not force reruns or approve deferred work again.
 Every automatic request records its profile authority separately from consent.
 The journal records exact source/target dates, timezone and financial evidence.
@@ -393,9 +408,9 @@ corrected, automatic work deferred, manual review required, rejected association
 blocked and would correct. Reference migrations and distinct corrected targets have separate counts.
 Only exact readback records a completed correction.
 Simulation reports would correct. It never reports an applied correction.
-Queue position and remaining eligible runs describe the current inventory.
-They are estimates. Future source, destination or profile changes can alter them.
-Automatic success and ordinary budget deferral need no intervention notice.
+Queue position shows execution order. Currently eligible work needs one run.
+Recovery and future evidence changes can defer work.
+Automatic success and deferred approvals need no intervention notice.
 Required actions join the existing single notification. External text contains
 fixed result names and counts. Financial values, paths and keys stay private.
 
@@ -412,7 +427,9 @@ override stays in effect, even when it differs from the profile currency. Real
 currency differences remain visible. GBP and GBp remain distinct denominations.
 Legacy reference migration changes only the comment and preserves raw currency.
 Currency proof does not prove source completeness, identity, dates or amounts.
-The profile limits and the shared budget of one correction per run stay fixed.
+The profile limits and the fixed inter-correction delay stay unchanged. A failed or
+uncertain correction stops the whole financial run. Preserve the v3 journal and
+resolve it with exact expected-after evidence before another write.
 
 ### Journal compatibility and rollback
 
