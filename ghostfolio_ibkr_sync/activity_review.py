@@ -968,7 +968,17 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
             except RuntimeError:
                 assigned_elsewhere = False
         if not assigned_elsewhere:
-            result[key] = {**old, "status": "target missing or unavailable", "actionable": False, "approve": None}
+            event = events[event_id]
+            binding = fingerprint([event, "target missing or unavailable"])
+            # This is a source preview, not a replacement built from a current target.
+            # Keep last-observed target evidence and rejection/recovery bindings.
+            result[key] = {**old, "status": "target missing or unavailable", "actionable": False, "approve": None,
+                           "proposed values": {field: value for field, value in event["values"].items() if field in REPLACED},
+                           "source evidence": plain({**event, "payload": wire_values(event["payload"])}),
+                           "binding": binding,
+                           "review revision": old["review revision"] if old["binding"] == binding else uuid4().hex,
+                           "date context": {}, "profile date context": {},
+                           "numeric evidence": {}, "diagnostic differences": {}}
             if retained_row is None and old.get("rejected"):
                 result[key].update({"status": "rejected target absent", "approve": "reject"})
         elif old.get("rejected"):
