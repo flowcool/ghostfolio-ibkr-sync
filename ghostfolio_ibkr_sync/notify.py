@@ -3,10 +3,13 @@
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
+from collections.abc import Iterable
 from datetime import UTC, datetime
+from urllib.parse import quote, quote_plus
 
 from ghostfolio_ibkr_sync.config import (
     APPRISE_URLS_MAX,
@@ -135,8 +138,23 @@ def reconciliation_summary(outcome: RunOutcome) -> str:
                      if type(counts.get(name)) is int and counts[name] > 0)
 
 
+def redacted_source_failure(exc: Exception, secrets: Iterable[str]) -> str:
+    """Bound a one-line diagnostic; remove URL queries and known private values."""
+    reason = str(exc)
+    # Remove complete URLs, including query strings and possible userinfo.
+    reason = re.sub(r"https?://\S+", "[redacted URL]", reason, flags=re.IGNORECASE)
+    # Requests can include a relative URL instead of an absolute URL.
+    reason = re.sub(r"\?\S+", "[redacted query]", reason)
+    forms = {form for secret in secrets if secret
+             for form in (secret, quote(secret, safe=""), quote_plus(secret))}
+    for form in sorted(forms, key=len, reverse=True):
+        reason = reason.replace(form, "[redacted]")
+    reason = " ".join(reason.split())
+    return f"{type(exc).__name__}: {reason[:500] or 'No reason supplied'}"
+
+
 def build_failure_summary(outcome: RunOutcome, now: datetime | None = None) -> str:
-    """Plain-text summary: fixed codes, UTC time, counts and account ordinals only."""
+    """Keep fixed failure codes; add bounded, redacted source diagnostics."""
     now = now or datetime.now(UTC)
     lines = [f"Run failed at {now.strftime('%Y-%m-%d %H:%M')} UTC.",
              f"Accounts failed: {int(outcome['accounts_failed'])} of {int(outcome['accounts_total'])}."]
@@ -147,6 +165,8 @@ def build_failure_summary(outcome: RunOutcome, now: datetime | None = None) -> s
         ordinal = failure["ordinal"]
         where = f" (account #{ordinal})" if type(ordinal) is int and ordinal > 0 else ""
         lines.append(f"- {stage}: {reason}{where}")
+    for ordinal, detail in outcome.get("source_failures", {}).items():
+        lines.append(f"- source acquisition (account #{ordinal}): {detail}")
     if outcome["dropped"]:
         lines.append(f"- and {int(outcome['dropped'])} more")
     if outcome.get("token_expiry_days") is not None:

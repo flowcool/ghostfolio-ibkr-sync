@@ -2109,3 +2109,59 @@ def test_historical_diagnostic_preflight_supported_tokens_and_legacy_forms(tag, 
 def test_historical_diagnostic_preflight_invalid_unqualified_row_keeps_existing_rejection(tag):
     xml = f'<FlexQueryResponse><{tag} dateTime="garbage"/></FlexQueryResponse>'
     assert ibkr.flex_provenance_failures(xml) == {}
+
+
+@pytest.mark.parametrize("failure, expected", [
+    ("send", "RuntimeError: IBKR SendRequest failed: Statement is not available."),
+    ("mismatch", "RuntimeError: Source account mismatch"),
+    ("parse", "ParseError: unclosed token"),
+    ("transport", "ConnectionError: Request failed"),
+])
+def test_flex_acquisition_failure_reports_redacted_reason(env, caplog, failure, expected):
+    from urllib.parse import quote, quote_plus
+    token = "SYNTHETIC token/+secret"
+    query = "QUERY-PRIVATE-123"
+    env.setenv("IBKR_TOKEN", token)
+    env.setenv("IBKR_ACCOUNT_IDS", "U1")
+    env.setenv("IBKR_QUERY_IDS", query)
+    env.setenv("GHOST_ACCOUNT_NAMES", "A")
+    env.setenv("APPRISE_URLS", '["json://notify.invalid/hook"]')
+    env.setattr(app, "ghost_get_existing_orders", lambda cfg: (set(), set(), positions()))
+    env.setattr(app, "ghost_find_account_id", lambda *args: pytest.fail("lookup after failure"))
+    env.setattr(app, "ghost_import_activities", lambda *args: pytest.fail("import after failure"))
+    env.setattr(app, "ghost_update_cash_balance", lambda *args: pytest.fail("cash after failure"))
+    if failure == "send":
+        response = requests.Response()
+        response._content = (b"<FlexStatementResponse><Status>Fail</Status>"
+                             b"<ErrorMessage>Statement is not available.</ErrorMessage>"
+                             b"</FlexStatementResponse>")
+        env.setattr(ibkr, "_ibkr_get", lambda *args, **kwargs: response)
+    elif failure == "transport":
+        def fetch(*args):
+            raise requests.ConnectionError(
+                "Request failed https://broker.invalid/flex?t=" + quote_plus(token)
+                + "&q=" + query + "&other=QUERY-CANARY\n"
+                + token + " " + quote(token, safe="") + " " + query)
+        env.setattr(app, "fetch_flex_report", fetch)
+    else:
+        xml = "<broken" if failure == "parse" else report(source_account="OBSERVED-PRIVATE")
+        env.setattr(app, "fetch_flex_report", lambda *args: xml)
+    notifications = []
+    env.setattr(app, "send_notification",
+                lambda settings, title, body: notifications.append((title, body)) or "sent")
+    assert app.main() == 1
+    assert len(notifications) == 1
+    title, body = notifications[0]
+    assert title == "ghostfolio-ibkr-sync: run failed"
+    assert "Accounts failed: 1 of 1." in body
+    assert "- account: account_failed (account #1)" in body
+    assert "Details are in the container log." in body
+    assert expected in body
+    acquisition_log = next(r.getMessage() for r in caplog.records
+                           if "Source report acquisition/validation failed" in r.getMessage())
+    assert expected in acquisition_log
+    assert len(acquisition_log.splitlines()) == 1
+    for secret in (token, quote(token, safe=""), quote_plus(token), query,
+                   "?t=", "&q=", "QUERY-CANARY", "OBSERVED-PRIVATE"):
+        assert secret not in caplog.text
+        assert secret not in body
