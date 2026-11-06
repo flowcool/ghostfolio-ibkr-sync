@@ -7,7 +7,7 @@
 
 ## 2. Consumer chain
 
-- [x] 2.1 Update trade conversion, cash dividend day, corporate-action dates and deduplication to consume the same corrected instant. Prove that corporate-action security matching excludes a CASH/FX row without an ISIN before date parsing, even when its date fails the imported-category G6 bound. Verify with `python -m pytest -q tests -k datetime_timezone_chain` (G2).
+- [x] 2.1 Update trade conversion, corporate-action execution dates, and deduplication. Payment days now use the written calendar day under section 5. Prove that corporate-action security matching excludes a CASH/FX row without an ISIN before date parsing, even when its date fails the imported-category G6 bound. Verify with `python -m pytest -q tests -k datetime_timezone_chain` (G2).
 - [x] 2.2 Update activity review, reconciliation and identity migration evidence. Keep `IBKR#v2` unchanged. Compare dates by configured local day. Cover stored `2026-01-19T07:03:00Z` against source `2026-01-19T00:00:00Z` under `Europe/Paris`: no date proposal, comment-only migration eligible, stored instant preserved. Cover different local days and the existing permissive two/three-day limits. Keep stored-date repair in the existing reviewed correction path, with backup and exact readback. Build no conversion tool. Repair needs a separate operation step and operator GO after release. Verify with `python -m pytest -q tests/test_activity_review.py tests/test_activity_reconciliation.py tests/test_identity_migration.py -k 'timezone or migration'` (G3).
 
 ## 3. Acceptance gates
@@ -45,3 +45,12 @@ The Tokyo source instant is 2026-01-19T00:00:00+00:00. The simulation keeps its 
 2026-01-19T07:03:46.203000+00:00 instant and emits no date proposal for that row.
 No financial request or confirmed journal is produced. Input hashes remain unchanged.
 Private replay output and hashes belong to the owning work item, not this repository.
+
+
+## 5. Payment calendar-day correction (approved R1-R5)
+
+- [x] 5.1 Amend the delta and docs for execution instants, exchange-day checks, written payment days and the accepted Ghostfolio timezone limit.
+- [x] 5.2 Separate payment calendar-day parsing. Cover payments, withholding, accruals, deduplication, review and identity migration. Keep corporate-action execution conversion.
+- [x] 5.3 Hold known-venue tradeDate mismatches with a reason. Exclude FX and do not infer unknown venue zones.
+- [x] 5.4 Log validated comparison TZ. Prove canonical values and replacement dates under Europe/Paris, Asia/Bangkok, America/Los_Angeles and Asia/Kolkata. Run full pytest and scripts/check.sh.
+- [x] 5.5 Add CHANGELOG and prepare PR delivery details. Merge origin/main before push. Record PR and pr-ship merge proof in the owning work item. Keep native labs, release and historical conversion open for their owner.

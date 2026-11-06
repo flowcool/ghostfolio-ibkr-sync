@@ -8,7 +8,24 @@ the release history, migration notes and published artifacts.
 For installations from 2.x, read [Upgrading to 3.0](docs/upgrading-to-3.0.md).
 Current behavior and settings are in the [configuration guide](docs/configuration.md).
 
-## Unreleased — minor release
+## Unreleased
+
+Dividend, payment-in-lieu and withholding dates now keep the calendar day written
+in Flex `dateTime`, at 00:00 UTC. Their posting clock no longer moves late-night
+payments to the next day. Accrual matching, deduplication, review and migration
+use the same day. Trade execution instants retain EST/EDT conversion to UTC.
+Known execution venues now check `tradeDate` in the exchange timezone and hold
+inconsistent rows with a reason. If your query includes Exchange, select TradeDate
+too. Missing or invalid TradeDate holds trades on known venues. Unknown venues stay unchecked.
+
+Set connector `TZ` to the Ghostfolio server timezone. Startup logs the comparison
+zone. Canonical source values do not depend on `TZ`. Ghostfolio 3.96.0 uses the
+browser zone for display and the server zone for valuation. A 00:00Z dividend
+can show on the previous day west of UTC. Keep this documented limit; a noon-UTC
+anchor needs historical conversion under a separate operator GO.
+No stored activity is rewritten or review proposal approved by this change.
+
+## Unreleased — v4.3.0
 
 Required-action notifications now group unique events by reason and count. They
 notify on a group change or clearance and remind after a fixed seven days.
@@ -31,16 +48,20 @@ null stored activity currency uses the proven profile currency. Unresolved
 currency evidence holds the correction and sends no PUT. Pending review journals
 never resend a null currency.
 
-The RC now activates a permit for five activity corrections per run with a
-15-second inter-correction delay. Stable promotion requires the burst qualification gate to PASS in the empty and golden labs on
-that exact digest. Exact readback remains the gate between PUTs. The first failed
-or uncertain correction stops the whole financial run, retains journal v3 and
-defers later approvals. No ENV setting can raise the count or lower the delay.
-Qualification covers connector behavior. Each release records the Ghostfolio
-version observed in its labs as information. A Ghostfolio version or image change
-does not invalidate qualification. If a future background chain exceeds the delay,
-exact readback and stop-on-uncertainty still protect the data. Raise the delay in
-a new connector release.
+Each run now applies all eligible approved activity corrections without a count
+cap. The fixed inter-correction delay remains 28 seconds. The measured maximum
+background chain was 18.19 seconds; D includes a 1.5x margin. Stable promotion
+requires PASS in both labs on the exact RC digest. Exact readback remains the
+gate between PUTs. The first failed or uncertain correction stops the whole
+financial run. A pending journal also blocks every account on later runs, even
+if its destination account is no longer configured. Preserve journal v3 and
+later approvals. No request is resent.
+
+No ENV setting can lower the delay or add a count cap. No run duration limit is
+added. Keep scheduled writers exclusive. Qualification covers connector behavior.
+Record the observed Ghostfolio version as information. A destination version or
+image change does not invalidate qualification. A longer background chain needs
+a higher delay in a new connector release.
 
 ## Deployment example migration
 

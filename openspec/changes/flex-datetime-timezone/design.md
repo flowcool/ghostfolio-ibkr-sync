@@ -2,11 +2,11 @@
 
 ## Context
 
-See `proposal.md`. `parse_ibkr_datetime` in `ibkr.py` strips the Flex suffix and labels wall time as UTC. A saved query contains 105 qualified rows with EST or EDT. The suffix identifies the query account timezone, not the exchange timezone.
+See `proposal.md`. `parse_ibkr_datetime` in `ibkr.py` already converts qualified EST/EDT clocks to UTC. The suffix identifies the query account timezone, not the exchange timezone. This is correct for execution instants. Cash payment posting clocks must instead retain their written calendar day under R3 below.
 
 ## Goals / Non-Goals
 
-**Goals:** correct new timestamps; reject unknown qualified tokens before account writes; compare dates by configured local day; preserve review evidence.
+**Goals:** correct new execution instants and payment calendar days; reject unknown qualified tokens before account writes; compare dates by configured local day; preserve review evidence.
 
 **Non-Goals:** a new conversion tool, historical writes, production service access, or sibling propagation.
 
@@ -30,4 +30,38 @@ Corporate-action Trade readers match the event security by ISIN and contract bef
 
 Preserve effective destination currency comparison from the preceding change. Retain journal version 3 and its immutable comparison policy. Same-local-day handling applies only when constructing new proposals; exact journal recovery still compares the full stored instant.
 
-Cash payment instants control the UTC import day. A date-only accrual retains its source calendar day and is associated with the payment source day. Qualified accrual timestamps use the same UTC conversion as the payment. Do not invent a clock or zone for date-only accrual evidence.
+## Calendar-day correction (R1–R5)
+
+Trade `dateTime` defines an execution instant. `tradeDate` defines its exchange
+business day. Use an explicit venue-to-IANA table for KRX, TSEJ, LSE, NASDAQ,
+NYSE, ARCA, BYX and TSE. Unknown venues stay unchecked. Do not infer a zone from
+a currency, symbol, SMART route or ambiguous dark-pool code. Missing or invalid
+`tradeDate` for a known venue, or a day mismatch, holds the trade with a reason
+before import and review conversion. CASH and OPT stay excluded before this check.
+
+Cash dividend, payment-in-lieu and withholding clocks are ledger posting clocks.
+Validate their complete source text with the existing token rules. Then read the
+calendar day as written. Do not convert the clock to UTC to obtain this day.
+Apply the same rule to qualified and date-only accruals. Keep the payment at
+00:00 UTC. Keep `IBKR#v2` unchanged. No stored activity is converted automatically.
+
+ENV `TZ` controls local-day tolerance, diagnostic display and scheduling. It must
+equal the Ghostfolio server TZ. Log the validated timezone at startup. It must
+never change the source value or canonical replacement timestamp. Local-day
+eligibility and preservation of a compatible stored instant can still depend on TZ.
+Use stdlib `zoneinfo`; add no dependency.
+
+Ghostfolio 3.96.0 formats table dates in the browser timezone. Its portfolio
+calculator derives valuation dates in the server process timezone. Thus 00:00Z
+can display or value on the previous day west of UTC. Keep this known limit.
+A noon-UTC anchor would avoid the demonstrated western-zone shift, but needs a
+historical-data conversion under a separate operator GO. It cannot preserve a
+single day in every possible timezone. Trades retain their actual instant.
+Pinned source: Ghostfolio tag 3.96.0, commit
+`2f21c2558684e8cc9974f1b2da683992a83ef3cb`, value.component.ts (browser) and
+portfolio-calculator.ts (server). Native lab measurement remains a release task.
+
+Offline acceptance: full pytest and `scripts/check.sh`; cover US switch days,
+19:00–23:59 EST/EDT, the four requested comparison zones, review, accruals,
+deduplication and identity migration. Roll back with a code revert. Preserve
+journals and historical activities. Labs and release remain outside this PR.

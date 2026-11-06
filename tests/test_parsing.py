@@ -743,10 +743,10 @@ def test_datetime_timezone_chain_consumers(raw, expected):
     assert sync._match_manual_entry(trade, [entry]) == ("match", entry)
     xml = report(trade_xml("TZ", date=raw), div_xml(date=raw))
     groups = ibkr.parse_cash_dividends(xml)
-    assert groups[0]["date"] == expected[:10]
+    assert groups[0]["date"] == ibkr.parse_ibkr_calendar_day(raw)
     assert groups[0]["payments"][0]["dateTime"] == raw
-    assert sync._dividend_day(raw) == expected[:10]
-    assert sync.convert_dividend_to_activity(groups[0], "target", {}, {})["date"] == expected[:10] + "T00:00:00+00:00"
+    assert sync._dividend_day(raw) == ibkr.parse_ibkr_calendar_day(raw)
+    assert sync.convert_dividend_to_activity(groups[0], "target", {}, {})["date"] == ibkr.parse_ibkr_calendar_day(raw) + "T00:00:00+00:00"
     event = source_events(xml, "U1", "target", {})["IBKR#v2#U1:TRADE:TZ"]
     assert event["values"]["date"] == expected
     assert event["source evidence"]["dateTime"] == raw

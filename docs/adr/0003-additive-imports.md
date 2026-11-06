@@ -18,9 +18,9 @@ Sources: `ghost_import_activities` and `ghost_update_cash_balance` in the
 [How it works](../../README.md#how-it-works).
 
 An existing activity can be replaced only through the optional persistent review
-with unchanged literal `decision: yes` or bounded profile authority, qualified
-finite execution limits,
-fresh ownership/occupancy checks, durable before/after intent and exact readback.
+with unchanged literal `decision: yes` or bounded profile authority, the fixed
+qualified inter-correction delay and existing process/request timeouts, fresh
+ownership/occupancy checks, durable before/after intent and exact readback.
 Preserve ID, account, owner, tags and notes. No fill aggregation, deletion or
 repair outside this authority is authorized. Correction failure fences later account writes,
 including cash/platform writes. Simulation consumes no approval and resolves no

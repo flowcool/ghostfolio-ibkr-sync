@@ -7,7 +7,6 @@ and log why; additive-only imports and DRY_RUN guards live in `ghostfolio`.
 
 import logging
 import os
-import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -29,7 +28,9 @@ from ghostfolio_ibkr_sync.ibkr import (
     _dividend_cash_sum,
     _dividend_decimal,
     _parse_float,
+    parse_ibkr_calendar_day,
     parse_ibkr_datetime,
+    trade_business_day_failure,
 )
 from ghostfolio_ibkr_sync.models import DividendContext
 from ghostfolio_ibkr_sync.outcome import RunOutcome, record_action
@@ -238,20 +239,15 @@ def dividend_structured_quantity(dividend: DividendGroup, quiet: bool = False,
 
 
 def _dividend_day(value: str | None) -> str | None:
-    parsed = parse_ibkr_datetime(value or "")
-    return parsed[:10] if parsed else None
+    return parse_ibkr_calendar_day(value)
 
 
 def _accrual_payment_day_matches(value: str | None, payments: Sequence[dict[str, str]],
-                                 utc_day: str) -> bool:
-    """Date-only accruals describe the source day, not an invented UTC clock."""
+                                 payment_day: str) -> bool:
+    """Qualified and date-only accruals both describe the payment calendar day."""
     day = _dividend_day(value)
-    if not day:
-        return False
-    if value and re.fullmatch(r"\d{8}|\d{4}-\d{2}-\d{2}", value.strip()):
-        source_days = {_dividend_day(row.get("dateTime", "")[:8]) for row in payments}
-        return source_days == {day}
-    return day == utc_day
+    return bool(day and day == payment_day
+                and {_dividend_day(row.get("dateTime")) for row in payments} == {day})
 
 
 # Exchanges where IBKR reports the major currency unit but the YAHOO data
@@ -368,7 +364,12 @@ def convert_trade_to_activity(trade: Mapping[str, str], ghost_account_id: str,
         return None
     activity_type = buy_sell
 
-    # Parse date - IBKR format is typically "YYYYMMDD;HHMMSS" or "YYYY-MM-DD, HH:MM:SS"
+    day_failure = trade_business_day_failure(trade)
+    if day_failure:
+        log.error("Trade %s held: %s", trade_id, day_failure)
+        return None
+
+    # Execution instants are independent of the configured comparison timezone.
     iso_date = parse_ibkr_datetime(date_time)
     if not iso_date:
         log.warning("Could not parse dateTime '%s' for trade %s", date_time, trade_id)

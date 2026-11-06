@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal, DecimalException, localcontext
 from typing import Any, TypedDict
 from urllib.parse import quote, quote_plus
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -252,6 +253,47 @@ def parse_ibkr_datetime(dt_str: str | None) -> str | None:
     return None
 
 
+def parse_ibkr_calendar_day(value: str | None) -> str | None:
+    """Read a validated Flex calendar day without converting its posting clock."""
+    # Validate the complete value first. Never hide an unsupported source token.
+    if not value or parse_ibkr_datetime(value) is None:
+        return None
+    text = value.strip()
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text.split(";")[0].split(",")[0], fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+# Explicit Flex execution venues only. Never infer a zone from currency, ticker,
+# SMART routing or an ambiguous dark-pool code. Extend this table with evidence.
+TRADE_EXCHANGE_ZONES = {
+    "KRX": "Asia/Seoul", "TSEJ": "Asia/Tokyo", "LSE": "Europe/London",
+    "NASDAQ": "America/New_York", "NYSE": "America/New_York",
+    "ARCA": "America/New_York", "BYX": "America/New_York",
+    "TSE": "America/Toronto",
+}
+
+
+def trade_business_day_failure(trade: Mapping[str, Any]) -> str | None:
+    """Hold inconsistent known-venue trades; FX/value dates are outside this check."""
+    if trade.get("assetCategory") in SKIP_ASSET_CATEGORIES:
+        return None
+    zone = TRADE_EXCHANGE_ZONES.get(trade.get("exchange", ""))
+    if not zone:
+        return None
+    instant = parse_ibkr_datetime(trade.get("dateTime"))
+    day = parse_ibkr_calendar_day(trade.get("tradeDate"))
+    if not instant or not day:
+        return "Missing or invalid execution instant or tradeDate for known exchange"
+    exchange_day = datetime.fromisoformat(instant).astimezone(ZoneInfo(zone)).date().isoformat()
+    if exchange_day != day:
+        return f"Execution day {exchange_day} in {zone} differs from tradeDate {day}"
+    return None
+
+
 def parse_trades(xml_text: str) -> list[dict[str, str]]:
     """Parse Trade elements from the Flex Query XML.
 
@@ -385,7 +427,7 @@ def parse_cash_dividends(xml_text: str, outcome: RunOutcome | None = None) -> li
         if row.get("levelOfDetail", "DETAIL").upper() != "DETAIL":
             continue
         amount = _parse_float(row.get("amount"))
-        date_iso = parse_ibkr_datetime(row.get("dateTime", ""))
+        date_iso = parse_ibkr_calendar_day(row.get("dateTime", ""))
         if amount is None or not date_iso:
             record_action(outcome, "dividend_rejected",
                           f"{row.get('accountId')}:{row.get('actionID')}:{row.get('dateTime')}")

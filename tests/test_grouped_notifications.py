@@ -169,9 +169,9 @@ def test_delivery_state_cannot_replace_a_configured_input(delivery, monkeypatch)
     assert len(calls) == 1 and path.read_text() == "private mapping input"
 
 
-@pytest.mark.parametrize("qualification", [None, (1, 0)])
+@pytest.mark.parametrize("qualification", [None, 0])
 @pytest.mark.parametrize("authority", ["manual", "profile"])
-def test_budget_or_qualification_deferred_approvals_never_notify(delivery, monkeypatch,
+def test_approved_work_never_requires_action_notification(delivery, monkeypatch,
                                                                qualification, authority):
     calls, _ = delivery
     monkeypatch.setattr(review, "QUALIFIED_EXECUTION", qualification)

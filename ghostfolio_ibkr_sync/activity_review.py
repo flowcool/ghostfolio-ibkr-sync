@@ -42,7 +42,7 @@ from ghostfolio_ibkr_sync.ibkr import (
     dividend_input_compatible,
     flex_provenance_failures,
     parse_cash_dividends,
-    parse_ibkr_datetime,
+    parse_ibkr_calendar_day,
     parse_source_account_ids,
     parse_trades,
 )
@@ -824,7 +824,7 @@ def refresh_proposals(previous: dict[str, Any], events: dict[str, dict[str, Any]
                           else [payment.get("dateTime", "") for payment in raw.get("payments", [])])
                 date_context.update({"source text": "; ".join(clocks),
                                      "source calendar day": ", ".join(sorted({
-                                         (parse_ibkr_datetime(clock.split(";")[0].split(",")[0]) or "")[:10]
+                                         parse_ibkr_calendar_day(clock) or ""
                                          for clock in clocks})),
                                      "source zone": ", ".join(sorted({clock.rsplit(None, 1)[-1]
                                          if re.fullmatch(r"\d{8};\d{6}\s+(EST|EDT)", clock.strip())
@@ -1028,7 +1028,7 @@ def selected_proposals(proposals: dict[str, Any]) -> tuple[list[dict[str, Any]],
 # as information and measure its background chain against the fixed delay.
 # Exact readback and stop-on-uncertainty protect data if a future chain is longer.
 # A longer delay requires a new connector release; ENV cannot weaken the permit.
-QUALIFIED_EXECUTION: tuple[int, float] | None = (5, 15.0)
+QUALIFIED_EXECUTION: float | None = 28.0
 RECOVERY_WAITS = (0, 2, 5, 10)
 
 
@@ -1255,6 +1255,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             unresolved.add(entry["destination account"])
             unresolved_events.add(entry["source event"])
     blocked |= unresolved
+    config["_review_stop_run"] = bool(unresolved)
     consumed = {(state["evidence"]["aliases"].get(entry["proposal key"], entry["proposal key"]), entry["review revision"])
                 for entry in state["journal"]["entries"].values() if entry["status"] == "confirmed"}
     remaining_previous = {key: item for key, item in original.items()
@@ -1277,27 +1278,25 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
             refreshed[key] = {**old, "status": "unresolved request; account writes blocked"}
     for position, item in enumerate(sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])), 1):
         item["queue position"] = position
-        item["remaining eligible runs"] = position
+        item["remaining eligible runs"] = 1
     publish(refreshed)
     executed = 0
-    planned = 0
     previews: set[str] = set()
     for item in sorted(approved, key=lambda item: (item.get("first eligible") or "", item["key"])):
+        if config["_review_stop_run"]:
+            break
         account = item["destination account"]
         if (account in blocked or item["source event"] not in events or not item["actionable"]
                 or item["key"] not in refreshed or item.get("execution path") != "normal run"):
             continue
         qualification = QUALIFIED_EXECUTION
         if qualification is None:
-            log.warning("Reviewed correction retained: correction execution budget not qualified")
+            log.warning("Reviewed correction retained: correction execution not qualified")
             continue
-        limit, delay = qualification
-        if type(limit) is not int or limit < 1 or not 0 <= delay < float("inf"):
-            raise RuntimeError("Invalid qualified correction execution budget")
-        if executed + planned >= limit:
-            continue
+        delay = qualification
+        if not 0 <= delay < float("inf"):
+            raise RuntimeError("Invalid qualified correction delay")
         if simulated:
-            planned += 1
             counts["would correct"] += 1
             previews.add(item["key"])
             item["status"] = "would correct"
@@ -1385,7 +1384,7 @@ def process_review(state: ReviewState, config: dict[str, Any], events: dict[str,
     queue = [item for item in deferred if item["destination account"] not in blocked and item["key"] not in previews]
     for position, item in enumerate(sorted(queue, key=lambda item: (item.get("first eligible") or "", item["key"])), 1):
         item["queue position"] = position
-        item["remaining eligible runs"] = position
+        item["remaining eligible runs"] = 1
         if item["destination account"] not in blocked and item["key"] not in previews:
             item["status"] = "automatic work deferred"
     publish(refreshed)
