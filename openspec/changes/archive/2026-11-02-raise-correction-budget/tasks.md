@@ -1,6 +1,6 @@
 # Tasks
 
-Implementation follows the approved GO in `infra-8tt.101`. Labs, stable
+Implementation follows the approved GO in the owning work item. Labs, stable
 publication and production deployment remain outside this implementation PR.
 
 - [x] 1. Read the correction mechanism, Ghostfolio 3.96.0 source and indexed
@@ -16,4 +16,4 @@ publication and production deployment remain outside this implementation PR.
 - [x] 5. Run the full suite and `bash scripts/check.sh`; inspect diff and commit.
 - [x] 6. Push one PR, run `~/.agents/bin/pr-ship <n> --repo
   flowcool/ghostfolio-ibkr-sync`, read back the merge commit, and append delivery
-  evidence to `infra-8tt.101`.
+  evidence to the owning work item.

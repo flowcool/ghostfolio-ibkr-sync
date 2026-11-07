@@ -1,4 +1,4 @@
-Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak freeze, infra-5ex1).
+Order: 1.1, 2.1, 3.1, 4.1, 5.1. Code starts only after v3.0.0 stable (rc.1 soak freeze).
 
 ## 1. Exclude connector rows from proximity
 
