@@ -21,11 +21,12 @@ permissions:
 
 concurrency:
   group: docker-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Documentation-only PRs (docs/, openspec/, *.md) skip the dependency audit
-  # and container steps; tests still run. Required checks still report
+  # and container steps; the test job runs focused documentation checks.
+  # Required checks still report
   # (skipped = success). Fails open: any scope error runs everything.
   scope:
     runs-on: ubuntu-latest
@@ -43,15 +44,33 @@ jobs:
         run: |
           code=true
           if [ -n "$PR" ]; then
-            files=$(gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" --name-only || true)
-            if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/|openspec/)|\.md$'; then
-              code=false
+            # Include old paths so moving code into docs still runs full checks.
+            # GitHub lists at most 3,000 changed files. A boundary result stays full.
+            if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+              --jq '.[] | .filename, (.previous_filename // empty)'); then
+              mapfile -t paths <<< "$files"
+              if [ -n "$files" ] && [ "${#paths[@]}" -lt 3000 ]; then
+                code=false
+                for path in "${paths[@]}"; do
+                  case "$path" in
+                    docs/*|openspec/*|*.md) ;;
+                    *) code=true; break ;;
+                  esac
+                done
+              fi
+            else
+              echo "::warning::Changed files unavailable; running full validation"
             fi
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-  # Tests also check README, ADR and doc consistency: they run on every PR.
+  # Keep the required test context on every PR. Docs retain navigation,
+  # Compose and image-guidance checks; code and uncertain scope run the full suite.
   test:
+    needs: scope
+    if: ${{ !cancelled() }}
+    env:
+      RUN_WORK: ${{ needs.scope.result != 'success' || needs.scope.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -61,12 +80,24 @@ jobs:
         with:
           persist-credentials: false
       - name: Fetch the previous release for offline journal compatibility
+        if: env.RUN_WORK == 'true'
         run: git fetch --depth=1 origin refs/tags/v4.0.0:refs/tags/v4.0.0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"  # same as the image base
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - run: pip install --require-hashes -r requirements-dev.txt
-      - run: scripts/check.sh
+      - name: Check documentation, Compose examples and image guidance
+        if: env.RUN_WORK != 'true'
+        run: scripts/check.sh tests/test_documentation.py tests/test_compose_example.py tests/test_dockerfile.py
+        env:
+          PYTHON: python
+      - name: Run the complete offline suite
+        if: env.RUN_WORK == 'true'
+        run: scripts/check.sh --durations=20
         env:
           PYTHON: python
 
@@ -82,6 +113,10 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install runtime, development and audit dependencies
         run: pip install --require-hashes -r requirements-dev.txt
       - name: Audit the complete Python CI environment

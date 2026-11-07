@@ -1,11 +1,19 @@
 # Build and release guarantees
 
-Every pull request to `main`, including documentation-only changes, runs Python
-regression tests, an audit of the complete Python CI environment and container builds/scans for
-amd64 and arm64 on native Ubuntu runners. Container runtime checks use synthetic
-inputs with no network access, including a real scheduled tick. Validation runs
-never log in to GHCR or publish images. CodeQL
-analyzes Python independently. Dependency Review rejects newly introduced
+Every pull request to `main` reports the required checks. Documentation-only
+changes run lint, strict typing and the existing documentation, Compose-example
+and image-guidance tests. Code changes run the complete offline suite, an audit
+of the Python CI environment and native amd64/arm64 container builds and scans.
+Unknown scope runs full validation. Renames include the previous path, so moving
+code into documentation retains the full gate.
+
+Container runtime checks use synthetic inputs with no network access, including
+a real scheduled tick. Validation never logs in to GHCR or publishes images.
+A new PR push cancels its obsolete validation run. Other events remain serialized.
+Python installs retain hash verification and cache downloads against both pinned
+requirements files. Full-suite logs report the twenty slowest tests.
+CodeQL analyzes Python independently on every PR, including documentation.
+Dependency Review rejects newly introduced
 moderate or worse dependency vulnerabilities, including development scope.
 The native CodeQL merge rule rejects new medium or worse security findings
 and error-level findings; a successful analysis alone is insufficient.
