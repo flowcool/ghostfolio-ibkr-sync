@@ -38,13 +38,12 @@ propagation in its PR.
 
 ## Durable work state
 
-- OpenSpec change `clarify-operator-actions` is implemented and archived at `openspec/changes/archive/2026-10-27-clarify-operator-actions/`. All ten tasks have offline acceptance proof.
-- Implementation and release for `clarify-operator-actions` are complete. Stable `v3.3.0` reuses the RC digest qualified in both labs. Beads owns the acceptance evidence.
+- `openspec/specs/` describes current behavior. Completed changes live under
+  `openspec/changes/archive/`. An active change sits directly under
+  `openspec/changes/`; `openspec list` shows it.
+- Release history and verified digests live in GitHub Releases. Beads owns the
+  acceptance and publication evidence.
 - Stable publication does not authorize production deployment or financial operations.
-
-- OpenSpec change `simplify-user-onboarding` is implemented and archived at `openspec/changes/archive/2026-10-28-simplify-user-onboarding/`. The primary Compose example uses one account; `compose.multi-account.yaml` retains the two-account setup. Detailed user guides live under `docs/`.
-
-- OpenSpec change `profiled-activity-reconciliation` is implemented and archived at `openspec/changes/archive/2026-10-28-profiled-activity-reconciliation/`. Implementation and release are complete. Stable `v4.0.0` reuses the RC4 digest qualified in both labs with all three profiles. Beads holds the acceptance and verified publication evidence.
 
 ## Project boundaries (Florent 2026-10-30)
 

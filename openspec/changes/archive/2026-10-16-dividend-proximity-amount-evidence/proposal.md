@@ -17,5 +17,5 @@ In scope: CashTransaction Dividends and Payment In Lieu Of Dividends (DETAIL), d
 
 - No automatic import of "near date, different gross" payments: legacy rows were never measured (they may hold net or converted amounts). Follow-up: measure them by a destination read.
 - No change to exact comment identity, ±3 days, exit codes or notifications.
-- Same-day revised amounts (infra-8tt.36): separate change.
+- Same-day revised amounts: separate change.
 - No update or deletion of existing activities.
