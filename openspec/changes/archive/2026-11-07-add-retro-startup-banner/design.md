@@ -12,6 +12,10 @@ Use `pyfiglet` 1.0.4 with the MIT-licensed `slant` font to generate `IBKR SYNC` 
 
 Reuse `tests/test_entrypoint.py` as the acceptance boundary. Check one-off and scheduled startup, exact release identity, one banner, no terminal escape codes and unchanged failure behavior. Run the full offline suite once after the change.
 
+## Release Prerequisite
+
+The native image gate found two fixable HIGH alerts in existing zlib1g. Add zlib1g to the existing apt install list. This installs the Debian patch without changing the base image or application dependencies. Native security and runtime CI must pass.
+
 ## Risks / Trade-offs
 
 Startup gains six lines. Log aggregation may prefix each line; the art stays aligned because each source line has the same prefix.

@@ -24,7 +24,7 @@ None.
 
 ## Impact
 
-Only entrypoint output and its offline tests change. Existing version, commit, scheduler, streams and exit codes stay the same.
+Entrypoint output and its offline tests change. The existing Debian install step also updates zlib1g to clear the required image security gate (CVE-2026-76844 and CVE-2026-85091). Existing version, commit, scheduler, streams and exit codes stay the same.
 
 ## Non-goals
 
