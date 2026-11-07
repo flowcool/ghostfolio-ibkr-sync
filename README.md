@@ -25,6 +25,7 @@ Use one Ghostfolio target per IBKR account.
 - Check identities, duplicates and holdings.
 - Run on amd64 or arm64. Receive optional Apprise notifications.
 - Review qualified one-to-one corrections, or enable a bounded reconciliation profile.
+- Explain amount differences with [source evidence](docs/activity-review.md#understand-amount-causes).
 
 ### Deliberate boundaries
 
@@ -48,6 +49,8 @@ Follow [First installation](docs/getting-started.md):
 
 You need Docker Compose, Git, Ghostfolio **2.248.0+**, IBKR Flex credentials,
 a Ghostfolio Security Token and a valid IANA `TZ`. Use one Flex query per account.
+See the [reviewed Ghostfolio versions](docs/upstreams.md#ghostfolio-compatibility-review).
+An API contract review does not replace connector image qualification.
 
 [compose.yaml](compose.yaml) runs one account.
 For two accounts, use [compose.multi-account.yaml](compose.multi-account.yaml).
@@ -79,13 +82,19 @@ See [GitHub Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases)
 - Keep `CORPORATE_ACTION_STATE_FILE` in a private persistent directory.
   Initialize it in simulation. Review the inventory before live mode.
   Missing state, bad permissions or active holds can cause exit 1 in simulation.
-- Imports never delete activities. Corrections need exact-image qualification and explicit `yes`.
+- Imports never delete activities. Corrections need exact-image qualification and
+  manual `yes` or an explicit reconciliation profile.
 - Follow recovery after an uncertain write. Do not resend or delete state to clear a hold.
 - Keep logs and tokens private. Keep credentials outside Git.
   Use `docker compose config --quiet` to avoid printing secrets.
 
 For blocked trades, read [corporate-action safety](docs/corporate-actions.md).
 For corrections, read [activity review](docs/activity-review.md).
+Review is opt-in. Reconciliation profiles default to `off`.
+Each run applies all eligible approved or profile-authorized corrections.
+There is no correction count cap. The minimum delay between confirmed corrections
+is 28 seconds. Each correction needs exact readback before the next correction.
+The first unresolved correction stops all later financial writes across accounts.
 
 ## Configuration
 
