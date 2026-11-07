@@ -1,6 +1,16 @@
 #!/bin/bash
 set -e
 
+# Generated once with pyfiglet 1.0.4, font slant. No runtime renderer.
+cat <<'BANNER'
+    ________  __ __ ____     _______  ___   ________
+   /  _/ __ )/ //_// __ \   / ___/\ \/ / | / / ____/
+   / // __  / ,<  / /_/ /   \__ \  \  /  |/ / /
+ _/ // /_/ / /| |/ _, _/   ___/ /  / / /|  / /___
+/___/_____/_/ |_/_/ |_|   /____/  /_/_/ |_/\____/
+              IBKR -> Ghostfolio
+BANNER
+
 revision=${APP_REVISION:-unknown}
 if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then revision=unknown; fi
 printf 'ghostfolio-ibkr-sync version %s — commit %s\n' "${APP_VERSION:-dev}" "${revision:0:12}"

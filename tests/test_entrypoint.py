@@ -92,7 +92,7 @@ def test_invalid_cron_is_rejected_without_echoing_input(run_entrypoint, cron):
     result, crontab, calls = run_entrypoint(cron)
     assert result.returncode == 1
     assert result.stderr == 'Invalid CRON: expected five numeric schedule fields\n'
-    assert result.stdout == 'ghostfolio-ibkr-sync version test — commit unknown\n'
+    assert result.stdout.endswith('ghostfolio-ibkr-sync version test — commit unknown\n')
     assert not crontab.exists()
     assert not calls.exists()
 
@@ -101,7 +101,7 @@ def test_supercronic_validation_failure_prevents_start(run_entrypoint):
     result, crontab, calls = run_entrypoint('99 99 * * *', validation_status=1)
     assert result.returncode == 1
     assert result.stderr == 'Invalid CRON: schedule validation failed\n'
-    assert result.stdout == 'ghostfolio-ibkr-sync version test — commit unknown\n'
+    assert result.stdout.endswith('ghostfolio-ibkr-sync version test — commit unknown\n')
     assert calls.read_text().splitlines() == ['test']
 
 
@@ -159,4 +159,18 @@ def test_operator_action_logging_scheduler_flags_and_build(run_entrypoint):
 def test_release_identity_startup(run_entrypoint, cron, version, revision, expected):
     result, _, _ = run_entrypoint(cron, version=version, revision=revision)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines()[0] == 'ghostfolio-ibkr-sync version ' + expected
+    assert result.stdout.splitlines()[6] == 'ghostfolio-ibkr-sync version ' + expected
+
+
+@pytest.mark.parametrize('cron', [None, '* * * * *'])
+def test_retro_banner_precedes_identity_once_in_both_modes(run_entrypoint, cron):
+    result, _, calls = run_entrypoint(cron)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == '    ________  __ __ ____     _______  ___   ________'
+    assert lines[5] == '              IBKR -> Ghostfolio'
+    assert lines[6] == 'ghostfolio-ibkr-sync version test — commit unknown'
+    assert result.stdout.count('IBKR -> Ghostfolio') == 1
+    assert '\x1b' not in result.stdout
+    assert all(line.isascii() for line in lines[:6])
+    assert calls.read_text().splitlines() == (['test', 'run'] if cron else ['python -m ghostfolio_ibkr_sync'])
