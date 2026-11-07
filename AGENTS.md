@@ -21,8 +21,9 @@ propagation in its PR.
   (docs/adr/0001-single-file-runtime.md is superseded).
 - Imports are additive. Optional activity review permits an exact one-to-one
   correction with manual `yes` or bounded profile authority. Qualification,
-  durable journaling and exact readback remain required. Permit at most one
-  correction per cycle. Never delete activities during sync
+  durable journaling and exact readback remain required. Correction eligibility
+  and pacing follow [the current correction spec](openspec/specs/activity-correction-review/spec.md).
+  Never delete activities during sync
   (docs/adr/0003-additive-imports.md). Stable publication and production require
   separate explicit GO. Cleanup tools retain separate operator authorization.
 - Deduplication by comment and proximity (docs/adr/0002); cash update is independent

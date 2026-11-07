@@ -5,6 +5,35 @@ Check [Cycle result](configuration.md#cycle-result) and [Notification result](co
 The named reason should disappear. Resolve remaining actions before enabling writes.
 Exit 0 alone does not prove a complete import.
 
+## "IBKR SendRequest failed: Statement is not available"
+
+IBKR did not provide the requested Flex statement. This query cannot proceed to
+account processing. The message alone does not identify the IBKR error code.
+The connector retries only its supported transient codes. Other codes, missing
+codes and exhausted retries fail acquisition.
+
+Preserve the private failure log. Check the result of the next scheduled run.
+A later successful run proves recovery for that run only. It does not prove that
+the earlier run imported activities. See [Compose scheduling](configuration.md#docker-compose--portainer)
+before changing `CRON`. Do not change credentials based on this message alone.
+
+## Review reports "source unavailable"
+
+A retained proposal has no matching event in the current Flex report. This can
+happen when an old event leaves the report window. The status does not prove that
+the destination activity is wrong.
+
+Inspect the named proposal and its source evidence. Obtain qualified source
+coverage before reviewing a replacement. `yes` cannot enable blocked work.
+Do not change dates or delete an activity merely to clear the warning.
+See [activity review](activity-review.md#choose-the-next-action).
+
+The cycle can report `success with user action required` while these events stay
+held. Check the separate import, hold and cash results. Cash request success does
+not prove independent balance readback. A notification result of `not required`
+can follow the [grouped reminder schedule](configuration.md#user-action-required).
+It does not mean that all holds are resolved.
+
 ## Missing corporate-action state or active trade hold
 
 **Cause:** CORPORATE_ACTION_STATE_FILE is unset, missing, invalid, unwritable or
