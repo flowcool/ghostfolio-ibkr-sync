@@ -7,6 +7,7 @@ Web Service reports into Ghostfolio. Docker-first, every setting through ENV,
 unattended runs with `docker compose up -d` and an optional `CRON`. README.md is the installation entry point; docs/getting-started.md owns the
 first-install path and docs/configuration.md owns the settings reference. Keep public artifacts free of personal
 hosts, paths, account identifiers and private work-tracker IDs.
+`llms.txt` is the user-setup entry for AI assistants; keep it consistent with the installation and configuration guides.
 
 This repository is the canonical source of the broker-agnostic Ghostfolio helpers
 projected into ghostfolio-degiro-sync (docs/adr/0007-pinned-degiro-core.md). DEGIRO stays

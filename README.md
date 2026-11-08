@@ -40,6 +40,8 @@ cash separately. A cash update does not prove that all activities were imported.
 
 ## Quick start
 
+Using an AI assistant? Point it to [llms.txt](llms.txt).
+
 Follow [First installation](docs/getting-started.md):
 
 1. Configure IBKR, Ghostfolio and mapping.
