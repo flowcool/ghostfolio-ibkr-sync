@@ -1,0 +1,119 @@
+# Ghostfolio IBKR Sync
+
+> Import Interactive Brokers Flex activities and base-currency cash into self-hosted Ghostfolio with Docker Compose.
+
+## Scope and prerequisites
+
+- Use this entry for user setup, not contributor work. Keep guides, Compose and ENV examples at the same revision.
+- Import trades, dividends and withholding tax. Cash updates run separately from activity imports.
+- Exclude options and FX trades. Handle corporate actions and older history manually; Flex covers at most 365 days.
+- Require Git, Docker Compose and reachable Ghostfolio 2.248.0+. Use one Flex query and one target per IBKR account.
+- Obtain an IBKR Flex Web Service token and query ID. Follow the [Flex field checklist](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/ibkr-setup.md#2-create-a-flex-query): XML, 365 days, required time format, Corporate Actions even when empty.
+- Obtain a Ghostfolio Security Token and create a target account with the IBKR base currency. Store credentials only in private ENV files.
+
+## Safety requirements
+
+- MUST simulate first. Simulation logs in, reads services and maintains local state; it sends no financial writes.
+- MUST keep live writes disabled until the human reviews the simulation and explicitly approves the import.
+- MUST back up Ghostfolio with a verified procedure before the first import. Retain image digest, ENV, mapping, state and evidence.
+- MUST never print tokens, commit secrets or show resolved Compose configuration. Use the quiet validation command below.
+- MUST never delete state to clear a hold. Preserve journals and follow the named recovery procedure.
+- MUST stop and ask the human after an uncertain write. Never resend it automatically. Image rollback does not undo financial writes.
+- MUST avoid concurrent processes for the same account. Review proximity matches manually; proximity does not prove identity.
+
+## Install, simulate, review, import, schedule
+
+Use the commands from [First installation](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/getting-started.md) in order.
+Start with the supplied single-account Compose model:
+
+```bash
+git clone --depth 1 https://github.com/flowcool/ghostfolio-ibkr-sync.git
+cd ghostfolio-ibkr-sync
+cp .env.example .env
+cp mapping.yaml.example mapping.yaml
+chmod 600 .env mapping.yaml
+```
+
+Edit `.env` with the settings below. Edit `mapping.yaml` before changing ownership; keep its `symbol_mapping` structure.
+Verify unmapped ISIN destinations before import. Keep simulation enabled.
+Select the existing Docker network that contains Ghostfolio. Replace `<ghostfolio-container>` with its name:
+
+```bash
+docker inspect <ghostfolio-container> --format '{{json .NetworkSettings.Networks}}'
+```
+
+Set the network and a reachable service name or alias with its port. Use HTTPS outside the trusted Docker network.
+Compose does not attach Ghostfolio or create this network. Prepare private persistent state:
+
+```bash
+mkdir -p state/individual
+chmod 700 state/individual
+sudo chown 10001:10001 mapping.yaml state/individual
+docker compose config --quiet
+```
+
+The image runs as `10001:10001`. Mapping stays read-only, mode `0600`; state stays writable, mode `0700`, at `/state`.
+For an existing installation, stop the scheduled service before a manual run:
+
+```bash
+docker compose stop ibkr-sync-individual
+```
+
+Run the simulation. Retain private logs and review account, securities, currency, quantities, fees, cash, skips and holds:
+
+```bash
+docker compose run --rm -e DRY_RUN=true -e CRON= ibkr-sync-individual
+```
+
+Resolve unsafe holds. Simulation does not prove server acceptance. After human review, explicit approval and backup, run once with scheduling still stopped:
+
+```bash
+docker compose run --rm -e DRY_RUN=false -e CRON= ibkr-sync-individual
+```
+
+Check the result before scheduling. Add missing currency pairs and run Gather All Data as [documented](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/configuration.md#after-your-first-import).
+Only after approval for recurring imports, set `DRY_RUN=false` and `CRON_INDIVIDUAL` in `.env`, then start:
+
+```bash
+docker compose up -d
+```
+
+For multiple accounts or existing two-service installations, use the [separate model and migration](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/getting-started.md#multiple-accounts). Never share state directories.
+
+## ENV settings
+
+Use the supplied `.env.example` for Compose; replace its placeholders. Consult [configuration](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/configuration.md#configuration-reference) for other modes.
+
+- `IBKR_TOKEN`: required Flex Web Service token; no usable default.
+- `IBKR_ACCOUNT_IDS_INDIVIDUAL`: required source account ID; replace the example.
+- `IBKR_QUERY_IDS_INDIVIDUAL`: required single-account Flex query ID; replace the example.
+- `GHOST_ACCOUNT_NAME_INDIVIDUAL`: required exact Ghostfolio target name; replace the example.
+- `GHOST_ACCESS_TOKEN`: recommended Ghostfolio Security Token; exchanged each run; no usable default.
+- `GHOST_TOKEN`: legacy expiring session bearer alternative; leave unset for the recommended mode.
+- `GHOST_DOCKER_NETWORK`: existing Ghostfolio network; replace `ghostfolio` if needed.
+- `GHOST_HOST`: default `http://ghostfolio:3333`; requires that alias on the selected network.
+- `TZ`: required valid IANA timezone for writes; example `Europe/Paris`; match the Ghostfolio server timezone. Missing or invalid forces simulation.
+- `DRY_RUN`: keep `true` through review; current images default to simulation. Explicitly set it on older images too.
+- `CRON_INDIVIDUAL`: five numeric fields; example `0 6 * * *`; keep the service stopped until scheduling is approved.
+- `CRON`: runtime schedule; an empty value runs once immediately; the manual commands override it.
+- `LOG_LEVEL`: keep `INFO`; protect logs.
+- `APPRISE_URLS`: optional notifications; default `[]` disables them.
+
+## Read results and recover
+
+- Read the final `Cycle result`: `success`, `success with user action required`, or `failure`. Failure takes priority.
+- Check accepted imports or simulated proposals, duplicates, review-held events, other holds and deferred work separately. Unknown evidence reads `unavailable`.
+- For blocked work, follow each required action and its evidence file. State errors or holds can cause exit 1 even in simulation; do not force a write.
+- Cash reports `simulated`, `request reported successful`, `not updated` or `uncertain/failed`. Request success is not independent balance readback or proof that activities imported.
+- A successful buy can remain after a later sell fails. Preserve evidence and use [troubleshooting](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/troubleshooting.md) before retrying.
+- Notification `sent` confirms transport, not device receipt. Clean success sends no heartbeat.
+
+## References
+
+- [Getting started](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/getting-started.md): canonical installation sequence.
+- [Configuration](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/configuration.md): ENV, mapping and result reference.
+- [Troubleshooting](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/troubleshooting.md): failures and recovery.
+- [Upgrading and rollback](https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/docs/upgrading-to-3.0.md): preserve state and check compatibility.
+- [Releases](https://github.com/flowcool/ghostfolio-ibkr-sync/releases): stable artifacts and image history.
+- [Discussions](https://github.com/flowcool/ghostfolio-ibkr-sync/discussions): setup questions.
+- [Issues](https://github.com/flowcool/ghostfolio-ibkr-sync/issues): reproducible defects; remove secrets from reports.

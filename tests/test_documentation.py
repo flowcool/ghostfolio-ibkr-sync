@@ -67,3 +67,30 @@ def test_adr_index_links_all_dated_decisions():
         text = (ROOT / 'docs/adr' / name).read_text(encoding='utf-8')
         assert re.search(r'^Date: \d{4}-\d{2}-\d{2}\. Status: (accepted( \(existing behavior\))?|superseded)\.$',
                          text, flags=re.M)
+
+
+def test_llms_commands_and_env_match_cited_guides():
+    text = (ROOT / 'llms.txt').read_text(encoding='utf-8')
+    # Read local copies only. Include every repository guide cited by this entry.
+    prefix = 'https://github.com/flowcool/ghostfolio-ibkr-sync/blob/main/'
+    cited_paths = re.findall(r'\]\(' + re.escape(prefix) + r'(docs/[^)#]+)(?:#[^)]*)?\)', text)
+    assert 'docs/getting-started.md' in cited_paths
+    guides = '\n'.join((ROOT / name).read_text(encoding='utf-8')
+                       for name in sorted(set(cited_paths)))
+    guide_commands = {line for block in re.findall(
+        r'^```(?:bash|sh|shell)\n(.*?)^```', guides, flags=re.M | re.S)
+        for line in block.splitlines() if line.strip() and not line.lstrip().startswith('#')}
+    commands = [line for block in re.findall(
+        r'^```(?:bash|sh|shell)\n(.*?)^```', text, flags=re.M | re.S)
+        for line in block.splitlines() if line.strip() and not line.lstrip().startswith('#')]
+    assert commands, 'llms.txt must contain installation commands'
+    for command in commands:
+        assert command in guide_commands, f'llms.txt: undocumented shell command: {command}'
+    env_names = set(re.findall(r'\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b', text))
+    env_names.update(re.findall(r'`([A-Z][A-Z0-9_]*)(?:`|=)', text))
+    known_env = (ROOT / '.env.example').read_text(encoding='utf-8') + '\n' + (
+        ROOT / 'docs/configuration.md').read_text(encoding='utf-8')
+    assert env_names, 'llms.txt must list ENV settings'
+    for name in sorted(env_names):
+        assert re.search(r'(?m)^' + re.escape(name) + r'=', known_env) or (
+            f'`{name}`' in known_env), f'llms.txt: undocumented ENV name: {name}'
