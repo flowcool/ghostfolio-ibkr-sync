@@ -5,12 +5,12 @@
 # Renovate proposes updates (hashes included); validate them with pip-audit and CI.
 # Regenerate without upgrading: uv pip compile <file listing the == pins>
 #   --no-deps --generate-hashes --python-version 3.14 --no-annotate
-apprise==2.0.1 \
-    --hash=sha256:2a9b0f4fc906227f70998ea4462184dd605e796d3932e6e7ce0fe0f134048610 \
-    --hash=sha256:8cae8ae5877b9cfd1dddffc17ac1e50f780ab6bdf948f95215e2466ef7230565
-certifi==2026.10.19 \
-    --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
-    --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
+apprise==2.1.0 \
+    --hash=sha256:7eb453b31f37e6b24499b48320bf9d325038bbb1216e24ea7baaf73b062341c5 \
+    --hash=sha256:f743f4bc81dc5a68bddab53d420071b45541630dfea8c907a5e8b2b38555c681
+certifi==2026.10.23 \
+    --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd \
+    --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
 charset-normalizer==3.5.2 \
     --hash=sha256:01077390b03f7988f11d700a2194e69b119741a86b1a638b1db88891e3eced8e \
     --hash=sha256:01b0c0d2262a9e28e8484a278c7e1b5d650e3ac8cf2683d2967e25899f208bdf \
