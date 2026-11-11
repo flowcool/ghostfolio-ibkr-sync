@@ -15,8 +15,46 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The branch rules require a CodeQL result for every PR, including docs.
+  # Keep required checks visible; uncertain scope runs the full check.
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          code=true
+          if [ -n "$PR" ]; then
+            # Include old paths so moving code into docs still runs full checks.
+            # GitHub lists at most 3,000 changed files. A boundary result stays full.
+            if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+              --jq '.[] | .filename, (.previous_filename // empty)'); then
+              mapfile -t paths <<< "$files"
+              if [ -n "$files" ] && [ "${#paths[@]}" -lt 3000 ]; then
+                code=false
+                for path in "${paths[@]}"; do
+                  case "$path" in
+                    docs/*|openspec/*|*.md|llms.txt) ;;
+                    *) code=true; break ;;
+                  esac
+                done
+              fi
+            else
+              echo "::warning::Changed files unavailable; running full validation"
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   analyze:
+    needs: scope
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.code != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
