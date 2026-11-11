@@ -12,11 +12,12 @@ a real scheduled tick. Validation never logs in to GHCR or publishes images.
 A new PR push cancels its obsolete validation run. Other events remain serialized.
 Python installs retain hash verification and cache downloads against both pinned
 requirements files. Full-suite logs report the twenty slowest tests.
-CodeQL analyzes Python independently on every PR, including documentation.
-Dependency Review rejects newly introduced
-moderate or worse dependency vulnerabilities, including development scope.
-The native CodeQL merge rule rejects new medium or worse security findings
-and error-level findings; a successful analysis alone is insufficient.
+CodeQL analyzes Python on code PRs and each week. Documentation-only PRs skip
+CodeQL and Dependency Review, but both required checks still report.
+Dependency Review rejects newly introduced moderate or worse dependency
+vulnerabilities on code PRs, including development scope.
+The required CodeQL check verifies that analysis succeeds. New CodeQL alerts
+remain visible, but they do not block merging through a native code-scanning rule.
 The mandatory checks must pass before merging.
 CI does not replace the risk-based [pre-merge lab gate](../CONTRIBUTING.md#scope-and-lab-gates).
 Every release also needs both lab scenarios on its exact digest. Promote that
